@@ -1,0 +1,223 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-WE-{YYYY}-{MM}-{DD}-{########}",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "event_type",
+  "ee_event_id",
+  "received_at",
+  "processing_state",
+  "correlation_id",
+  "auth_section",
+  "auth_header_used",
+  "token_verified",
+  "allowed_ip_check",
+  "source_ip",
+  "http_method",
+  "payload_section",
+  "raw_payload",
+  "payload_hash",
+  "processing_section",
+  "processing_started_at",
+  "processing_completed_at",
+  "processing_error",
+  "spawned_queue_job",
+  "downstream_documents",
+  "schema_snapshot"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "event_type",
+   "fieldtype": "Select",
+   "label": "Event Type",
+   "options": "manifest\ndispatch\norder_cancelled\nreturn_received\ngrn_completed\ninventory_reserved\ninventory_released\npo_status_changed\nitem_updated",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "ee_event_id",
+   "fieldtype": "Data",
+   "label": "EE Event ID",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "EasyEcom-supplied event ID. Combined with (company, event_type) it is the dedup key."
+  },
+  {
+   "fieldname": "received_at",
+   "fieldtype": "Datetime",
+   "label": "Received At",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "processing_state",
+   "fieldtype": "Select",
+   "label": "Processing State",
+   "options": "Pending\nProcessing\nProcessed\nFailed\nDuplicate\nManually Handled",
+   "default": "Pending",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "correlation_id",
+   "fieldtype": "Data",
+   "label": "Correlation ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "auth_section",
+   "fieldtype": "Section Break",
+   "label": "Auth & Source"
+  },
+  {
+   "fieldname": "auth_header_used",
+   "fieldtype": "Select",
+   "label": "Auth Header Used",
+   "options": "Access-token\nAuthorization",
+   "reqd": 1
+  },
+  {
+   "fieldname": "token_verified",
+   "fieldtype": "Check",
+   "label": "Token Verified",
+   "reqd": 1
+  },
+  {
+   "fieldname": "allowed_ip_check",
+   "fieldtype": "Select",
+   "label": "Allowed-IP Check",
+   "options": "Pass\nFail\nSkipped",
+   "default": "Skipped",
+   "reqd": 1
+  },
+  {
+   "fieldname": "source_ip",
+   "fieldtype": "Data",
+   "label": "Source IP",
+   "reqd": 1
+  },
+  {
+   "fieldname": "http_method",
+   "fieldtype": "Select",
+   "label": "HTTP Method",
+   "options": "POST",
+   "default": "POST",
+   "reqd": 1
+  },
+  {
+   "fieldname": "payload_section",
+   "fieldtype": "Section Break",
+   "label": "Payload"
+  },
+  {
+   "fieldname": "raw_payload",
+   "fieldtype": "Long Text",
+   "label": "Raw Payload (redacted on save for PII)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "payload_hash",
+   "fieldtype": "Data",
+   "label": "Payload Hash",
+   "reqd": 1
+  },
+  {
+   "fieldname": "processing_section",
+   "fieldtype": "Section Break",
+   "label": "Processing",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "processing_started_at",
+   "fieldtype": "Datetime",
+   "label": "Processing Started At"
+  },
+  {
+   "fieldname": "processing_completed_at",
+   "fieldtype": "Datetime",
+   "label": "Processing Completed At"
+  },
+  {
+   "fieldname": "processing_error",
+   "fieldtype": "Long Text",
+   "label": "Processing Error"
+  },
+  {
+   "fieldname": "spawned_queue_job",
+   "fieldtype": "Link",
+   "label": "Spawned Queue Job",
+   "options": "EasyEcom Queue Job"
+  },
+  {
+   "fieldname": "downstream_documents",
+   "fieldtype": "Long Text",
+   "label": "Downstream Documents (JSON list of {doctype, name})"
+  },
+  {
+   "fieldname": "schema_snapshot",
+   "fieldtype": "Link",
+   "label": "Schema Snapshot",
+   "options": "EasyEcom Schema Snapshot",
+   "description": "Set when the payload matched a known shape. Schema Snapshot is built in a later packet (§20)."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Webhook Event",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "received_at",
+ "sort_order": "DESC",
+ "states": []
+}

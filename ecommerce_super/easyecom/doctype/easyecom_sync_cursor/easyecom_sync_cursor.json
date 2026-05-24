@@ -1,0 +1,141 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-CUR-{company}-{location_key}-{resource}",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "location_key",
+  "resource",
+  "cursor_value",
+  "cursor_format",
+  "last_advanced_at",
+  "last_advanced_by",
+  "stats_section",
+  "records_fetched_total",
+  "records_fetched_last_run"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "location_key",
+   "fieldtype": "Link",
+   "label": "Location",
+   "options": "EasyEcom Location",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "resource",
+   "fieldtype": "Select",
+   "label": "Resource",
+   "options": "orders\ngrns\nreturns\ninventory\npo_status\nmaster_products",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "cursor_value",
+   "fieldtype": "Data",
+   "label": "Cursor Value",
+   "reqd": 1,
+   "length": 2000,
+   "description": "ISO datetime, Next-Page URL, or opaque token from EE."
+  },
+  {
+   "fieldname": "cursor_format",
+   "fieldtype": "Select",
+   "label": "Cursor Format",
+   "options": "ISO Datetime\nNext-Page URL\nOpaque Token",
+   "reqd": 1,
+   "description": "EE bulk APIs typically return Next-Page URL."
+  },
+  {
+   "fieldname": "last_advanced_at",
+   "fieldtype": "Datetime",
+   "label": "Last Advanced At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_advanced_by",
+   "fieldtype": "Data",
+   "label": "Last Advanced By",
+   "reqd": 1,
+   "description": "Worker | FDE Rewind | System"
+  },
+  {
+   "fieldname": "stats_section",
+   "fieldtype": "Section Break",
+   "label": "Statistics",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "records_fetched_total",
+   "fieldtype": "Int",
+   "label": "Records Fetched (total)",
+   "default": "0",
+   "reqd": 1
+  },
+  {
+   "fieldname": "records_fetched_last_run",
+   "fieldtype": "Int",
+   "label": "Records Fetched (last run)",
+   "default": "0",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Sync Cursor",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

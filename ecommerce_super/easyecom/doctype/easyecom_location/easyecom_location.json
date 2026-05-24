@@ -1,0 +1,241 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-LOC-{location_key}",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "location_key",
+  "location_name",
+  "enabled",
+  "is_primary",
+  "is_operational",
+  "is_wms_location",
+  "serialization_enabled",
+  "resolution_section",
+  "frappe_company",
+  "mapped_warehouse",
+  "resolution_col_2",
+  "ee_company_id",
+  "ee_company_value",
+  "gstin",
+  "pincode",
+  "jwt_section",
+  "jwt_token",
+  "jwt_acquired_at",
+  "jwt_expires_at",
+  "cursors_section",
+  "last_pull_orders",
+  "last_pull_returns",
+  "last_pull_grn"
+ ],
+ "fields": [
+  {
+   "fieldname": "location_key",
+   "fieldtype": "Data",
+   "label": "Location Key",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "EasyEcom-issued identifier; unique within the account. The warehouse/store-level identifier found on EE's Location Master page."
+  },
+  {
+   "fieldname": "location_name",
+   "fieldtype": "Data",
+   "label": "Location Name",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Per-location kill-switch."
+  },
+  {
+   "fieldname": "is_primary",
+   "fieldtype": "Check",
+   "label": "Primary",
+   "default": "0",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Exactly one location per account has this set. Marks the master/user-management location."
+  },
+  {
+   "fieldname": "is_operational",
+   "fieldtype": "Check",
+   "label": "Operational",
+   "default": "0",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Whether the integration runs operational flows against this location and posts into a Company. Independent of Primary."
+  },
+  {
+   "fieldname": "is_wms_location",
+   "fieldtype": "Check",
+   "label": "WMS Location",
+   "default": "0",
+   "reqd": 1,
+   "description": "Whether this location runs EasyEcom's full WMS plan (PO, GRN, cycle counting, putaway) versus OMS-only. The buying/GRN flow (§9) applies only to WMS locations."
+  },
+  {
+   "fieldname": "serialization_enabled",
+   "fieldtype": "Check",
+   "label": "Serialization Enabled",
+   "default": "0",
+   "reqd": 1,
+   "description": "Whether EE serialization is enabled for this seller-location. When set, GRN qty is pushed per individual serial rather than as an aggregate."
+  },
+  {
+   "fieldname": "resolution_section",
+   "fieldtype": "Section Break",
+   "label": "Company & Warehouse Resolution",
+   "collapsible": 1,
+   "description": "Required for operational locations; blank for primary-only or inert locations."
+  },
+  {
+   "fieldname": "frappe_company",
+   "fieldtype": "Link",
+   "label": "Frappe Company",
+   "options": "Company",
+   "in_list_view": 1,
+   "description": "The Frappe Company this location resolves to. Set if and only if Operational. NOT unique — several locations may resolve to the same Company (many-to-one)."
+  },
+  {
+   "fieldname": "mapped_warehouse",
+   "fieldtype": "Link",
+   "label": "Mapped Warehouse",
+   "options": "Warehouse",
+   "description": "The Frappe Warehouse this location represents (within frappe_company). Blank for non-operational."
+  },
+  {
+   "fieldname": "resolution_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ee_company_id",
+   "fieldtype": "Data",
+   "label": "EE Company ID",
+   "description": "EasyEcom internal company ID (as reported by EE)."
+  },
+  {
+   "fieldname": "ee_company_value",
+   "fieldtype": "Data",
+   "label": "EE Company Value (reference)",
+   "description": "The company value EE records against this location. Reference only; never used operationally."
+  },
+  {
+   "fieldname": "gstin",
+   "fieldtype": "Data",
+   "label": "GSTIN",
+   "description": "Validated against India Compliance for operational locations."
+  },
+  {
+   "fieldname": "pincode",
+   "fieldtype": "Data",
+   "label": "Pincode"
+  },
+  {
+   "fieldname": "jwt_section",
+   "fieldtype": "Section Break",
+   "label": "JWT Cache (System-Managed)",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "jwt_token",
+   "fieldtype": "Long Text",
+   "label": "JWT Token (ciphertext)",
+   "read_only": 1,
+   "permlevel": 2,
+   "description": "Cached JWT for this location_key, encrypted at rest by the controller (§3.7.2). 90-day validity. Renewed at day 85 by scheduled job. No role reads plaintext; the value is materialised only transiently inside EasyEcomClient."
+  },
+  {
+   "fieldname": "jwt_acquired_at",
+   "fieldtype": "Datetime",
+   "label": "JWT Acquired At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "jwt_expires_at",
+   "fieldtype": "Datetime",
+   "label": "JWT Expires At",
+   "read_only": 1,
+   "description": "90-day validity. Day-85 renewal job runs proactively."
+  },
+  {
+   "fieldname": "cursors_section",
+   "fieldtype": "Section Break",
+   "label": "Per-Location Pull Cursors",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "last_pull_orders",
+   "fieldtype": "Datetime",
+   "label": "Last Order Pull",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_pull_returns",
+   "fieldtype": "Datetime",
+   "label": "Last Return Pull",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_pull_grn",
+   "fieldtype": "Datetime",
+   "label": "Last GRN Pull",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Location",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 2,
+   "read": 1,
+   "write": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

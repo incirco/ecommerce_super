@@ -1,0 +1,302 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-QJ-{YYYY}-{MM}-{DD}-{######}",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "job_type",
+  "state",
+  "queue_tier",
+  "priority",
+  "target_section",
+  "target_doctype",
+  "target_name",
+  "correlation_section",
+  "correlation_id",
+  "parent_correlation_id",
+  "idempotency_key",
+  "rq_job_id",
+  "execution_section",
+  "attempts",
+  "max_attempts",
+  "succeeded_count",
+  "failed_count",
+  "execution_col_2",
+  "last_attempted_at",
+  "next_attempt_at",
+  "created_at",
+  "completed_at",
+  "parent_section",
+  "parent_event",
+  "parent_sync_record",
+  "parent_replay_plan",
+  "payload_section",
+  "payload",
+  "last_response",
+  "last_api_call",
+  "error_section",
+  "last_error",
+  "last_error_translation_key"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "job_type",
+   "fieldtype": "Select",
+   "label": "Job Type",
+   "options": "Item Push\nCustomer Push\nSupplier Push\nPO Push\nSO Push\nB2B Invoice Push\nOrder Pull\nGRN Pull\nReturn Pull\nInventory Pull\nWebhook Process\nReplay Plan Step\nMaster Sync Bulk\nField Mapping Compile\nSchema Snapshot Compute\nMapping Coverage Compute\nSLA Breach Compute\nMorning Brief Compute\nConfiguration Audit Write",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "state",
+   "fieldtype": "Select",
+   "label": "State",
+   "options": "Queued\nRunning\nRetrying\nSuccess\nPartial\nFailed\nCancelled",
+   "default": "Queued",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "queue_tier",
+   "fieldtype": "Select",
+   "label": "Queue Tier",
+   "options": "short\ndefault\nlong",
+   "reqd": 1,
+   "description": "Frappe RQ queue this job is enqueued on. Set automatically from job_type via routing.py."
+  },
+  {
+   "fieldname": "priority",
+   "fieldtype": "Int",
+   "label": "Priority",
+   "default": "5",
+   "reqd": 1,
+   "description": "1=highest, 10=lowest. Affects ordering within a Frappe queue."
+  },
+  {
+   "fieldname": "target_section",
+   "fieldtype": "Section Break",
+   "label": "Target"
+  },
+  {
+   "fieldname": "target_doctype",
+   "fieldtype": "Data",
+   "label": "Target DocType"
+  },
+  {
+   "fieldname": "target_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Target",
+   "options": "target_doctype"
+  },
+  {
+   "fieldname": "correlation_section",
+   "fieldtype": "Section Break",
+   "label": "Correlation & Idempotency"
+  },
+  {
+   "fieldname": "correlation_id",
+   "fieldtype": "Data",
+   "label": "Correlation ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "parent_correlation_id",
+   "fieldtype": "Data",
+   "label": "Parent Correlation ID"
+  },
+  {
+   "fieldname": "idempotency_key",
+   "fieldtype": "Data",
+   "label": "Idempotency Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "rq_job_id",
+   "fieldtype": "Data",
+   "label": "RQ Job ID",
+   "description": "Frappe's internal RQ job ID for cross-reference to bench show-pending-jobs output."
+  },
+  {
+   "fieldname": "execution_section",
+   "fieldtype": "Section Break",
+   "label": "Execution"
+  },
+  {
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts",
+   "default": "0",
+   "reqd": 1
+  },
+  {
+   "fieldname": "max_attempts",
+   "fieldtype": "Int",
+   "label": "Max Attempts",
+   "default": "5",
+   "reqd": 1
+  },
+  {
+   "fieldname": "succeeded_count",
+   "fieldtype": "Int",
+   "label": "Succeeded Count",
+   "description": "Per-record units that reached Success (batch jobs only)."
+  },
+  {
+   "fieldname": "failed_count",
+   "fieldtype": "Int",
+   "label": "Failed Count",
+   "description": "A Partial job has failed_count > 0 and succeeded_count > 0."
+  },
+  {
+   "fieldname": "execution_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "last_attempted_at",
+   "fieldtype": "Datetime",
+   "label": "Last Attempted At"
+  },
+  {
+   "fieldname": "next_attempt_at",
+   "fieldtype": "Datetime",
+   "label": "Next Attempt At",
+   "description": "Informational only — Frappe RQ owns the actual scheduling via enqueue_after."
+  },
+  {
+   "fieldname": "created_at",
+   "fieldtype": "Datetime",
+   "label": "Created At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  },
+  {
+   "fieldname": "parent_section",
+   "fieldtype": "Section Break",
+   "label": "Parent References",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "parent_event",
+   "fieldtype": "Link",
+   "label": "Parent Webhook Event",
+   "options": "EasyEcom Webhook Event"
+  },
+  {
+   "fieldname": "parent_sync_record",
+   "fieldtype": "Link",
+   "label": "Parent Sync Record",
+   "options": "EasyEcom Sync Record"
+  },
+  {
+   "fieldname": "parent_replay_plan",
+   "fieldtype": "Link",
+   "label": "Parent Replay Plan",
+   "options": "EasyEcom Replay Plan"
+  },
+  {
+   "fieldname": "payload_section",
+   "fieldtype": "Section Break",
+   "label": "Payload",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "payload",
+   "fieldtype": "Long Text",
+   "label": "Request Payload (JSON, redacted)"
+  },
+  {
+   "fieldname": "last_response",
+   "fieldtype": "Long Text",
+   "label": "Last Response (redacted)"
+  },
+  {
+   "fieldname": "last_api_call",
+   "fieldtype": "Link",
+   "label": "Last API Call",
+   "options": "EasyEcom API Call"
+  },
+  {
+   "fieldname": "error_section",
+   "fieldtype": "Section Break",
+   "label": "Error",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Long Text",
+   "label": "Last Error"
+  },
+  {
+   "fieldname": "last_error_translation_key",
+   "fieldtype": "Data",
+   "label": "Last Error Translation Key"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Queue Job",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}

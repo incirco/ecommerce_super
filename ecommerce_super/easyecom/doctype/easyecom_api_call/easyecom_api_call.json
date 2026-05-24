@@ -1,0 +1,281 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-AC-{YYYY}-{MM}-{DD}-{########}",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "easyecom_account",
+  "company",
+  "is_foundational",
+  "location_key",
+  "status",
+  "attempted_at",
+  "completed_at",
+  "correlation_section",
+  "correlation_id",
+  "sub_correlation_id",
+  "parent_sync_record",
+  "parent_queue_job",
+  "request_section",
+  "endpoint",
+  "http_method",
+  "request_url",
+  "request_headers",
+  "request_payload",
+  "request_payload_hash",
+  "response_section",
+  "response_status_code",
+  "response_headers",
+  "response_payload",
+  "response_payload_hash",
+  "latency_ms",
+  "attempt_number",
+  "error_section",
+  "error_class",
+  "error_message",
+  "error_translation_key",
+  "schema_snapshot"
+ ],
+ "fields": [
+  {
+   "fieldname": "easyecom_account",
+   "fieldtype": "Link",
+   "label": "EasyEcom Account",
+   "options": "EasyEcom Account",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "search_index": 1,
+   "in_list_view": 1,
+   "description": "Set for entity-sync calls; blank for foundational calls (token/location/test — §7.7)."
+  },
+  {
+   "fieldname": "is_foundational",
+   "fieldtype": "Check",
+   "label": "Foundational",
+   "default": "0",
+   "reqd": 1,
+   "description": "True for token, location-discovery, connection-test calls (§7.7)."
+  },
+  {
+   "fieldname": "location_key",
+   "fieldtype": "Data",
+   "label": "Location Key"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Success\nFailed\nTimeout\nCancelled",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "attempted_at",
+   "fieldtype": "Datetime",
+   "label": "Attempted At",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  },
+  {
+   "fieldname": "correlation_section",
+   "fieldtype": "Section Break",
+   "label": "Correlation"
+  },
+  {
+   "fieldname": "correlation_id",
+   "fieldtype": "Data",
+   "label": "Correlation ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "sub_correlation_id",
+   "fieldtype": "Data",
+   "label": "Sub-Correlation ID",
+   "reqd": 1,
+   "description": "Per-attempt UUID, distinguishes one retry of a call from another within the same correlation_id."
+  },
+  {
+   "fieldname": "parent_sync_record",
+   "fieldtype": "Link",
+   "label": "Parent Sync Record",
+   "options": "EasyEcom Sync Record"
+  },
+  {
+   "fieldname": "parent_queue_job",
+   "fieldtype": "Link",
+   "label": "Parent Queue Job",
+   "options": "EasyEcom Queue Job"
+  },
+  {
+   "fieldname": "request_section",
+   "fieldtype": "Section Break",
+   "label": "Request"
+  },
+  {
+   "fieldname": "endpoint",
+   "fieldtype": "Data",
+   "label": "Endpoint",
+   "reqd": 1,
+   "search_index": 1,
+   "description": "Path component, e.g., /Wms/Inventory/getStockSnapshot."
+  },
+  {
+   "fieldname": "http_method",
+   "fieldtype": "Select",
+   "label": "HTTP Method",
+   "options": "GET\nPOST\nPUT\nPATCH",
+   "reqd": 1
+  },
+  {
+   "fieldname": "request_url",
+   "fieldtype": "Data",
+   "label": "Request URL (redacted)",
+   "reqd": 1,
+   "length": 2000
+  },
+  {
+   "fieldname": "request_headers",
+   "fieldtype": "Long Text",
+   "label": "Request Headers (Authorization redacted)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "request_payload",
+   "fieldtype": "Long Text",
+   "label": "Request Payload (PII redacted)"
+  },
+  {
+   "fieldname": "request_payload_hash",
+   "fieldtype": "Data",
+   "label": "Request Payload Hash",
+   "reqd": 1
+  },
+  {
+   "fieldname": "response_section",
+   "fieldtype": "Section Break",
+   "label": "Response"
+  },
+  {
+   "fieldname": "response_status_code",
+   "fieldtype": "Int",
+   "label": "Response Status Code"
+  },
+  {
+   "fieldname": "response_headers",
+   "fieldtype": "Long Text",
+   "label": "Response Headers"
+  },
+  {
+   "fieldname": "response_payload",
+   "fieldtype": "Long Text",
+   "label": "Response Payload (redacted)"
+  },
+  {
+   "fieldname": "response_payload_hash",
+   "fieldtype": "Data",
+   "label": "Response Payload Hash",
+   "description": "SHA-256 over the response body. Feeds schema drift detection (§20)."
+  },
+  {
+   "fieldname": "latency_ms",
+   "fieldtype": "Int",
+   "label": "Latency (ms)"
+  },
+  {
+   "fieldname": "attempt_number",
+   "fieldtype": "Int",
+   "label": "Attempt #",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "error_section",
+   "fieldtype": "Section Break",
+   "label": "Error",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "error_class",
+   "fieldtype": "Data",
+   "label": "Error Class",
+   "description": "Python exception class (matches §31.5 hierarchy)."
+  },
+  {
+   "fieldname": "error_message",
+   "fieldtype": "Long Text",
+   "label": "Error Message"
+  },
+  {
+   "fieldname": "error_translation_key",
+   "fieldtype": "Data",
+   "label": "Error Translation Key"
+  },
+  {
+   "fieldname": "schema_snapshot",
+   "fieldtype": "Link",
+   "label": "Schema Snapshot",
+   "options": "EasyEcom Schema Snapshot",
+   "description": "Set when the response body matched a known shape (§20). Built in a later packet."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom API Call",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "attempted_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

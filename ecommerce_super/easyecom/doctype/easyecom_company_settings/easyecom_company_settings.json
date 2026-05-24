@@ -1,0 +1,317 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:company",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "enabled",
+  "connection_status",
+  "last_successful_sync_at",
+  "alerts_section",
+  "alert_recipients_critical",
+  "alert_recipients_error",
+  "alert_recipients_warning",
+  "alerts_thresholds_col",
+  "queue_depth_warning_threshold",
+  "queue_depth_critical_threshold",
+  "api_error_rate_warning_pct",
+  "api_error_rate_critical_pct",
+  "webhook_gap_warning_minutes",
+  "sync_lag_warning_minutes",
+  "digest_col",
+  "daily_digest_enabled",
+  "daily_digest_time",
+  "weekly_summary_enabled",
+  "notifications_section",
+  "email_template_critical",
+  "email_template_error",
+  "email_template_warning",
+  "slack_section",
+  "slack_webhook_url",
+  "slack_channel_critical",
+  "slack_channel_error",
+  "banner_show_to_all_users",
+  "digest_recipients",
+  "fde_section",
+  "assigned_fde",
+  "default_rejected_warehouse_override",
+  "default_in_transit_warehouse_override"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "Primary key. Immutable post-create."
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "in_list_view": 1,
+   "description": "Per-Company kill-switch. When unchecked, operational flows for this Company pause; the Account and other Companies are unaffected."
+  },
+  {
+   "fieldname": "connection_status",
+   "fieldtype": "Select",
+   "label": "Connection Status",
+   "options": "Disabled\nConnected\nDegraded\nDown",
+   "default": "Disabled",
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "Rollup of connection health across this Company's operational locations."
+  },
+  {
+   "fieldname": "last_successful_sync_at",
+   "fieldtype": "Datetime",
+   "label": "Last Successful Sync At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "alerts_section",
+   "fieldtype": "Section Break",
+   "label": "Alerts",
+   "collapsible": 1,
+   "description": "Severity thresholds and notification routing for this Company. Full framework in §18."
+  },
+  {
+   "fieldname": "alert_recipients_critical",
+   "fieldtype": "Table",
+   "label": "Critical Recipients",
+   "options": "EasyEcom Alert Recipient",
+   "description": "Who gets paged on Critical alerts."
+  },
+  {
+   "fieldname": "alert_recipients_error",
+   "fieldtype": "Table",
+   "label": "Error Recipients",
+   "options": "EasyEcom Alert Recipient"
+  },
+  {
+   "fieldname": "alert_recipients_warning",
+   "fieldtype": "Table",
+   "label": "Warning Recipients",
+   "options": "EasyEcom Alert Recipient",
+   "description": "Typically only the FDE."
+  },
+  {
+   "fieldname": "alerts_thresholds_col",
+   "fieldtype": "Column Break",
+   "label": "Thresholds"
+  },
+  {
+   "fieldname": "queue_depth_warning_threshold",
+   "fieldtype": "Int",
+   "label": "Queue Depth Warning",
+   "default": "500",
+   "reqd": 1
+  },
+  {
+   "fieldname": "queue_depth_critical_threshold",
+   "fieldtype": "Int",
+   "label": "Queue Depth Critical",
+   "default": "1000",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_error_rate_warning_pct",
+   "fieldtype": "Percent",
+   "label": "API Error Rate Warning %",
+   "default": "5",
+   "reqd": 1,
+   "description": "Over a 15-minute window."
+  },
+  {
+   "fieldname": "api_error_rate_critical_pct",
+   "fieldtype": "Percent",
+   "label": "API Error Rate Critical %",
+   "default": "20",
+   "reqd": 1
+  },
+  {
+   "fieldname": "webhook_gap_warning_minutes",
+   "fieldtype": "Int",
+   "label": "Webhook Gap Warning (min)",
+   "default": "60",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sync_lag_warning_minutes",
+   "fieldtype": "Int",
+   "label": "Sync Lag Warning (min)",
+   "default": "30",
+   "reqd": 1
+  },
+  {
+   "fieldname": "digest_col",
+   "fieldtype": "Column Break",
+   "label": "Digest"
+  },
+  {
+   "fieldname": "daily_digest_enabled",
+   "fieldtype": "Check",
+   "label": "Daily Digest Enabled",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "daily_digest_time",
+   "fieldtype": "Time",
+   "label": "Daily Digest Time",
+   "default": "08:00:00",
+   "reqd": 1
+  },
+  {
+   "fieldname": "weekly_summary_enabled",
+   "fieldtype": "Check",
+   "label": "Weekly Summary Enabled",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "notifications_section",
+   "fieldtype": "Section Break",
+   "label": "Notifications",
+   "collapsible": 1,
+   "description": "Channel-specific configuration for outbound notifications. The Alerts section decides who and when; this section configures how."
+  },
+  {
+   "fieldname": "email_template_critical",
+   "fieldtype": "Link",
+   "label": "Email Template - Critical",
+   "options": "Email Template"
+  },
+  {
+   "fieldname": "email_template_error",
+   "fieldtype": "Link",
+   "label": "Email Template - Error",
+   "options": "Email Template"
+  },
+  {
+   "fieldname": "email_template_warning",
+   "fieldtype": "Link",
+   "label": "Email Template - Warning",
+   "options": "Email Template"
+  },
+  {
+   "fieldname": "slack_section",
+   "fieldtype": "Section Break",
+   "label": "Slack",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "slack_webhook_url",
+   "fieldtype": "Password",
+   "label": "Slack Webhook URL",
+   "permlevel": 1,
+   "description": "Optional. If populated, alerts post to this channel. Credential (§3.7.1) — encrypted, write-only."
+  },
+  {
+   "fieldname": "slack_channel_critical",
+   "fieldtype": "Data",
+   "label": "Slack Channel - Critical",
+   "description": "e.g., #ee-prod-critical"
+  },
+  {
+   "fieldname": "slack_channel_error",
+   "fieldtype": "Data",
+   "label": "Slack Channel - Error"
+  },
+  {
+   "fieldname": "banner_show_to_all_users",
+   "fieldtype": "Check",
+   "label": "Show Critical Banner to All Users",
+   "default": "0",
+   "reqd": 1,
+   "description": "If checked, Critical alerts surface as a desk-wide banner, not just to alert recipients."
+  },
+  {
+   "fieldname": "digest_recipients",
+   "fieldtype": "Table",
+   "label": "Digest Recipients",
+   "options": "EasyEcom Digest User",
+   "description": "Who receives daily/weekly digests (independent of alert recipients)."
+  },
+  {
+   "fieldname": "fde_section",
+   "fieldtype": "Section Break",
+   "label": "FDE & Per-Company Overrides",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "assigned_fde",
+   "fieldtype": "Link",
+   "label": "Assigned FDE",
+   "options": "User",
+   "description": "The FDE responsible for this Company; drives Discrepancy auto-routing (§14)."
+  },
+  {
+   "fieldname": "default_rejected_warehouse_override",
+   "fieldtype": "Link",
+   "label": "Rejected Warehouse Override",
+   "options": "Warehouse",
+   "description": "Optional per-Company override of the account-level GRN policy default (§3.3.6)."
+  },
+  {
+   "fieldname": "default_in_transit_warehouse_override",
+   "fieldtype": "Link",
+   "label": "In-Transit Warehouse Override",
+   "options": "Warehouse"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Company Settings",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 1,
+   "read": 1,
+   "write": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

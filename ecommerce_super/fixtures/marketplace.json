@@ -1,0 +1,68 @@
+[
+ {
+  "doctype": "Marketplace",
+  "name": "starter-amazon-in",
+  "marketplace_id": "starter-amazon-in",
+  "marketplace_name": "Amazon.in",
+  "display_name": "Amazon India",
+  "channel_type": "B2C Marketplace",
+  "is_active": 1,
+  "enabled": 1,
+  "country": "India"
+ },
+ {
+  "doctype": "Marketplace",
+  "name": "starter-flipkart",
+  "marketplace_id": "starter-flipkart",
+  "marketplace_name": "Flipkart",
+  "display_name": "Flipkart",
+  "channel_type": "B2C Marketplace",
+  "is_active": 1,
+  "enabled": 1,
+  "country": "India"
+ },
+ {
+  "doctype": "Marketplace",
+  "name": "starter-meesho",
+  "marketplace_id": "starter-meesho",
+  "marketplace_name": "Meesho",
+  "display_name": "Meesho",
+  "channel_type": "B2C Marketplace",
+  "is_active": 1,
+  "enabled": 1,
+  "country": "India"
+ },
+ {
+  "doctype": "Marketplace",
+  "name": "starter-myntra",
+  "marketplace_id": "starter-myntra",
+  "marketplace_name": "Myntra",
+  "display_name": "Myntra",
+  "channel_type": "B2C Marketplace",
+  "is_active": 1,
+  "enabled": 1,
+  "country": "India"
+ },
+ {
+  "doctype": "Marketplace",
+  "name": "starter-cash-sales",
+  "marketplace_id": "starter-cash-sales",
+  "marketplace_name": "Customer Cash Sales",
+  "display_name": "Customer Cash Sales",
+  "channel_type": "POS-Offline",
+  "is_active": 1,
+  "enabled": 1,
+  "country": "India"
+ },
+ {
+  "doctype": "Marketplace",
+  "name": "starter-b2b",
+  "marketplace_id": "starter-b2b",
+  "marketplace_name": "B2B Direct",
+  "display_name": "B2B Direct",
+  "channel_type": "B2B",
+  "is_active": 1,
+  "enabled": 1,
+  "country": "India"
+ }
+]

@@ -1,0 +1,47 @@
+[
+ {
+  "doctype": "Role",
+  "name": "EasyEcom Operator",
+  "role_name": "EasyEcom Operator",
+  "desk_access": 1,
+  "disabled": 0,
+  "is_custom": 1,
+  "two_factor_auth": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "EasyEcom FDE",
+  "role_name": "EasyEcom FDE",
+  "desk_access": 1,
+  "disabled": 0,
+  "is_custom": 1,
+  "two_factor_auth": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "EasyEcom Replay Approver",
+  "role_name": "EasyEcom Replay Approver",
+  "desk_access": 1,
+  "disabled": 0,
+  "is_custom": 1,
+  "two_factor_auth": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "EasyEcom System Manager",
+  "role_name": "EasyEcom System Manager",
+  "desk_access": 1,
+  "disabled": 0,
+  "is_custom": 1,
+  "two_factor_auth": 0
+ },
+ {
+  "doctype": "Role",
+  "name": "EasyEcom Auditor",
+  "role_name": "EasyEcom Auditor",
+  "desk_access": 1,
+  "disabled": 0,
+  "is_custom": 1,
+  "two_factor_auth": 0
+ }
+]

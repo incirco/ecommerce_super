@@ -1,0 +1,11 @@
+[
+ {
+  "doctype": "Accounting Dimension",
+  "name": "Channel",
+  "document_type": "Marketplace",
+  "label": "Channel",
+  "fieldname": "channel",
+  "disabled": 0,
+  "dimension_defaults": []
+ }
+]

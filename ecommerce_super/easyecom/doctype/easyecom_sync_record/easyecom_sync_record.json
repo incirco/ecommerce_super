@@ -1,0 +1,282 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-SR-{YYYY}-{MM}-{DD}-{######}",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "entity_doctype",
+  "entity_name",
+  "entity_type",
+  "direction",
+  "status",
+  "ee_section",
+  "ee_id",
+  "ee_location_key",
+  "correlation_section",
+  "correlation_id",
+  "parent_correlation_id",
+  "idempotency_key",
+  "retry_section",
+  "attempts",
+  "last_attempt_at",
+  "last_attempt_tz",
+  "last_error",
+  "last_error_translation_key",
+  "mapping_section",
+  "field_mapping_used",
+  "field_mapping_version",
+  "payload_section",
+  "push_payload_hash",
+  "pull_payload_hash",
+  "last_request_payload",
+  "last_response_payload",
+  "replay_section",
+  "ecs_replay_plan",
+  "ecs_replay_strategy"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "entity_doctype",
+   "fieldtype": "Data",
+   "label": "Entity DocType",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Frappe DocType being synced (e.g., 'Item', 'Sales Order')."
+  },
+  {
+   "fieldname": "entity_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Entity",
+   "options": "entity_doctype",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "entity_type",
+   "fieldtype": "Select",
+   "label": "Entity Type",
+   "options": "Item\nCustomer\nSupplier\nWarehouse\nTax Category\nChannel\nSales Order\nPurchase Order\nSales Invoice\nPurchase Receipt\nStock Entry\nOrder\nGRN\nReturn\nCancellation\nManifest\nDispatch",
+   "reqd": 1
+  },
+  {
+   "fieldname": "direction",
+   "fieldtype": "Select",
+   "label": "Direction",
+   "options": "Push\nPull",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nRunning\nSuccess\nFailed\nCancelled\nAlreadySynced",
+   "default": "Pending",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "ee_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Side"
+  },
+  {
+   "fieldname": "ee_id",
+   "fieldtype": "Data",
+   "label": "EE ID",
+   "description": "EasyEcom-side identifier (when known)."
+  },
+  {
+   "fieldname": "ee_location_key",
+   "fieldtype": "Link",
+   "label": "EE Location",
+   "options": "EasyEcom Location"
+  },
+  {
+   "fieldname": "correlation_section",
+   "fieldtype": "Section Break",
+   "label": "Correlation & Idempotency"
+  },
+  {
+   "fieldname": "correlation_id",
+   "fieldtype": "Data",
+   "label": "Correlation ID",
+   "reqd": 1,
+   "search_index": 1,
+   "description": "UUIDv7 from operation entry point (§6.2). Threads through every API Call and downstream record."
+  },
+  {
+   "fieldname": "parent_correlation_id",
+   "fieldtype": "Data",
+   "label": "Parent Correlation ID",
+   "description": "Set on replay-induced records; points at the original operation."
+  },
+  {
+   "fieldname": "idempotency_key",
+   "fieldtype": "Data",
+   "label": "Idempotency Key",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Per §6.1 formula. Inherited unchanged on retry — never recomputed."
+  },
+  {
+   "fieldname": "retry_section",
+   "fieldtype": "Section Break",
+   "label": "Retry & Errors"
+  },
+  {
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "label": "Attempts",
+   "default": "0",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_attempt_at",
+   "fieldtype": "Datetime",
+   "label": "Last Attempt At"
+  },
+  {
+   "fieldname": "last_attempt_tz",
+   "fieldtype": "Data",
+   "label": "Last Attempt TZ",
+   "default": "Asia/Kolkata"
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Long Text",
+   "label": "Last Error"
+  },
+  {
+   "fieldname": "last_error_translation_key",
+   "fieldtype": "Data",
+   "label": "Last Error Translation Key",
+   "description": "FK to EasyEcom Error Translation (built in §25)."
+  },
+  {
+   "fieldname": "mapping_section",
+   "fieldtype": "Section Break",
+   "label": "Field Mapping",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "field_mapping_used",
+   "fieldtype": "Link",
+   "label": "Field Mapping",
+   "options": "EasyEcom Field Mapping",
+   "description": "The Field Mapping ruleset this attempt applied (built in §5)."
+  },
+  {
+   "fieldname": "field_mapping_version",
+   "fieldtype": "Int",
+   "label": "Mapping Version"
+  },
+  {
+   "fieldname": "payload_section",
+   "fieldtype": "Section Break",
+   "label": "Payload",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "push_payload_hash",
+   "fieldtype": "Data",
+   "label": "Push Payload Hash"
+  },
+  {
+   "fieldname": "pull_payload_hash",
+   "fieldtype": "Data",
+   "label": "Pull Payload Hash"
+  },
+  {
+   "fieldname": "last_request_payload",
+   "fieldtype": "Long Text",
+   "label": "Last Request Payload (redacted)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_response_payload",
+   "fieldtype": "Long Text",
+   "label": "Last Response Payload (redacted)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "replay_section",
+   "fieldtype": "Section Break",
+   "label": "Replay",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "ecs_replay_plan",
+   "fieldtype": "Link",
+   "label": "Replay Plan",
+   "options": "EasyEcom Replay Plan",
+   "description": "Set if this Sync Record was created via a Replay Plan (§19)."
+  },
+  {
+   "fieldname": "ecs_replay_strategy",
+   "fieldtype": "Data",
+   "label": "Replay Strategy"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Sync Record",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

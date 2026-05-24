@@ -1,0 +1,540 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:account_name",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "account_name",
+  "enabled",
+  "connection_status",
+  "environment_badge",
+  "last_successful_sync_at",
+  "setup_section",
+  "api_endpoint",
+  "x_api_key",
+  "email",
+  "password",
+  "rate_limit_tier",
+  "default_location_key",
+  "test_connection_action",
+  "sync_window_section",
+  "sync_window_enabled",
+  "sync_window_start",
+  "sync_window_end",
+  "sync_window_weekends_only",
+  "pause_until",
+  "window_exemptions",
+  "sync_tuning_section",
+  "poll_interval_orders_min",
+  "poll_interval_returns_min",
+  "poll_interval_grn_min",
+  "poll_interval_inventory_min",
+  "poll_interval_po_status_min",
+  "poll_interval_master_products_hours",
+  "poll_interval_locations_hours",
+  "sync_tuning_col_2",
+  "max_throughput_per_sec",
+  "max_concurrent_workers",
+  "batch_size_items_push",
+  "batch_size_orders_pull",
+  "push_so_mode",
+  "push_so_block_on_error",
+  "sync_toggles_col_3",
+  "sync_enabled_orders",
+  "sync_enabled_inventory",
+  "sync_enabled_returns",
+  "sync_enabled_grn",
+  "sync_enabled_master_products",
+  "webhook_section",
+  "webhook_enabled",
+  "webhook_token",
+  "webhook_max_age_seconds",
+  "webhook_dedup_window_minutes",
+  "webhook_endpoint_url_display",
+  "webhook_allowed_ips",
+  "grn_policy_section",
+  "default_rejected_warehouse",
+  "default_in_transit_warehouse",
+  "allow_over_receipt_pct",
+  "allow_under_receipt_pct",
+  "tax_variance_tolerance_pct",
+  "lost_in_transit_threshold_days",
+  "grn_policy_col_2",
+  "mandatory_batch_for_groups",
+  "mandatory_serial_for_groups",
+  "mandatory_expiry_for_groups",
+  "internal_section",
+  "last_full_sync_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "account_name",
+   "fieldtype": "Data",
+   "label": "Account Name",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Human-readable label for this deployment's EasyEcom account."
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "description": "Account-wide kill-switch. When unchecked, no syncs of any kind run for any location."
+  },
+  {
+   "fieldname": "connection_status",
+   "fieldtype": "Select",
+   "label": "Connection Status",
+   "options": "Disabled\nConnected\nDegraded\nDown",
+   "default": "Disabled",
+   "read_only": 1,
+   "description": "Live indicator. Computed every 60s from connection health."
+  },
+  {
+   "fieldname": "environment_badge",
+   "fieldtype": "Select",
+   "label": "Environment",
+   "options": "Sandbox\nProduction",
+   "default": "Sandbox",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_successful_sync_at",
+   "fieldtype": "Datetime",
+   "label": "Last Successful Sync At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "setup_section",
+   "fieldtype": "Section Break",
+   "label": "Setup",
+   "collapsible": 1,
+   "description": "EasyEcom credentials. Credential fields are encrypted at rest and never readable back; they can only be set or overwritten (§3.7)."
+  },
+  {
+   "fieldname": "api_endpoint",
+   "fieldtype": "Data",
+   "label": "API Endpoint",
+   "reqd": 1,
+   "default": "https://api.easyecom.io",
+   "description": "EasyEcom base URL. Production: https://api.easyecom.io. Sandbox URL differs."
+  },
+  {
+   "fieldname": "x_api_key",
+   "fieldtype": "Password",
+   "label": "X-API-Key",
+   "reqd": 1,
+   "permlevel": 1,
+   "description": "Account-level API key. Generated only from the client's Primary Seller Account; regenerating it invalidates the previous key instantly."
+  },
+  {
+   "fieldname": "email",
+   "fieldtype": "Password",
+   "label": "Account Email",
+   "reqd": 1,
+   "permlevel": 1,
+   "description": "EasyEcom account email (must be a user with multi-location access in the primary account). Treated as a credential (§3.7.1)."
+  },
+  {
+   "fieldname": "password",
+   "fieldtype": "Password",
+   "label": "Account Password",
+   "reqd": 1,
+   "permlevel": 1
+  },
+  {
+   "fieldname": "rate_limit_tier",
+   "fieldtype": "Select",
+   "label": "Rate Limit Tier",
+   "options": "\nDefault\nBronze\nSilver\nGold\nDiamond",
+   "reqd": 1,
+   "description": "Tier EasyEcom has assigned to this api_key. No preset default — set to whatever EE has actually assigned. Drives throttle and daily quota (§3.10). A newly generated key sits in Default tier until EE upgrades it; \"tier still Default at go-live\" is a blocking onboarding condition."
+  },
+  {
+   "fieldname": "default_location_key",
+   "fieldtype": "Link",
+   "label": "Default Location",
+   "options": "EasyEcom Location",
+   "description": "Used for location-agnostic operations (typically the primary location for master ops)."
+  },
+  {
+   "fieldname": "test_connection_action",
+   "fieldtype": "Button",
+   "label": "Test Connection",
+   "description": "Triggers a /access/token call against the default_location_key and reports result inline."
+  },
+  {
+   "fieldname": "sync_window_section",
+   "fieldtype": "Section Break",
+   "label": "Sync Window",
+   "collapsible": 1,
+   "description": "Allowed time windows for background sync activity. All times in the deployment's default timezone."
+  },
+  {
+   "fieldname": "sync_window_enabled",
+   "fieldtype": "Check",
+   "label": "Enable Sync Window",
+   "default": "0",
+   "description": "If unchecked, syncs run 24x7."
+  },
+  {
+   "fieldname": "sync_window_start",
+   "fieldtype": "Time",
+   "label": "Daily Start",
+   "default": "22:00:00"
+  },
+  {
+   "fieldname": "sync_window_end",
+   "fieldtype": "Time",
+   "label": "Daily End",
+   "default": "06:00:00",
+   "description": "May cross midnight."
+  },
+  {
+   "fieldname": "sync_window_weekends_only",
+   "fieldtype": "Check",
+   "label": "Weekends Only",
+   "default": "0"
+  },
+  {
+   "fieldname": "pause_until",
+   "fieldtype": "Datetime",
+   "label": "Pause Until",
+   "description": "Manual pause — overrides the window."
+  },
+  {
+   "fieldname": "window_exemptions",
+   "fieldtype": "Table",
+   "label": "Window Exemptions",
+   "options": "EasyEcom Sync Window Exemption",
+   "description": "Critical jobs that bypass the window — typically webhook-triggered."
+  },
+  {
+   "fieldname": "sync_tuning_section",
+   "fieldtype": "Section Break",
+   "label": "Sync Tuning",
+   "collapsible": 1,
+   "description": "Per-resource cadences and concurrency. Defaults suit a 5,000-orders/month client; FDEs adjust per deployment."
+  },
+  {
+   "fieldname": "poll_interval_orders_min",
+   "fieldtype": "Int",
+   "label": "Poll Orders (min)",
+   "reqd": 1,
+   "default": "5"
+  },
+  {
+   "fieldname": "poll_interval_returns_min",
+   "fieldtype": "Int",
+   "label": "Poll Returns (min)",
+   "reqd": 1,
+   "default": "15"
+  },
+  {
+   "fieldname": "poll_interval_grn_min",
+   "fieldtype": "Int",
+   "label": "Poll GRN (min)",
+   "reqd": 1,
+   "default": "30"
+  },
+  {
+   "fieldname": "poll_interval_inventory_min",
+   "fieldtype": "Int",
+   "label": "Poll Inventory (min)",
+   "reqd": 1,
+   "default": "60"
+  },
+  {
+   "fieldname": "poll_interval_po_status_min",
+   "fieldtype": "Int",
+   "label": "Poll PO Status (min)",
+   "reqd": 1,
+   "default": "60"
+  },
+  {
+   "fieldname": "poll_interval_master_products_hours",
+   "fieldtype": "Int",
+   "label": "Poll Master Products (hours)",
+   "reqd": 1,
+   "default": "24"
+  },
+  {
+   "fieldname": "poll_interval_locations_hours",
+   "fieldtype": "Int",
+   "label": "Poll Locations (hours)",
+   "reqd": 1,
+   "default": "24"
+  },
+  {
+   "fieldname": "sync_tuning_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "max_throughput_per_sec",
+   "fieldtype": "Int",
+   "label": "Max Throughput (req/s)",
+   "reqd": 1,
+   "default": "5",
+   "description": "Outbound rate cap per location_key. The integration clamps to the rate_limit_tier ceiling regardless."
+  },
+  {
+   "fieldname": "max_concurrent_workers",
+   "fieldtype": "Int",
+   "label": "Max Concurrent Workers",
+   "reqd": 1,
+   "default": "4",
+   "description": "Account-wide. Per-Company sub-limits in §6.3.7."
+  },
+  {
+   "fieldname": "batch_size_items_push",
+   "fieldtype": "Int",
+   "label": "Items per Push Call",
+   "reqd": 1,
+   "default": "50"
+  },
+  {
+   "fieldname": "batch_size_orders_pull",
+   "fieldtype": "Int",
+   "label": "Orders per Pull Call",
+   "reqd": 1,
+   "default": "100"
+  },
+  {
+   "fieldname": "push_so_mode",
+   "fieldtype": "Select",
+   "label": "SO Push Mode",
+   "options": "Async\nSync",
+   "default": "Async",
+   "reqd": 1
+  },
+  {
+   "fieldname": "push_so_block_on_error",
+   "fieldtype": "Check",
+   "label": "Block SO on Push Error",
+   "default": "0",
+   "reqd": 1,
+   "description": "If SO Push Mode is Sync: reject on_submit when EE errors. Per-Marketplace choice (§2.4)."
+  },
+  {
+   "fieldname": "sync_toggles_col_3",
+   "fieldtype": "Column Break",
+   "label": "Per-Resource Toggles"
+  },
+  {
+   "fieldname": "sync_enabled_orders",
+   "fieldtype": "Check",
+   "label": "Sync Orders",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sync_enabled_inventory",
+   "fieldtype": "Check",
+   "label": "Sync Inventory",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sync_enabled_returns",
+   "fieldtype": "Check",
+   "label": "Sync Returns",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sync_enabled_grn",
+   "fieldtype": "Check",
+   "label": "Sync GRN",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sync_enabled_master_products",
+   "fieldtype": "Check",
+   "label": "Sync Master Products",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "webhook_section",
+   "fieldtype": "Section Break",
+   "label": "Inbound Webhook Auth",
+   "collapsible": 1,
+   "description": "Auth is mandatory; unauthenticated webhooks are rejected with 401."
+  },
+  {
+   "fieldname": "webhook_enabled",
+   "fieldtype": "Check",
+   "label": "Webhooks Enabled",
+   "default": "1",
+   "reqd": 1,
+   "description": "If unchecked, all inbound webhooks return 503; integration operates in poll-only mode."
+  },
+  {
+   "fieldname": "webhook_token",
+   "fieldtype": "Password",
+   "label": "Webhook Token",
+   "permlevel": 1,
+   "description": "Shared bearer token issued to EasyEcom. Required if webhooks are enabled."
+  },
+  {
+   "fieldname": "webhook_max_age_seconds",
+   "fieldtype": "Int",
+   "label": "Max Webhook Age (s)",
+   "default": "300",
+   "reqd": 1
+  },
+  {
+   "fieldname": "webhook_dedup_window_minutes",
+   "fieldtype": "Int",
+   "label": "Dedup Window (min)",
+   "default": "60",
+   "reqd": 1
+  },
+  {
+   "fieldname": "webhook_endpoint_url_display",
+   "fieldtype": "Data",
+   "label": "Webhook Endpoint URL",
+   "read_only": 1,
+   "description": "The URL to register in EasyEcom. The receiver resolves the originating location to its Company on receipt."
+  },
+  {
+   "fieldname": "webhook_allowed_ips",
+   "fieldtype": "Long Text",
+   "label": "Allowed IPs (CIDR, one per line)",
+   "description": "Optional CIDR allowlist. Requests from outside the list are rejected."
+  },
+  {
+   "fieldname": "grn_policy_section",
+   "fieldtype": "Section Break",
+   "label": "GRN / Inward Policy",
+   "collapsible": 1,
+   "description": "Business rules for GRN-to-Purchase-Receipt translation. Per-Company overrides available in EasyEcom Company Settings."
+  },
+  {
+   "fieldname": "default_rejected_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Rejected Warehouse",
+   "options": "Warehouse",
+   "description": "Where rejected_qty from GRN lines posts. Resolved per receiving Company."
+  },
+  {
+   "fieldname": "default_in_transit_warehouse",
+   "fieldtype": "Link",
+   "label": "Default In-Transit Warehouse",
+   "options": "Warehouse"
+  },
+  {
+   "fieldname": "allow_over_receipt_pct",
+   "fieldtype": "Percent",
+   "label": "Allow Over-Receipt %",
+   "default": "0",
+   "reqd": 1
+  },
+  {
+   "fieldname": "allow_under_receipt_pct",
+   "fieldtype": "Percent",
+   "label": "Allow Under-Receipt %",
+   "default": "0",
+   "reqd": 1
+  },
+  {
+   "fieldname": "tax_variance_tolerance_pct",
+   "fieldtype": "Percent",
+   "label": "Tax Variance Tolerance %",
+   "default": "1",
+   "reqd": 1
+  },
+  {
+   "fieldname": "lost_in_transit_threshold_days",
+   "fieldtype": "Int",
+   "label": "Lost-in-Transit Threshold (days)",
+   "default": "30",
+   "reqd": 1
+  },
+  {
+   "fieldname": "grn_policy_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "mandatory_batch_for_groups",
+   "fieldtype": "Table",
+   "label": "Mandatory Batch For Item Groups",
+   "options": "EasyEcom Item Group MultiSelect"
+  },
+  {
+   "fieldname": "mandatory_serial_for_groups",
+   "fieldtype": "Table",
+   "label": "Mandatory Serial For Item Groups",
+   "options": "EasyEcom Item Group MultiSelect"
+  },
+  {
+   "fieldname": "mandatory_expiry_for_groups",
+   "fieldtype": "Table",
+   "label": "Mandatory Expiry For Item Groups",
+   "options": "EasyEcom Item Group MultiSelect"
+  },
+  {
+   "fieldname": "internal_section",
+   "fieldtype": "Section Break",
+   "label": "Internal",
+   "collapsible": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "last_full_sync_at",
+   "fieldtype": "Datetime",
+   "label": "Last Full Sync At",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Account",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 1,
+   "read": 1,
+   "write": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
