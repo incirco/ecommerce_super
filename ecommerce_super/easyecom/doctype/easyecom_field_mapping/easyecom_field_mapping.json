@@ -1,0 +1,211 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:mapping_name",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "mapping_name",
+  "entity_type",
+  "direction",
+  "active",
+  "version",
+  "scope_section",
+  "company_scope",
+  "missing_field_policy",
+  "preconditions_section",
+  "preconditions",
+  "rules_section",
+  "rules",
+  "computed_fields_section",
+  "computed_fields",
+  "audit_section",
+  "last_modified_by",
+  "last_modified_at",
+  "change_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "mapping_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Mapping Name",
+   "reqd": 1,
+   "unique": 1,
+   "description": "Human-readable name; e.g., 'EasyEcom-Item-Sync'."
+  },
+  {
+   "fieldname": "entity_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Entity Type",
+   "options": "Item\nItem UOM\nItem Alias\nCustomer\nCustomer Anon\nSupplier\nWarehouse\nTax Category\nChannel\nOrder\nOrder Line\nGRN\nGRN Line\nPO\nPO Line\nSO\nSO Line\nStock Reservation\nCancellation\nReturn\nManifest\nDispatch\nInventory Snapshot",
+   "reqd": 1
+  },
+  {
+   "fieldname": "direction",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Direction",
+   "options": "Push\nPull\nBidirectional",
+   "reqd": 1
+  },
+  {
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active",
+   "default": "1",
+   "description": "Inactive rulesets are not applied; useful for staged rollouts."
+  },
+  {
+   "fieldname": "version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Version",
+   "default": "0",
+   "read_only": 1,
+   "description": "Auto-incremented on every save by the controller. Powers §26 time travel."
+  },
+  {
+   "fieldname": "scope_section",
+   "fieldtype": "Section Break",
+   "label": "Scope & Policy",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "company_scope",
+   "fieldtype": "Table",
+   "label": "Company Scope",
+   "options": "EasyEcom Company MultiSelect",
+   "description": "Empty = all companies. Otherwise, the ruleset applies only to listed companies."
+  },
+  {
+   "fieldname": "missing_field_policy",
+   "fieldtype": "Select",
+   "label": "Missing Field Policy",
+   "options": "Strict\nPermissive\nDrop",
+   "default": "Permissive",
+   "reqd": 1,
+   "description": "Strict: raise on missing source. Permissive: identity-default. Drop: silently omit from output."
+  },
+  {
+   "fieldname": "preconditions_section",
+   "fieldtype": "Section Break",
+   "label": "Preconditions",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "preconditions",
+   "fieldtype": "Code",
+   "options": "Python",
+   "label": "Preconditions Expression",
+   "description": "Optional. Sandboxed Python. If set, ruleset is applied only when this expression is truthy for the record."
+  },
+  {
+   "fieldname": "rules_section",
+   "fieldtype": "Section Break",
+   "label": "Rules"
+  },
+  {
+   "fieldname": "rules",
+   "fieldtype": "Table",
+   "label": "Rules",
+   "options": "EasyEcom Field Mapping Rule"
+  },
+  {
+   "fieldname": "computed_fields_section",
+   "fieldtype": "Section Break",
+   "label": "Computed Fields",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "computed_fields",
+   "fieldtype": "Table",
+   "label": "Computed Fields",
+   "options": "EasyEcom Computed Field"
+  },
+  {
+   "fieldname": "audit_section",
+   "fieldtype": "Section Break",
+   "label": "Audit"
+  },
+  {
+   "fieldname": "last_modified_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Last Modified By",
+   "options": "User",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_modified_at",
+   "fieldtype": "Datetime",
+   "label": "Last Modified At",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "change_reason",
+   "fieldtype": "Small Text",
+   "label": "Change Reason",
+   "reqd": 1,
+   "description": "Required on every save. Captured into the Version snapshot and Configuration Audit."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Field Mapping",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "import": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "import": 1
+  },
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "import": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -102,9 +102,25 @@ def _apply_segment(nodes: Iterable[Any], segment: str) -> list[Any]:
                             result.append(item)
                 continue
             raise ValueError(f"Unsupported bracket expression: {segment!r}")
-        # Plain key.
-        if isinstance(node, dict) and segment in node:
-            result.append(node[segment])
+        # Plain key — handle dict, then object attribute access (Frappe
+        # Document, SimpleNamespace, dataclass, etc.).
+        if isinstance(node, dict):
+            if segment in node:
+                result.append(node[segment])
+            continue
+        # Object attribute access. `get` is the Frappe Document idiom;
+        # fall back to getattr for plain objects.
+        getter = getattr(node, "get", None)
+        if callable(getter):
+            try:
+                v = getter(segment)
+            except Exception:  # noqa: BLE001 — some get()s require kwargs we don't have
+                v = None
+            if v is not None:
+                result.append(v)
+                continue
+        if hasattr(node, segment):
+            result.append(getattr(node, segment))
     return result
 
 

@@ -1,0 +1,104 @@
+{
+ "actions": [],
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "erpnext_path",
+  "easyecom_path",
+  "transform_push",
+  "transform_pull",
+  "required",
+  "transform_args",
+  "condition",
+  "default_value",
+  "validate_against",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "erpnext_path",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "ERPNext Path",
+   "reqd": 1,
+   "description": "JSONPath subset (§5.4) into the ERPNext document shape."
+  },
+  {
+   "fieldname": "easyecom_path",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "EasyEcom Path",
+   "reqd": 1,
+   "description": "JSONPath subset (§5.4) into the EasyEcom payload shape."
+  },
+  {
+   "fieldname": "transform_push",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Transform (Push)",
+   "options": "identity\nbool_to_yn\nyn_to_bool\nstr_lower\nstr_upper\nstr_strip\ndate_format\ndatetime_to_iso\niso_to_datetime\nint_to_str\nstr_to_int\nfloat_to_str\nstr_to_float\ncurrency_to_paise\npaise_to_currency\nlookup_id\nreverse_lookup_id\nenum_map\nconditional_constant\ncomputed\ncustom_python\ncompose",
+   "default": "identity",
+   "reqd": 1
+  },
+  {
+   "fieldname": "transform_pull",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Transform (Pull)",
+   "options": "identity\nbool_to_yn\nyn_to_bool\nstr_lower\nstr_upper\nstr_strip\ndate_format\ndatetime_to_iso\niso_to_datetime\nint_to_str\nstr_to_int\nfloat_to_str\nstr_to_float\ncurrency_to_paise\npaise_to_currency\nlookup_id\nreverse_lookup_id\nenum_map\nconditional_constant\ncomputed\ncustom_python\ncompose",
+   "default": "identity",
+   "reqd": 1
+  },
+  {
+   "fieldname": "required",
+   "fieldtype": "Check",
+   "label": "Required",
+   "default": "0",
+   "description": "If checked, missing source value raises regardless of missing_field_policy."
+  },
+  {
+   "fieldname": "transform_args",
+   "fieldtype": "JSON",
+   "label": "Transform Args",
+   "description": "Optional arguments for the transformer (e.g., {from, to} for date_format)."
+  },
+  {
+   "fieldname": "condition",
+   "fieldtype": "Code",
+   "options": "Python",
+   "label": "Condition",
+   "description": "Sandboxed Python expression. Allowed names (push): source_doc. (pull): source_payload. Rule applies only if expression is truthy."
+  },
+  {
+   "fieldname": "default_value",
+   "fieldtype": "Data",
+   "label": "Default Value",
+   "description": "Used when source field is absent (per parent's missing_field_policy)."
+  },
+  {
+   "fieldname": "validate_against",
+   "fieldtype": "Data",
+   "label": "Validate Against",
+   "description": "Optional Frappe DocType name. Translated value must exist as a record."
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Field Mapping Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

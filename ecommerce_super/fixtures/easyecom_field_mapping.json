@@ -1,0 +1,964 @@
+[
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Item-UOM-Sync",
+    "mapping_name": "EasyEcom-Item-UOM-Sync",
+    "entity_type": "Item UOM",
+    "direction": "Bidirectional",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "uom",
+        "easyecom_path": "uom",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "conversion_factor",
+        "easyecom_path": "conversion_factor",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Item-Alias-Sync",
+    "mapping_name": "EasyEcom-Item-Alias-Sync",
+    "entity_type": "Item Alias",
+    "direction": "Bidirectional",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "alias_value",
+        "easyecom_path": "alias",
+        "transform_push": "str_strip",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "alias_type",
+        "easyecom_path": "alias_type",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-PO-Line-Push",
+    "mapping_name": "EasyEcom-PO-Line-Push",
+    "entity_type": "PO Line",
+    "direction": "Push",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "qty",
+        "easyecom_path": "quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float",
+        "required": 1
+      },
+      {
+        "erpnext_path": "rate",
+        "easyecom_path": "unit_price_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-GRN-Line-Pull",
+    "mapping_name": "EasyEcom-GRN-Line-Pull",
+    "entity_type": "GRN Line",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "received_qty",
+        "easyecom_path": "received_quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float",
+        "required": 1
+      },
+      {
+        "erpnext_path": "batch_no",
+        "easyecom_path": "batch_number",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-SO-Line-Push",
+    "mapping_name": "EasyEcom-SO-Line-Push",
+    "entity_type": "SO Line",
+    "direction": "Push",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "qty",
+        "easyecom_path": "quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float",
+        "required": 1
+      },
+      {
+        "erpnext_path": "rate",
+        "easyecom_path": "unit_price_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      },
+      {
+        "erpnext_path": "discount_amount",
+        "easyecom_path": "line_discount_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Order-Line-Pull",
+    "mapping_name": "EasyEcom-Order-Line-Pull",
+    "entity_type": "Order Line",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "qty",
+        "easyecom_path": "quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float",
+        "required": 1
+      },
+      {
+        "erpnext_path": "rate",
+        "easyecom_path": "unit_price_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      },
+      {
+        "erpnext_path": "discount_amount",
+        "easyecom_path": "discount_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      },
+      {
+        "erpnext_path": "tax_amount",
+        "easyecom_path": "tax_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Item-Sync",
+    "mapping_name": "EasyEcom-Item-Sync",
+    "entity_type": "Item",
+    "direction": "Bidirectional",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "item_name",
+        "easyecom_path": "product_name",
+        "transform_push": "str_strip",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "description",
+        "easyecom_path": "description",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "stock_uom",
+        "easyecom_path": "base_uom",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "weight_per_unit",
+        "easyecom_path": "weight_grams",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float"
+      },
+      {
+        "erpnext_path": "gst_hsn_code",
+        "easyecom_path": "hsn_code",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "validate_against": "GST HSN Code"
+      },
+      {
+        "erpnext_path": "uoms",
+        "easyecom_path": "uoms",
+        "transform_push": "compose",
+        "transform_pull": "compose",
+        "transform_args": {"ruleset": "EasyEcom-Item-UOM-Sync"}
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Customer-Sync",
+    "mapping_name": "EasyEcom-Customer-Sync",
+    "entity_type": "Customer",
+    "direction": "Bidirectional",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "name",
+        "easyecom_path": "customer_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "customer_name",
+        "easyecom_path": "customer_name",
+        "transform_push": "str_strip",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "mobile_no",
+        "easyecom_path": "mobile",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "email_id",
+        "easyecom_path": "email",
+        "transform_push": "str_lower",
+        "transform_pull": "str_lower"
+      },
+      {
+        "erpnext_path": "gstin",
+        "easyecom_path": "gstin",
+        "transform_push": "str_upper",
+        "transform_pull": "str_upper"
+      },
+      {
+        "erpnext_path": "customer_type",
+        "easyecom_path": "customer_category",
+        "transform_push": "enum_map",
+        "transform_pull": "enum_map",
+        "transform_args": {
+          "map": {"Company": "B2B", "Individual": "B2C"},
+          "default": "B2C"
+        }
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Customer-Anon-Pull",
+    "mapping_name": "EasyEcom-Customer-Anon-Pull",
+    "entity_type": "Customer Anon",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11) — marketplace anonymous-customer pattern",
+    "rules": [
+      {
+        "erpnext_path": "customer_name",
+        "easyecom_path": "buyer_name",
+        "transform_push": "identity",
+        "transform_pull": "str_strip",
+        "default_value": "Anonymous Marketplace Buyer"
+      },
+      {
+        "erpnext_path": "customer_type",
+        "easyecom_path": "buyer_type",
+        "transform_push": "identity",
+        "transform_pull": "conditional_constant",
+        "transform_args": {
+          "conditions": [
+            {"when": "source_payload.has_gstin == True", "then": "Company"}
+          ],
+          "default": "Individual"
+        }
+      },
+      {
+        "erpnext_path": "default_address",
+        "easyecom_path": "shipping_pincode",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Supplier-Sync",
+    "mapping_name": "EasyEcom-Supplier-Sync",
+    "entity_type": "Supplier",
+    "direction": "Bidirectional",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "name",
+        "easyecom_path": "vendor_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "supplier_name",
+        "easyecom_path": "vendor_name",
+        "transform_push": "str_strip",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "gstin",
+        "easyecom_path": "vendor_gstin",
+        "transform_push": "str_upper",
+        "transform_pull": "str_upper"
+      },
+      {
+        "erpnext_path": "mobile_no",
+        "easyecom_path": "vendor_mobile",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Warehouse-Pull",
+    "mapping_name": "EasyEcom-Warehouse-Pull",
+    "entity_type": "Warehouse",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11) — pulls EE locations (handler in §7)",
+    "rules": [
+      {
+        "erpnext_path": "location_key",
+        "easyecom_path": "location_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "location_name",
+        "easyecom_path": "name",
+        "transform_push": "identity",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "address",
+        "easyecom_path": "address",
+        "transform_push": "identity",
+        "transform_pull": "str_strip"
+      },
+      {
+        "erpnext_path": "pincode",
+        "easyecom_path": "pincode",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "is_active",
+        "easyecom_path": "is_active",
+        "transform_push": "bool_to_yn",
+        "transform_pull": "yn_to_bool"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Tax-Category-Sync",
+    "mapping_name": "EasyEcom-Tax-Category-Sync",
+    "entity_type": "Tax Category",
+    "direction": "Bidirectional",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "title",
+        "easyecom_path": "tax_category_name",
+        "transform_push": "identity",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "is_inter_state",
+        "easyecom_path": "is_interstate",
+        "transform_push": "bool_to_yn",
+        "transform_pull": "yn_to_bool"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Channel-Pull",
+    "mapping_name": "EasyEcom-Channel-Pull",
+    "entity_type": "Channel",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11) — pulls EE marketplaces (flat model; handler in §8)",
+    "rules": [
+      {
+        "erpnext_path": "marketplace_id",
+        "easyecom_path": "marketplace_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "marketplace_name",
+        "easyecom_path": "marketplace_name",
+        "transform_push": "identity",
+        "transform_pull": "str_strip",
+        "required": 1
+      },
+      {
+        "erpnext_path": "channel_type",
+        "easyecom_path": "channel_type",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "is_active",
+        "easyecom_path": "is_active",
+        "transform_push": "bool_to_yn",
+        "transform_pull": "yn_to_bool"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-PO-Push",
+    "mapping_name": "EasyEcom-PO-Push",
+    "entity_type": "PO",
+    "direction": "Push",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "name",
+        "easyecom_path": "po_reference",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "supplier",
+        "easyecom_path": "vendor_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "transaction_date",
+        "easyecom_path": "po_date",
+        "transform_push": "date_format",
+        "transform_pull": "date_format",
+        "transform_args": {"from": "YYYY-MM-DD", "to": "DD/MM/YYYY"}
+      },
+      {
+        "erpnext_path": "items",
+        "easyecom_path": "line_items",
+        "transform_push": "compose",
+        "transform_pull": "compose",
+        "transform_args": {"ruleset": "EasyEcom-PO-Line-Push"}
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-GRN-Pull",
+    "mapping_name": "EasyEcom-GRN-Pull",
+    "entity_type": "GRN",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "supplier",
+        "easyecom_path": "vendor_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "posting_date",
+        "easyecom_path": "grn_date",
+        "transform_push": "date_format",
+        "transform_pull": "date_format",
+        "transform_args": {"from": "YYYY-MM-DD", "to": "DD/MM/YYYY"}
+      },
+      {
+        "erpnext_path": "purchase_order",
+        "easyecom_path": "po_reference",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "items",
+        "easyecom_path": "received_items",
+        "transform_push": "compose",
+        "transform_pull": "compose",
+        "transform_args": {"ruleset": "EasyEcom-GRN-Line-Pull"}
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-SO-Push",
+    "mapping_name": "EasyEcom-SO-Push",
+    "entity_type": "SO",
+    "direction": "Push",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11) — B2B SO push to EE",
+    "rules": [
+      {
+        "erpnext_path": "name",
+        "easyecom_path": "so_reference",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "customer",
+        "easyecom_path": "customer_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "transaction_date",
+        "easyecom_path": "so_date",
+        "transform_push": "date_format",
+        "transform_pull": "date_format",
+        "transform_args": {"from": "YYYY-MM-DD", "to": "DD/MM/YYYY"}
+      },
+      {
+        "erpnext_path": "items",
+        "easyecom_path": "line_items",
+        "transform_push": "compose",
+        "transform_pull": "compose",
+        "transform_args": {"ruleset": "EasyEcom-SO-Line-Push"}
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Order-Pull",
+    "mapping_name": "EasyEcom-Order-Pull",
+    "entity_type": "Order",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11) — B2C marketplace orders",
+    "rules": [
+      {
+        "erpnext_path": "marketplace_order_id",
+        "easyecom_path": "order_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "marketplace",
+        "easyecom_path": "marketplace_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "transaction_date",
+        "easyecom_path": "order_date",
+        "transform_push": "datetime_to_iso",
+        "transform_pull": "iso_to_datetime"
+      },
+      {
+        "erpnext_path": "payment_status",
+        "easyecom_path": "payment_status",
+        "transform_push": "enum_map",
+        "transform_pull": "enum_map",
+        "transform_args": {
+          "map": {"paid": "PAID", "cod": "COD", "prepaid": "PAID"},
+          "default": "PENDING"
+        }
+      },
+      {
+        "erpnext_path": "items",
+        "easyecom_path": "line_items",
+        "transform_push": "compose",
+        "transform_pull": "compose",
+        "transform_args": {"ruleset": "EasyEcom-Order-Line-Pull"}
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Stock-Reservation-Pull",
+    "mapping_name": "EasyEcom-Stock-Reservation-Pull",
+    "entity_type": "Stock Reservation",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "reserved_qty",
+        "easyecom_path": "reserved_quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float",
+        "required": 1
+      },
+      {
+        "erpnext_path": "warehouse",
+        "easyecom_path": "location_id",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "expires_at",
+        "easyecom_path": "expires_at",
+        "transform_push": "datetime_to_iso",
+        "transform_pull": "iso_to_datetime"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Cancellation-Pull",
+    "mapping_name": "EasyEcom-Cancellation-Pull",
+    "entity_type": "Cancellation",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "marketplace_order_id",
+        "easyecom_path": "order_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "cancellation_reason",
+        "easyecom_path": "cancel_reason",
+        "transform_push": "identity",
+        "transform_pull": "str_strip"
+      },
+      {
+        "erpnext_path": "cancelled_at",
+        "easyecom_path": "cancelled_at",
+        "transform_push": "datetime_to_iso",
+        "transform_pull": "iso_to_datetime"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Return-Pull",
+    "mapping_name": "EasyEcom-Return-Pull",
+    "entity_type": "Return",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "marketplace_order_id",
+        "easyecom_path": "order_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "return_reason",
+        "easyecom_path": "return_reason",
+        "transform_push": "identity",
+        "transform_pull": "str_strip"
+      },
+      {
+        "erpnext_path": "return_status",
+        "easyecom_path": "status",
+        "transform_push": "enum_map",
+        "transform_pull": "enum_map",
+        "transform_args": {
+          "map": {
+            "initiated": "INITIATED",
+            "in_transit": "IN_TRANSIT",
+            "received": "RECEIVED",
+            "refunded": "REFUNDED"
+          },
+          "default": "UNKNOWN"
+        }
+      },
+      {
+        "erpnext_path": "refund_amount",
+        "easyecom_path": "refund_amount_paise",
+        "transform_push": "currency_to_paise",
+        "transform_pull": "paise_to_currency"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Manifest-Pull",
+    "mapping_name": "EasyEcom-Manifest-Pull",
+    "entity_type": "Manifest",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "manifest_id",
+        "easyecom_path": "manifest_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "courier",
+        "easyecom_path": "courier_name",
+        "transform_push": "identity",
+        "transform_pull": "str_strip"
+      },
+      {
+        "erpnext_path": "manifest_date",
+        "easyecom_path": "manifest_date",
+        "transform_push": "date_format",
+        "transform_pull": "date_format",
+        "transform_args": {"from": "YYYY-MM-DD", "to": "DD/MM/YYYY"}
+      },
+      {
+        "erpnext_path": "order_count",
+        "easyecom_path": "order_count",
+        "transform_push": "int_to_str",
+        "transform_pull": "str_to_int"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Dispatch-Pull",
+    "mapping_name": "EasyEcom-Dispatch-Pull",
+    "entity_type": "Dispatch",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "marketplace_order_id",
+        "easyecom_path": "order_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "awb_number",
+        "easyecom_path": "awb_number",
+        "transform_push": "identity",
+        "transform_pull": "str_strip"
+      },
+      {
+        "erpnext_path": "tracking_url",
+        "easyecom_path": "tracking_url",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "dispatched_at",
+        "easyecom_path": "dispatched_at",
+        "transform_push": "datetime_to_iso",
+        "transform_pull": "iso_to_datetime"
+      }
+    ]
+  },
+  {
+    "doctype": "EasyEcom Field Mapping",
+    "name": "EasyEcom-Inventory-Snapshot-Pull",
+    "mapping_name": "EasyEcom-Inventory-Snapshot-Pull",
+    "entity_type": "Inventory Snapshot",
+    "direction": "Pull",
+    "active": 1,
+    "missing_field_policy": "Permissive",
+    "version": 1,
+    "last_modified_by": "Administrator",
+    "last_modified_at": "2026-05-24 00:00:00",
+    "change_reason": "Initial library fixture (§5.11)",
+    "rules": [
+      {
+        "erpnext_path": "item_code",
+        "easyecom_path": "sku",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "warehouse",
+        "easyecom_path": "location_id",
+        "transform_push": "identity",
+        "transform_pull": "identity",
+        "required": 1
+      },
+      {
+        "erpnext_path": "actual_qty",
+        "easyecom_path": "available_quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float"
+      },
+      {
+        "erpnext_path": "reserved_qty",
+        "easyecom_path": "reserved_quantity",
+        "transform_push": "float_to_str",
+        "transform_pull": "str_to_float"
+      },
+      {
+        "erpnext_path": "snapshot_at",
+        "easyecom_path": "snapshot_at",
+        "transform_push": "datetime_to_iso",
+        "transform_pull": "iso_to_datetime"
+      }
+    ]
+  }
+]

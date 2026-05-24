@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "Prompt",
+ "creation": "2026-05-24 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "parent_mapping",
+  "version",
+  "created_by",
+  "created_at",
+  "change_reason",
+  "snapshot_section",
+  "snapshot_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "parent_mapping",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Field Mapping",
+   "options": "EasyEcom Field Mapping",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "version",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Version",
+   "reqd": 1
+  },
+  {
+   "fieldname": "created_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Created By",
+   "options": "User",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "created_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Created At",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "change_reason",
+   "fieldtype": "Small Text",
+   "label": "Change Reason",
+   "reqd": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Snapshot",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "snapshot_json",
+   "fieldtype": "Long Text",
+   "label": "Snapshot (JSON)",
+   "reqd": 1,
+   "read_only": 1,
+   "description": "Full ruleset state at this version. Append-only audit record."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-24 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Field Mapping Version",
+ "naming_rule": "Set by user",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "created_at",
+ "sort_order": "DESC",
+ "states": []
+}

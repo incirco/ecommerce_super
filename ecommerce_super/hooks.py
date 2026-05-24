@@ -76,6 +76,11 @@ fixtures = [
     },
     "Marketplace",
     "Accounting Dimension",
+    # Field Mapping library (§5.11) — child rulesets first, then parents.
+    # Load order is honoured by the JSON file's element order; compose
+    # references require the child ruleset to already be in the DB at
+    # save time (the compiler's compose-target-exists check fires).
+    "EasyEcom Field Mapping",
     # Desktop Icon ships at ecommerce_super/desktop_icon/easyecom.json —
     # Frappe auto-syncs from the per-app desktop_icon/ directory. Fixture
     # entries get orphan-deleted on migrate; same pattern as Workspace.
