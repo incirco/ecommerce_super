@@ -11,7 +11,7 @@ to expect and what you actually saw. Do not propose a fix — describe the gap.
 Claude Code will be pointed at this issue by the spec owner.
 -->
 
-**Section / step:** Section ___ , step ___ (from `process/test_scripts/section_<N>.md`)
+**Section / step:** Section ___ , step ___ (from the relevant `process/test_scripts/` script, e.g. `foundation_section_3_and_4.md`)
 
 **Build under test:** commit / branch ___________  ·  **Environment:** Frappe Cloud staging
 

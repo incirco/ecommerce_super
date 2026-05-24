@@ -4,7 +4,7 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 **Legend:** ☐ not started · 🔶 in progress · ✅ done · — n/a yet
 
-**Current focus:** _§5 Field Mapping packet ready (spec_sections/section_5.md), awaiting approval+commit then build. Foundation §3+§4 FDE staging test running in parallel — foundation fixes take priority over §5 if issues land._
+**Current focus:** _§5 engine built + locally tested (Test Mapping validated against real EE payload). §5 staging test script ready. §3+§4 and §5 both out for FDE staging test in parallel. Real-payload findings (sku vs item_code, no UOM field) captured as §8 open-item #4. Next buildable: §6 Idempotency/Replay or §7 Integration Contract._
 
 ---
 
@@ -22,7 +22,7 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 | Section | Spec ready | Acceptance | Approved | Built | Local test | Deployed | Team test | Live |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 3+4. Foundation: Connection Model + Data Model | ✅ | ✅ | ✅ 24-May | ✅ 24-May | ✅ 24-May | 🔄 | 🔄 FDE | ☐ |
-| 5. Field Mapping engine | ✅ | ✅ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 5. Field Mapping engine | ✅ | ✅ | ✅ 24-May | ✅ 24-May | ✅ 24-May | 🔄 | 🔄 FDE | ☐ |
 | 6. Idempotency, Replay, Correlation, Queue | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 7. The Integration Contract | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
