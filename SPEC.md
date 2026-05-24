@@ -126,10 +126,10 @@ This is what makes the integration suitable for financial workloads. A silent ov
 
 ## 2.8 Audit trail is mandatory
 
-- Every API call (in either direction) is logged in EasyEcom Sync Log with timestamp, endpoint, request_payload (credentials redacted), response_status, response_body, latency_ms, calling user (where applicable)
+- Every API call (in either direction) is logged in EasyEcom API Call with timestamp, endpoint, request_payload (credentials redacted), response_status, response_body, latency_ms, calling user (where applicable)
 - Every webhook received is recorded in EasyEcom Webhook Event before processing
-- Every document created or modified by the integration carries back-references: ecs_easyecom_source (the EasyEcom record ID) and ecs_sync_log (the API call that produced it)
-- Sync Logs are retained for 90 days minimum (configurable up to 7 years for high-compliance clients)
+- Every document created or modified by the integration carries back-references: ecs_easyecom_source (the EasyEcom record ID) and ecs_api_call (the API Call that produced it)
+- API Call and Webhook Event records are retained for 90 days minimum (configurable up to 7 years for high-compliance clients)
 
 ## 2.9 Failure is expected and recoverable
 
@@ -223,7 +223,7 @@ The credentials required to authenticate with EasyEcom. One credential set for t
 | --- | --- | --- |
 | api_endpoint | Data | EasyEcom base URL. Production: https://api.easyecom.io. Sandbox URL differs |
 | x_api_key | Password | Account-level API key, encrypted at rest using Frappe encryption_key. Generated only from the client's Primary Seller Account (Account Settings → Change credentials → Generate X-API-KEY). Does not auto-expire; regenerating it invalidates the previous key instantly, so a rotation must be applied here at the same time it is regenerated on EasyEcom |
-| email | Data | EasyEcom account email (must be a user with multi-location access in the primary account) |
+| email | Password | EasyEcom account email (must be a user with multi-location access in the primary account). Treated as a credential: encrypted, write-only, never readable back (Section 3.7) |
 | password | Password | EasyEcom account password, encrypted |
 | rate_limit_tier | Select | The client's current EasyEcom rate-limit tier: Default / Bronze / Silver / Gold / Diamond. Mandatory, no preset default — the FDE records the tier EasyEcom has actually assigned to this api_key. The integration derives its throttle and daily-quota ceiling from this tier (Section 3.10). A newly generated key sits in Default tier until EasyEcom upgrades it after their UAT review |
 | default_location_key | Link → EasyEcom Location | Used when an operation is location-agnostic (typically the primary location for master operations) |
@@ -381,7 +381,41 @@ Channel-specific configuration for outbound notifications for this Company. The 
 | default_rejected_warehouse_override | Link → Warehouse | Optional per-Company override of the account-level GRN policy default (Section 3.3.6) |
 | default_in_transit_warehouse_override | Link → Warehouse | Optional per-Company override |
 
-Permission rules: only users with Accounts Manager or System Manager role can read or modify the EasyEcom Account. The Setup, Inbound Webhook Auth, and Notifications sections of the Account are further restricted (System Manager only) because they contain credentials. Per-Company settings records are readable and editable by the assigned FDE for that Company. Sync workers run as a dedicated EasyEcom Sync user with access scoped per Company via User Permissions.
+### 3.5.4 Permissions and roles — and how they are created
+
+This section specifies not just the permission *policy* but the *mechanism* by which each permission exists, because the difference determines whether a permission appears automatically in every deployment or has to be set up. The governing rule: **everything that can be expressed as a role, a DocType permission, or a permission level ships as code/fixtures and is created automatically on install/migrate — never by hand. Only the things that are inherently instance-specific (a real user account, and that user's per-Company scoping) are an onboarding step, and those are checklisted so they are never ad-hoc.**
+
+**The roles (canonical set — see Section 14.3)**
+
+The integration ships **five custom roles**, defined once in Section 14.3 and used consistently across the whole spec. Section 3 does not invent its own role vocabulary; it uses these. The two that matter for the Account and connection model in this section:
+
+- **EasyEcom System Manager** — full access to the EasyEcom Account including all credential sections; the only role that can **set or overwrite** credentials. Note: per the write-only guarantee (§3.7.3), even this role can set/rotate a credential but can never read its plaintext back — "access to credential sections" means the ability to write them, not to reveal them.
+- **EasyEcom FDE** — read-only on the EasyEcom Account, plus read/write on the per-Company settings record for the Companies they are assigned to.
+
+The remaining three (EasyEcom Operator, EasyEcom Replay Approver, EasyEcom Auditor) govern operational records and are specified in Section 14.3; they are not needed to build the §3 connection model but ship in the same fixture. Note these are *custom* roles shipped by the app — not Frappe's built-in System Manager, and not ERPNext's Accounts Manager.
+
+**The permission policy**
+
+- The EasyEcom Account is readable by **EasyEcom FDE** (read-only) and readable/writable by **EasyEcom System Manager**.
+- The credential-bearing fields of the Account — the Setup section (api_key, email, password), the Inbound Webhook Auth section (webhook_token), and the Slack credential fields of the Notifications section — are restricted to **EasyEcom System Manager only**, even for an EasyEcom FDE who can otherwise read the Account.
+- Per-Company settings records are readable and editable by the **EasyEcom FDE** assigned to that Company (and by EasyEcom System Manager).
+- Background sync work runs as a dedicated **sync user** — a real User account holding the EasyEcom System Manager role, scoped to the relevant Companies via User Permissions, so a sync worker acting for Company A cannot read or write Company B's data.
+- A user with access to one Company cannot see another Company's sync logs, sync state, or settings (enforced by the Company link on every operational record plus User Permissions — Section 14.2).
+
+**How each of these is created**
+
+| What | Mechanism | Created how | Manual per instance? |
+| --- | --- | --- | --- |
+| The five custom roles (Operator, FDE, Replay Approver, System Manager, Auditor) | Shipped as a **fixture** (Role records) in the parent app — the same fixture listed in Section 31.6 | On install / migrate (fixture load) | No — automatic |
+| Account read for EasyEcom FDE; read/write for EasyEcom System Manager | DocPerm rows in the EasyEcom Account DocType definition | On `bench migrate` (part of the DocType) | No — automatic |
+| Credential-field restriction to EasyEcom System Manager | The credential fields are assigned a higher **permlevel** (e.g. permlevel 1); a DocPerm grants permlevel-1 read/write to EasyEcom System Manager only (Section 31.7.3) | On `bench migrate` (DocType definition) | No — automatic |
+| Per-Company settings editable by the assigned EasyEcom FDE | DocPerm on the per-Company settings DocType keyed to the role; the assigned_fde link plus a User Permission drive row-level visibility | DocPerm on migrate; the User Permission is applied when the FDE is assigned (onboarding) | Role/perm automatic; the assignment is onboarding |
+| The dedicated **sync user account** | A real User record (with its own credentials) holding the EasyEcom System Manager role | **Onboarding step** — see below | Yes — onboarding |
+| The sync user's and FDEs' **per-Company User Permissions** | User Permission records binding a user to specific Companies | **Onboarding step** | Yes — onboarding |
+
+The split is deliberate and unavoidable: roles and permission *rules* are not instance-specific, so they ship in code and require zero manual setup in any deployment. But a *user account* references a real person or service credential, and a *User Permission* references the actual Companies a deployment has — neither exists until the deployment exists, so neither can be a fixture. Shipping a literal user as a fixture would be wrong (it would hard-code a credential into the app). These two are therefore explicit, documented onboarding actions, not ad-hoc manual fiddling: the onboarding playbook creates the sync user (granting it the EasyEcom System Manager role) and assigns the per-Company User Permissions for that user and for each FDE, as a required, checklisted step before go-live.
+
+This is why the build must define the roles and permissions **as part of the DocType definitions and as fixtures** — so that a freshly installed instance already has every role, every DocPerm, and every permlevel restriction in place, and the only permission-related onboarding work is creating the sync user and binding users to their Companies.
 
 ## 3.6 The EasyEcomClient class
 
@@ -391,7 +425,7 @@ A single Python class encapsulates every interaction with EasyEcom. No code outs
 - Token caching, scoped per location_key (one account credential set; one JWT per location). EasyEcom JWTs are valid for 90 days. A scheduled daily job renews each enabled location's JWT once it reaches 85 days of age (a 5-day safety margin before the 90-day expiry), writing the new token to the location's jwt_token cache. On any 401 the client also re-authenticates immediately as a fallback, so an unexpected early invalidation never blocks a flow
 - Two mandatory headers on every authenticated call: `x-api-key: {account api_key}` and `Authorization: Bearer {jwt}`. Missing either is a 401. The x-api-key is sent even on the token-acquisition call
 - Automatic re-authentication on HTTP 401 — no caller has to handle auth retry
-- Exponential back-off with jitter on 429 (rate limit) and 5xx — initial 1s, doubling, max 60s, max 6 retries before raising EasyEcomTransientError
+- Exponential back-off with jitter on 429 (rate limit) and 5xx — initial 1s, doubling, max 60s, max 6 retries; on exhaustion it raises the corresponding transient subclass from the §31.5 hierarchy (EasyEcomRateLimitError for 429, EasyEcomServerError for 5xx, EasyEcomTimeoutError for network timeouts) — all subclasses of EasyEcomAPIError
 - Connection-error retries (TCP-level failures) with the same back-off
 - Request and response logging to EasyEcom API Call with credentials redacted
 - Mandatory request_id header on every outbound call (UUID4) — used for cross-system trace correlation
@@ -407,20 +441,42 @@ class EasyEcomClient:
     def _refresh_token_if_needed(self): ...
     def _log(self, request, response, latency_ms): ...
 
-class EasyEcomTransientError(Exception): pass
-class EasyEcomAuthError(Exception): pass
-class EasyEcomBadRequestError(Exception): pass
-class EasyEcomNotFoundError(Exception): pass
+# Exception classes are defined authoritatively in §31.5 (EasyEcomError →
+# EasyEcomAPIError → {EasyEcomAuthError, EasyEcomRateLimitError,
+# EasyEcomTimeoutError, EasyEcomServerError, EasyEcomValidationError,
+# EasyEcomDuplicateError}). Build against §31.5, not this sketch.
 ```
 
-## 3.7 Credential redaction in logs
+## 3.7 Credential handling — encrypted, write-only, never readable back
 
-EasyEcom API Call entries store the request payload, response body, and headers for audit purposes. Before any value is persisted, a redaction pass removes:
+Credentials are the highest-sensitivity data in the integration. The standard is not merely "encrypted" — it is **set-only**: an authorised user can write a credential, but no user, role, API path, report, or export can ever read its plaintext back. Encryption-at-rest alone does not achieve this (an authorised session can still decrypt an encrypted field); the write-only guarantee is a deliberate build requirement on top of encryption.
 
-- Any field whose name matches: x_api_key, x-api-key, authorization, password, token, secret, jwt
-- Any field whose value matches a Bearer token pattern
+### 3.7.1 Which fields are credentials
+
+The following are credential fields and are governed by every rule in this section: `x_api_key`, `email`, `password`, `webhook_token`, `slack_webhook_url`, and the cached `jwt_token`. The EE login `email` is included deliberately — it is one half of the email+password pair that authenticates to EasyEcom, so it is protected to the same standard as the password, not left as plain Data.
+
+### 3.7.2 Encrypted at rest
+
+- Every credential field is a Frappe **Password** fieldtype (the cached `jwt_token`, being long, is stored encrypted at rest by the controller). Frappe encrypts Password fields in the database with the site `encryption_key`; the raw database row holds ciphertext, never plaintext.
+- The site `encryption_key` lives in site config, outside the database, so a database dump alone cannot decrypt the credentials.
+
+### 3.7.3 Write-only in the UI and the backend
+
+- In the desk form, credential fields render masked and show only a **set / not-set** indicator — never the stored value. The standard Frappe "reveal" affordance is disabled for these fields.
+- There is **no read-back path**. The integration exposes no endpoint, whitelisted method, report column, list view, or export that returns a credential's plaintext. The Frappe `get_password` / `get_decrypted_password` route is not exposed for these fields to any role.
+- The decrypted value is materialised **only** transiently inside the EasyEcomClient at the moment of building an outbound request (to set the `x-api-key` / `Authorization` header or the token-acquisition body), and is never written to a response, a log, a return value, or a document field.
+- **This applies to every role, including EasyEcom System Manager and Frappe's built-in System Manager.** A System Manager can *overwrite* a credential (rotation) but cannot *retrieve* the existing one. There is no privilege level that can read a credential back in plaintext.
+- Consequence, stated honestly: credential debugging is **rotate-and-re-enter**, never **reveal-and-compare**. To verify or change a credential you set a new value; you never read the current one out. This is the intended trade-off — the value of "no plaintext is ever retrievable" outweighs the convenience of reading a key back to compare it.
+
+### 3.7.4 Redacted in logs
+
+EasyEcom API Call entries store request payloads, response bodies, and headers for audit. Before any value is persisted, a centralised redaction pass removes:
+
+- Any field whose name matches: x_api_key, x-api-key, authorization, password, token, secret, jwt, email, slack_webhook_url
+- Any field whose value matches a Bearer-token pattern
 - Any field marked sensitive in a redaction config
-Redaction is applied to both request and response. The redaction function is centralised — every log write goes through it. Redaction failures are themselves an audit event.
+
+Redaction is applied to both request and response, and to webhook payloads on receipt. The redaction function is centralised — every log write goes through it, so no flow can forget it. A redaction *failure* is itself an audit event (and the offending record is not written until redaction succeeds), so a bug in redaction can never silently leak a credential into a log.
 
 ## 3.8 Webhook authentication
 
@@ -476,7 +532,8 @@ Handling rules:
 
 This is the build-and-test contract for Section 3. Claude Code builds to it; the FDE team test script (`process/test_scripts/section_3.md`) verifies it on staging. Section 3 is done when all of the following hold:
 
-- **Account config exists and is editable.** An EasyEcom Account record can be created with api_endpoint, x_api_key, email, password, and a mandatory rate_limit_tier (no preset default). Credentials are stored encrypted (not readable in plain text from the desk or the DB).
+- **Account config exists and is editable.** An EasyEcom Account record can be created with api_endpoint, x_api_key, email, password, and a mandatory rate_limit_tier (no preset default).
+- **Credentials are set-only and never readable back.** Every credential field (x_api_key, email, password, webhook_token, slack_webhook_url, jwt_token) is encrypted at rest and stored as a Password field. In the desk form they show a set/not-set indicator, never the value, with no reveal affordance. No role — including EasyEcom System Manager and Frappe's built-in System Manager — can retrieve a credential's plaintext through the form, any API or whitelisted method, a report, a list view, or an export; a credential can only be overwritten, never read out. The decrypted value appears only transiently inside the EasyEcomClient when building an outbound request. A test that attempts to read each credential back through every surface returns masked/empty, not plaintext (Section 3.7).
 - **Token acquisition works.** With valid credentials, a Test Connection action acquires a JWT for the primary location via POST /access/token and reports success inline. With invalid credentials it reports a clear failure, not a stack trace.
 - **Both headers are sent on every call.** Every outbound request carries `x-api-key` and `Authorization: Bearer {jwt}`. A call with either header removed (test harness) returns 401 and is handled as an auth failure.
 - **JWT is cached per location and reused.** A second call against the same location does not re-acquire a token; the cached JWT (90-day validity) is reused. jwt_acquired_at / jwt_expires_at are populated.
@@ -487,6 +544,7 @@ This is the build-and-test contract for Section 3. Claude Code builds to it; the
 - **Rate-limit tier drives the throttle.** With tier = Default, outbound throughput is capped at 5 req/sec and the daily-quota counter increments; with tier = Diamond the cap is 30 req/sec. Changing the tier field changes the effective cap with no code change.
 - **429 and 5xx back off and surface.** A simulated 429 triggers back-off and requeue; sustained failure raises the configured alert and the Connection Health status reflects Degraded / Down.
 - **Webhook auth is bearer-token.** The webhook receiver accepts a valid token in either `Access-token` or `Authorization: Bearer` header and rejects a missing/invalid token with 401. (Full webhook processing is tested with the flows that use it; this criterion covers only auth.)
+- **Permissions and roles exist on a fresh install with no manual step.** After install/migrate on a clean site: the five custom roles (EasyEcom Operator, FDE, Replay Approver, System Manager, Auditor) exist as fixtures; the EasyEcom Account DocType grants read to EasyEcom FDE and read/write to EasyEcom System Manager; the credential fields (api_key, email, password, webhook_token, Slack fields) are at a restricted permlevel readable/writable only by EasyEcom System Manager (a user holding EasyEcom FDE but not EasyEcom System Manager can open the Account but cannot see those field values); per-Company settings carry the assigned-FDE DocPerm. None of these required creating a role or permission by hand. The only permission-related onboarding actions are creating the dedicated sync user (granting it EasyEcom System Manager) and binding users to Companies via User Permissions (§3.5.4) — these are documented onboarding steps, not defaults.
 - **Connection Health reflects reality.** The dashboard shows last successful auth per location, success rate, and daily-quota consumption, and updates after the above actions.
 
 # 4. The EasyEcom Data Model in ERPNext
@@ -503,8 +561,7 @@ This section consolidates every DocType the integration introduces, plus the cus
 | EasyEcom Company Settings | Standard, per Company | Per-Company alert recipients, assigned FDE, per-Company overrides |
 | EasyEcom Location | Standard | Per-location_key flags (primary/operational), Company resolution, JWT cache, pull cursors |
 | EasyEcom Tax Mapping | Standard, per Company | Translates ERPNext Tax Category ↔ EE tax category |
-| Marketplace | Standard | Master list of marketplaces |
-| Marketplace Channel | Child of Marketplace | Sales channels within a marketplace |
+| Marketplace | Flat channel list | One row per EasyEcom channel, keyed by marketplace_id; spans B2C marketplaces, B2B, storefronts, POS (Section 8.6). No child Marketplace-Channel hierarchy — EE is flat |
 | Marketplace Account | Standard, per (Company, Marketplace) | Seller account on a marketplace |
 | Warehouse Source-of-Truth Map | Standard, per Company | Per-warehouse SoT configuration |
 | EasyEcom Category Map | Standard, per Company | EE category ↔ Item Group mapping |
@@ -545,6 +602,23 @@ This separation matters because the questions different operators ask map cleanl
 ## 4.2 Custom fields on ERPNext-core DocTypes
 
 All shipped as fixtures with the ecs_ prefix. Listed here as the canonical inventory; any future change goes through fixture versioning.
+
+**This section is an inventory, not a "create all of these now" instruction.** It catalogues every custom field the integration will add across its whole lifetime so there is one place to see the complete set. It does **not** mean every field is created during the foundation build. Each field group is **owned by the flow that uses it**, and a field is created as a fixture **only when its owning flow is built** — not before. Creating a field before its flow exists would commit to the field's shape before the flow that uses it has validated that shape, and would leave the schema full of fields nothing reads or writes. The owning flow for each group:
+
+| Custom-field group | Owning flow / section | Built when |
+| --- | --- | --- |
+| Item, Customer, Supplier correlation fields (ecs_easyecom_*_id, ecs_easyecom_mappings, ecs_push_status, ecs_last_sync_at, ecs_last_sync_error) | Master Sync (Section 8) | With master sync |
+| Warehouse fields (ecs_easyecom_location_id, ecs_inventory_master, ecs_is_rejected_warehouse, ecs_is_in_transit_warehouse) | Master Sync — Warehouse (Section 8.4) | With warehouse master sync |
+| Purchase Order fields (ecs_easyecom_po_id, ecs_easyecom_po_mappings, …) | Buying (Section 9) | With the buying flow |
+| Purchase Receipt fields (ecs_easyecom_grn_id, ecs_supplier_invoice_date, ecs_easyecom_grn_line_id, …) | Buying (Section 9) | With the buying flow |
+| Stock Entry fields (ecs_easyecom_source_event, ecs_easyecom_source_type, …) | Stock Transfers (Section 10) | With stock transfers |
+| Sales Order fields (ecs_easyecom_so_id, ecs_easyecom_so_mappings, …) | B2B Sales (Section 11) | With B2B sales |
+| Sales Invoice fields (ecs_easyecom_order_id, ecs_easyecom_invoice_id, ecs_marketplace_order_id, ecs_marketplace*, …) | B2C Sales (Section 12) | With B2C sales |
+| Recon-feeding fields (ecs_settlement_forecast, ecs_actual_net, ecs_variance_*, ecs_recon_run, ecs_marketplace_payout) | Recon engine (PRD-owned) | With the recon engine |
+
+The fixture file (`custom_field.json`, Section 31.6) is therefore assembled flow-by-flow as each flow is built, not shipped complete at foundation time. When a build packet for a flow is prepared, the custom fields in that flow's group are created as part of that flow's build.
+
+**UI placement — a dedicated "EasyEcom" tab or section per DocType.** Integration custom fields are never scattered inline among native ERPNext fields. On each core DocType they are grouped together under a single **collapsible "EasyEcom" tab** where the DocType's form structure supports tabs (Frappe v16 Tab Break), or a **collapsible "EasyEcom" section** (Section Break) where a tab is not appropriate for that DocType's layout. The choice between tab and section is made per DocType based on how that DocType's form is organised — the rule is only that every integration field lives in one clearly-labelled EasyEcom group, never interleaved with native fields. This keeps the native form clean, puts all integration fields where an operator expects them, and lets the whole group be shown/hidden and permission-controlled together.
 
 ### 4.2.1 Item
 
@@ -601,8 +675,7 @@ All shipped as fixtures with the ecs_ prefix. Listed here as the canonical inven
 - ecs_easyecom_order_id — Data (the EE internal Order_id; shared across a split order's shipments)
 - ecs_easyecom_invoice_id — Data (the EE internal shipment/Invoice ID; unique per Sales Invoice; the B2C idempotency key)
 - ecs_marketplace_order_id — Data (the marketplace identifier via reference_code; the join key for recon)
-- ecs_marketplace — Link → Marketplace
-- ecs_marketplace_channel — Link → Marketplace Channel
+- ecs_marketplace — Link → Marketplace (the flat channel list keyed by EE marketplace_id; this single field is the channel — there is no separate channel field, because EE has no marketplace/channel hierarchy). Also the value stamped into the "Channel" accounting dimension (Section 4.4)
 - ecs_marketplace_account — Link → Marketplace Account
 - ecs_payment_mode — Select: Prepaid / COD / EMI / etc.
 - ecs_awb_number, ecs_courier — Data
@@ -626,13 +699,30 @@ All shipped as fixtures with the ecs_ prefix. Listed here as the canonical inven
 
 ## 4.3 Fixtures shipped with parent app
 
-- Marketplace seed data: Amazon, Flipkart, Myntra, Ajio, Meesho, Nykaa, JioMart, Shopify
-- Marketplace Channel seed data: Amazon FBA / Easy Ship / Self-Ship / Flex; Flipkart F-Assured / Self-Ship; Myntra PPMP / SJIT; Meesho; Shopify
+- Marketplace (flat channel list) — the **authoritative** list is synced from EasyEcom `/marketplaces/list` and `/current-channel-status` at onboarding (Section 8.6), keyed by EasyEcom marketplace_id. A small **starter seed** (`marketplace.json`) of common channels with sensible default channel_type classifications ships as a fixture to speed first-time FDE setup; the onboarding sync then reconciles it against the client's actual EE channel list (adding, activating, and reclassifying as needed). The seed is a convenience, not the source of truth — EE is.
 - Tax category mapping skeleton (FDE finalises during onboarding)
 - HSN-to-Item-Tax-Template fixture for common HSN codes
 - Custom field definitions for all DocTypes above
 - Standard Reconciliation Rules from methodology v0 (PRD Section 3.6)
 - Standard Methodology Defaults values (PRD Section 3.5)
+
+## 4.4 The Channel accounting dimension (marketplace-wise reporting)
+
+To support marketplace-wise profitability reporting, the integration ships a custom ERPNext **Accounting Dimension** so that revenue, fees, and other P&L can be sliced by marketplace in native ERPNext financial reports — not only through the recon engine's own reports.
+
+**Name and grain.** The dimension is named **"Channel"** and its **reference document type is the `Marketplace` doctype** — the single flat channel list keyed by EasyEcom `marketplace_id` (Section 8.6). Its values are EasyEcom channels (Amazon.in, Flipkart, meesho, Cloudtail B2B, Zepto, …) — the same flat list EasyEcom itself uses, which spans B2C marketplaces and B2B channels alike. There is no coarse/fine split, because EasyEcom has no hierarchy: each channel is one entry. Where several EE channels should report together (Amazon.in + Amazon_FBA + Amazon.co.uk), the optional `reporting_parent` on the Marketplace row (Section 8.6.1) provides rollup — the dimension can be reported at either the raw-channel level or rolled up to the reporting parent.
+
+**Optional, never mandatory — and this is what keeps non-marketplace transactions working.** The dimension is configured as **optional**: it is present and reportable on transactions, but **not** set "Mandatory For Profit and Loss Account" and **not** "Mandatory For Balance Sheet." This is a deliberate design decision with a concrete reason:
+
+- ERPNext's mandatory flags are **account-driven, not document-type-driven** — there is no per-voucher-type "mandatory" switch. If "Mandatory For P&L" were on, *every* GL line posting to a P&L account across the client's entire books — including transactions with no marketplace, and including the client's own manual journal entries and expense postings — would be forced to carry a Channel value.
+- Many integration transactions legitimately have **no marketplace**. A Stock Reconciliation posts its inventory line to a Balance Sheet account (stock-in-hand) but posts its *difference* to a Stock Adjustment account, which is a **P&L** account — so a stock reco with any adjustment produces a P&L line that has no marketplace. The same is true of inter-warehouse transfer losses, general expenses, bank charges, and similar postings.
+- Forcing a marketplace onto such a line would be **fiction** — a stock-adjustment loss is genuinely not attributable to a marketplace. Optional lets the system record the truth: these lines carry no Channel and report as Unallocated, rather than being blocked or stamped with an invented value.
+
+Marketplace-wise P&L therefore works off the transactions that genuinely *do* carry a marketplace — every B2C Sales Invoice (which the integration stamps with `ecs_marketplace`) and the marketplace fee postings — which is exactly where the reporting value lies. Channel-less P&L lines (stock recos, general expenses) appear under Unallocated, which is correct.
+
+**Upgrade path.** A client with a hard requirement that *100% of P&L be marketplace-attributed with zero Unallocated* may upgrade the dimension to "Mandatory For P&L" — but only by also defining an explicit "Unallocated" marketplace value and accepting that every non-marketplace P&L posting (theirs and the integration's) must then carry it. This is an **FDE/methodology onboarding choice, not the default**; the default is optional.
+
+**How it is created.** The Channel Accounting Dimension itself ships as a **fixture** (created automatically on install/migrate). Its **per-Company Dimension Defaults rows** — which reference real Companies — are set at **onboarding**, like User Permissions: the FDE adds a row per operational Company (leaving both Mandatory flags off for the default optional configuration). The decision of *which* dimensions exist at all (this Channel/marketplace dimension, and any future ones) is owned by the recon/methodology design; this section specifies only the one the integration needs for marketplace-wise reporting and commits the integration to **populating** it (stamping the marketplace as the Channel dimension value) on the documents it creates that carry a marketplace — the detailed population per flow is specified with those flows (Section 12 for B2C Sales Invoices).
 
 # 5. Path-based Field Mapping (deep specification)
 
@@ -1312,6 +1402,16 @@ Each master gets the same treatment in this section: direction of truth, field-l
 
 Before any individual master, Section 8.0 recaps the Field Mapping engine in the context of master sync. The full engine specification is Section 5 (part of the foundation); what follows here is the short conceptual reminder needed to read Sections 8.1 through 8.7 without flipping back.
 
+> **Open decisions to resolve before building Section 8.** The following points were raised during review and are deliberately left open until this section is reached, so they are decided with the master-sync flow in front of us rather than in the abstract. Do not begin the Section 8 build until each is resolved and this block is replaced with the agreed design.
+>
+> 1. **Different-identifier mapping (same item, different SKU on each side).** The initial-sync and steady-state logic below matches by item_code (SKU). A real and common case is that the *same* item carries a *different* SKU/identifier in ERPNext than in EasyEcom, yet must be mapped to one record — not duplicated. The current match-by-SKU logic would miss these, then the create-the-missing-ones step would create a duplicate on each side. Section 8 needs an explicit **assisted/manual mapping step**: where auto-match by identifier fails, the FDE maps an ERPNext record to the existing EE record by hand (or via an alias / alternate-identifier table) *before* the create-missing step runs. This applies to Item, Customer, and Supplier alike. **Decide:** the matching ladder (auto-match → assisted map → create → conflict) and where the alias/alternate-identifier mapping is stored.
+>
+> 2. **Create vs. workflow-gated creation for records that exist on only one side.** Section 8.1.3 currently *auto-creates* an EE-only item into ERPNext with sensible defaults and flags it for FDE review after the fact. An alternative is a **workflow-gated "pending creation" queue** the FDE approves *before* the record is created in the books — safer, because an auto-created item with missing HSN/GST can otherwise flow into a transaction before review. **Decide:** auto-create-then-review (faster onboarding, riskier) vs. workflow-gated creation (safer, more onboarding effort), per entity. Applies to Item, Customer, Supplier.
+>
+> 3. **Mandatory-field gate, both directions.** EasyEcom's product/customer/vendor masters have mandatory fields; so do ERPNext's Item/Customer/Supplier. A record cannot be created on the receiving side until its mandatory fields are satisfiable from the source plus defaults. **Decide:** the explicit list of EE-side mandatory fields a push must supply, the ERPNext-side mandatory fields a pull must supply, and what happens when a mandatory field cannot be filled (route to the review workflow from point 2 — never silently default a tax-relevant field such as HSN/GST). The field-level translation itself lives in the Field Mapping engine (Section 5); what Section 8 must add is the mandatory-field *gate* that blocks creation when the contract is unmet.
+>
+> These three apply across Item (8.1), Customer (8.2), and Supplier (8.3); resolve them once here and apply consistently to all three masters.
+
 ## 8.0 The Field Mapping engine (recap in context)
 
 Every master sync flow translates between an ERPNext document shape and an EasyEcom payload shape, and it does so through the Field Mapping engine specified in Section 5 — declarative, FDE-editable rules shipped as fixtures, rather than translations hardcoded in Python (which would make every payload tweak a code deploy).
@@ -1593,19 +1693,38 @@ Tax category mapping is critical for Purchase Receipt creation (Section 9) and S
 
 ## 8.6 Channel master
 
-EasyEcom's Channel concept (Amazon FBA, Flipkart F-Assured, Myntra PPMP, Meesho, etc.) drives marketplace assignment on Sales Invoices and feeds the recon engine's per-channel attribution.
+In EasyEcom, "marketplace" and "channel" are the **same flat concept** — EasyEcom uses the two words interchangeably for one flat list of order origins/destinations, each entry carrying a numeric `marketplace_id`. This is the structure the integration mirrors. There is **no parent/child hierarchy in EasyEcom**: "Amazon.in" (id 8), "Amazon_FBA" (id 11), and "Amazon.co.uk" (id 51) are *separate sibling entries with separate ids*, not a parent "Amazon" with child channels. The list is heterogeneous by design — it contains B2C marketplaces (Amazon.in, Flipkart, meesho), B2B channels (Cloudtail B2B, AJIO JIT/B2B, ajio b2b offline), quick-commerce, own storefronts (Shopify1…14, WooCommerce), POS/offline pseudo-channels (Customer Cash Sales, Employee Card Sales), and even accounting-connector artifacts (Tally, Xero, SAP) that are not sales channels at all.
 
-### 8.6.1 Modelling
+The integration models this exactly as EasyEcom presents it — **one flat Channel list keyed by EasyEcom `marketplace_id`** — and does **not** impose an invented two-level Marketplace→Marketplace-Channel hierarchy. Earlier drafts modelled such a hierarchy; that was a modelling error (it does not match the source system) and is corrected here.
 
-- Marketplace DocType: master list — Amazon, Flipkart, Myntra, Ajio, Meesho, Nykaa, JioMart, Shopify
-- Marketplace Channel DocType: child of Marketplace, per (Marketplace, channel_type) — e.g., Amazon FBA, Amazon Easy Ship, Flipkart F-Assured, Flipkart Self-Ship
-- Marketplace Account DocType: per (Company, Marketplace, channel) — holds seller_id, GSTIN, default_warehouse, settlement_template, rate_card_subscriptions
+### 8.6.1 The Marketplace DocType (the flat channel list)
 
-### 8.6.2 Sync
+One DocType, **Marketplace**, holds the flat channel list, one row per EasyEcom channel, keyed by the EasyEcom `marketplace_id`. (The DocType is named "Marketplace" because that is the field name EasyEcom returns — `marketplace_name`/`marketplace_id` — even though the list is broader than B2C marketplaces. The "Channel" accounting dimension of Section 4.4 draws its values from this same list.)
 
-- Channels are pulled from EE during onboarding and on a daily refresh
-- Newly added channels in EE alert the FDE for marketplace-account configuration
-- Channels drive Sales Invoice ecs_marketplace and ecs_marketplace_channel custom fields, which feed Section 13 of the recon engine
+| Field | Type | Notes |
+| --- | --- | --- |
+| marketplace_id | Int | EasyEcom's numeric id; the stable join key; unique. Autoname on this |
+| marketplace_name | Data | EasyEcom's name for the channel (e.g., "Amazon.in", "Cloudtail B2B", "Customer Cash Sales") |
+| channel_type | Select | FDE-classified: B2C Marketplace / B2B / Quick-Commerce / Own Storefront / POS-Offline / Connector-Ignore. Drives which flow (§11 vs §12) and whether it is operationally relevant at all |
+| is_active | Check | Mirrors the per-account integration status from /current-channel-status (Active/Inactive) |
+| reporting_parent | Link → Marketplace | **Optional** rollup for reporting only. Lets several EE channels (Amazon.in + Amazon_FBA + Amazon.co.uk) roll up to a single reporting group (e.g., a "Amazon" row) for channel-wise P&L, *without* implying EE has a hierarchy. Blank for channels that stand alone |
+| enabled | Check | Per-channel kill-switch on our side |
+
+The `reporting_parent` is the deliberate, optional answer to "the flat list has 10 Amazon variants — can I group them for P&L?": yes, by pointing each variant's `reporting_parent` at a grouping row. This is a *reporting* convenience on our side, not a claim about EE's structure, and it is never required.
+
+### 8.6.2 Marketplace Account DocType
+
+Per (Company, Marketplace channel) — holds seller_id, GSTIN, default_warehouse, settlement_template, rate_card_subscriptions. Composite unique key (company, marketplace, marketplace_seller_id).
+
+### 8.6.3 Sync
+
+- The flat channel list is pulled from EasyEcom via **`GET /marketplaces/list`** (the full catalogue of channel ids and names), reconciled into the Marketplace DocType keyed by `marketplace_id`.
+- Per-account integration status is pulled via **`GET /current-channel-status`**, which returns the subset of channels integrated for this account with an Active/Inactive `status`; this drives `is_active`.
+- Pulled during onboarding and on a daily refresh (poll_interval_locations_hours cadence).
+- A newly-appeared channel id in EE is created with `channel_type` unset and alerts the FDE to classify it (and, if relevant, configure a Marketplace Account and a reporting_parent). An unclassified channel is treated as not-yet-operational, not an error.
+- Channels drive the Sales Invoice `ecs_marketplace` field and the "Channel" accounting dimension; `channel_type` decides whether an order from that channel runs the B2C flow (§12) or the B2B flow (§11).
+
+> **Open item for §11/§12 build — channel resolution per flow.** Because the channel list is flat and spans both B2C and B2B, each sales flow must resolve the channel for the document it creates: §12 (B2C) resolves it from the EE order's marketplace_id; §11 (B2B) resolves it from a mapping on the B2B Customer (e.g., orders to the "Zepto"/"Cloudtail B2B" customer carry that channel). The customer→channel mapping mechanism for B2B is to be designed at the §11 build. Both flows then stamp the resolved channel as the "Channel" accounting-dimension value (Section 4.4) on the Sales Invoice.
 
 ## 8.7 Lookup tables
 
@@ -2073,6 +2192,8 @@ B2C orders are fundamentally different from B2B. The order is born in EasyEcom (
 
 This is by design and it is correct: B2C orders involve marketplace-anonymous customers, complex per-marketplace fulfilment workflows (FBA, F-Assured, MSA), and channel-specific invoice handling. Pushing every B2C order through an ERPNext SO would create unnecessary churn in the books.
 
+> **Build note — populate the Channel accounting dimension.** B2C is the primary place a marketplace is known, so the Sales Invoice this flow creates must carry the marketplace as the value of the **"Channel" accounting dimension** (Section 4.4), in addition to the `ecs_marketplace` field. Stamp the dimension on the SI so its P&L GL lines (revenue, fees) are attributable marketplace-wise. The dimension is optional (Section 4.4), so this is about *populating* it where the marketplace is known, not enforcing it — SI creation must not fail if the dimension is somehow unset. Confirm during the §12 build that the dimension value is set on the SI header and flows to the GL entries.
+
 ## 12.0 The EasyEcom order hierarchy (canonical data model)
 
 Every flow that consumes EasyEcom order data depends on getting this hierarchy right. EasyEcom models an order as:
@@ -2127,7 +2248,8 @@ The integration keys its own traceability custom fields on the EasyEcom internal
        │ ─ resolve customer to per-marketplace pseudo-customer (e.g., Amazon FBA Buyer Pool)
        │ ─ map line items from EE company_product_id to ERPNext item_code
        │ ─ apply tax lines from ERPNext Item Tax Template
-       │ ─ set ecs_marketplace, ecs_marketplace_channel, ecs_marketplace_order_id custom fields
+       │ ─ set ecs_marketplace (flat channel), ecs_marketplace_order_id custom fields
+       │ ─ stamp the Channel accounting dimension (Section 4.4)
        │ ─ generate e-invoice IRN via india_compliance (if ≥ ₹50k threshold)
        │ ─ submit
        ▼
@@ -2143,7 +2265,7 @@ Three architectural distinctions:
 
 - **Order is born in EE.** There is no Sales Order in ERPNext, ever, for marketplace B2C orders. Trying to retrofit one creates accounting churn (SO submitted then immediately SI'd in same minute) for no business value. The marketplace is the order origin; EE is the OMS; ERPNext is the books.
 - **Customer is anonymised.** Per Section 8.2.1, marketplace orders use a per-marketplace pseudo-customer (Amazon FBA Buyer Pool etc.). The actual buyer's identity is never in ERPNext.
-- **Channel and marketplace fields drive recon.** Every B2C SI carries ecs_marketplace, ecs_marketplace_channel, ecs_marketplace_order_id. These feed Section 13 of the recon engine — the Order-to-Settlement reconciliation joins on ecs_marketplace_order_id.
+- **Channel and marketplace fields drive recon.** Every B2C SI carries ecs_marketplace (the flat EE channel) and ecs_marketplace_order_id. These feed the recon engine — the Order-to-Settlement reconciliation joins on ecs_marketplace_order_id.
 
 ## 12.3 Manifest-creation as the trigger event
 
@@ -2168,7 +2290,7 @@ Once an order is confirmed it does not silently revert to an on-hold state: Easy
 | order_id (EE) | ecs_easyecom_order_id | EE internal order-level identifier (shared across a split order's shipments) |
 | invoice_id (EE) | ecs_easyecom_invoice_id | EE internal shipment-level identifier; the SI is created per shipment and deduped on this |
 | marketplace_order_id (via reference_code) | ecs_marketplace_order_id | Marketplace-level identifier; the recon-engine join key |
-| channel_name | ecs_marketplace_channel (Link) | Mapped via Marketplace Channel master |
+| marketplace_id / marketplace_name | ecs_marketplace (Link) | Resolved to the flat Marketplace channel row by EE marketplace_id |
 | marketplace | ecs_marketplace (Link) | Mapped via Marketplace master |
 | seller_id | (validated against Marketplace Account) | Sanity check |
 | order_date | posting_date |  |
@@ -2223,7 +2345,7 @@ This DocType is the bridge between the SI and the future settlement reconciliati
 - EE order amount vs SI total: must match within 1 paisa; mismatch raises Integration Discrepancy
 - EE-quoted tax vs ERPNext-computed tax: variance > 1% raises Integration Discrepancy of severity Warning (informational; ERPNext tax stands)
 - EE order with no item match in ERPNext: that order's SI creation fails as a per-record failure (Failed Sync Record with a translated reason); other orders in the same pull are unaffected and the job lands Partial (Section 7). FDE fixes the Item sync and retries the failed record
-- EE order with channel not mapped: same per-record treatment — Failed Sync Record for that order; FDE configures the Marketplace Channel and retries
+- EE order whose channel (marketplace_id) is not yet in the flat Marketplace list or is unclassified: same per-record treatment — Failed Sync Record for that order; FDE classifies the channel and retries
 
 ## 12.10 Multi-channel handling
 
@@ -2403,7 +2525,7 @@ Masters are account-global (synced once at the primary location) and shared acro
 | Customer | Shared (with per-Company Customer Defaults) | One Customer; ecs_easyecom_customer_id holds the EE reference |
 | Supplier | Shared (with per-Company Supplier Defaults) | One Supplier; ecs_easyecom_mappings keyed by EE vendor id |
 | Warehouse | Per-Company | Standard ERPNext: Warehouse belongs to a Company. Mapped to a location via the Source-of-Truth Map |
-| Marketplace, Marketplace Channel | Shared | Master list applies across Companies |
+| Marketplace (flat channel list) | Shared | One flat list keyed by EE marketplace_id; applies across Companies |
 | Marketplace Account | Per-Company | Seller IDs differ per Company |
 | Tax Category | Shared | Per India Compliance app |
 | Field Mapping | Shared by default; per-Company overrides supported via company_scope child table | Override priority: per-Company > global |
@@ -2445,7 +2567,7 @@ A catalogue of every recurring failure pattern with the documented FDE response.
 | --- | --- | --- |
 | EasyEcom API down (5xx for > 15 min) | Connection Health dashboard turns red; alert fires | Verify EE status; if confirmed outage, no action needed (queue will catch up); if our connectivity issue, escalate to Frappe Cloud |
 | Rate limit (429) sustained | Health dashboard shows elevated error rate | Reduce per-Company throttle setting; investigate if a runaway sync is causing |
-| Authentication failure persistent | Auth errors logged; Sync Log entries red | Verify credentials in the EasyEcom Account; rotate api_key with EE if compromised; clear JWT cache |
+| Authentication failure persistent | Auth errors logged; API Call entries red | Verify credentials in the EasyEcom Account; rotate api_key with EE if compromised; clear JWT cache |
 | Webhook token mismatch | Webhook events rejected with 401 | Verify webhook_token matches EE-side configuration; rotate if necessary |
 | Webhook endpoint unreachable | EE retries fail; webhook gap visible in cursor lag | Check Frappe Cloud routing; verify endpoint URL in EE webhook settings |
 
@@ -2500,7 +2622,7 @@ Periodic full-sync detects and reports drift between ERPNext stock balance and E
 
 - Data-loss potential (e.g., webhook indicates GL-impacting event but ingestion failed) → page the on-call FDE immediately
 - Cross-Company data leak (Company A user sees Company B data) → kill switch on user; investigate; report
-- Credential compromise (api_key leaked, JWT exposed) → rotate immediately; audit all Sync Log entries since last rotation
+- Credential compromise (api_key leaked, JWT exposed) → rotate immediately; audit all API Call entries since last rotation
 - Sustained data divergence (>10 Discrepancies/day for >3 days on one Company) → engage methodology team for root-cause
 
 # 16. Performance and Scale Envelope
@@ -3827,7 +3949,7 @@ Most operational questions, when something is wrong now, take the form 'when did
 - Every EasyEcom Account and per-Company settings change (per Section 3) — full before/after snapshot
 - Every Field Mapping ruleset save — entire ruleset versioned
 - Every Source-of-Truth Map row change
-- Every Marketplace Account / Marketplace Channel / Tax Mapping configuration change
+- Every Marketplace Account / Marketplace (channel) / Tax Mapping configuration change
 - Every cache clear (which cache, who, when, why)
 - Every alert configuration change (recipients, thresholds, channel routing)
 - Every Replay Plan execution (the plan itself plus the dry-run results plus the commit results)
@@ -3957,7 +4079,7 @@ The integration's purpose is not to be a generic ERPNext-EasyEcom connector. It 
 
 From the recon engine's perspective, the integration commits to:
 
-- Every B2C marketplace order will produce a Sales Invoice with ecs_marketplace_order_id, ecs_marketplace, ecs_marketplace_channel, ecs_marketplace_account populated
+- Every B2C marketplace order will produce a Sales Invoice with ecs_marketplace_order_id, ecs_marketplace (flat channel), ecs_marketplace_account populated
 - Every Sales Invoice will have a Marketplace Order Map record at creation time
 - Every Settlement Forecast will be created concurrently with the SI
 - Every Purchase Receipt from EE GRN will have correct tax lines, ITC eligibility, and HSN — usable directly for fee Purchase Invoice posting
@@ -4060,7 +4182,7 @@ Operational sign-off, distinct from engineering test sign-off. Performed by the 
 - EasyEcom Account configured with valid credentials
 - All EasyEcom Locations created and mapped to Frappe Warehouses
 - Source-of-Truth Map populated for every relevant Warehouse
-- Marketplace and Marketplace Channel records present (from fixture)
+- Marketplace (flat channel list) synced from EasyEcom and classified by the FDE
 - Marketplace Account configured per (Company, Marketplace) in use
 - All marketplace-relevant Items synced (push status = Synced)
 - All Customers (including pseudo-customers) synced
@@ -4214,8 +4336,8 @@ The integration is delivered as two Frappe apps: ecommerce_super (parent app, me
 ```
 apps/ecommerce_super/
 ├── ecommerce_super/
-│   ├── __init__.py                      # version = "0.1.0"
-│   ├── hooks.py                          # Frappe hook registry (see 30.8)
+│   ├── __init__.py                      # version = "0.0.1" (pre-build; bump to 0.1.0 at the v0.1-alpha cut, Section 29)
+│   ├── hooks.py                          # Frappe hook registry (see 31.8)
 │   ├── modules.txt                       # Module list
 │   ├── patches.txt                       # Migration patches
 │   ├── public/                           # Static assets
@@ -4226,8 +4348,9 @@ apps/ecommerce_super/
 │   │   └── easyecom_cross_company_workspace.json
 │   ├── easyecom/                         # Main integration module
 │   │   ├── __init__.py
-│   │   ├── doctype/                      # All DocTypes (see 30.2)
-│   │   │   ├── easyecom_settings/
+│   │   ├── doctype/                      # All DocTypes (see 31.2)
+│   │   │   ├── easyecom_account/
+│   │   │   ├── easyecom_company_settings/
 │   │   │   ├── easyecom_location/
 │   │   │   ├── easyecom_sync_record/
 │   │   │   ├── easyecom_api_call/
@@ -4246,7 +4369,6 @@ apps/ecommerce_super/
 │   │   │   ├── easyecom_morning_brief_snapshot/
 │   │   │   ├── marketplace_account/
 │   │   │   ├── marketplace/
-│   │   │   ├── marketplace_channel/
 │   │   │   ├── marketplace_order_map/
 │   │   │   ├── integration_discrepancy/
 │   │   │   └── source_of_truth_map/
@@ -4259,8 +4381,8 @@ apps/ecommerce_super/
 │   │   ├── client/                       # EasyEcom HTTP client
 │   │   │   ├── __init__.py
 │   │   │   ├── auth.py                   # JWT acquisition, refresh, cache
-│   │   │   ├── client.py                 # EasyEcomClient class (see 30.4)
-│   │   │   ├── endpoints.py              # Endpoint definitions (see 30.3)
+│   │   │   ├── client.py                 # EasyEcomClient class (see 31.4)
+│   │   │   ├── endpoints.py              # Endpoint definitions (see 31.3)
 │   │   │   ├── rate_limit.py             # Token-bucket rate limiter
 │   │   │   └── retry.py                  # Retry policy with back-off
 │   │   ├── flows/                        # Integration flow implementations
@@ -4298,7 +4420,7 @@ apps/ecommerce_super/
 │   │   │   ├── routing.py                # job_type → queue tier + timeout maps
 │   │   │   ├── workers.py                # execute_job worker entry point + JOB_TYPE_HANDLERS
 │   │   │   └── concurrency.py            # company_concurrency_semaphore (frappe.cache)
-│   │   ├── exceptions.py                 # Top-level exception hierarchy (30.5)
+│   │   ├── exceptions.py                 # Top-level exception hierarchy (31.5)
 │   │   └── utils/
 │   │       ├── correlation.py            # UUIDv7 generation
 │   │       ├── hashing.py                # SHA-256 with normalisation
@@ -4337,12 +4459,11 @@ apps/ecommerce_super/
 │   │   ├── account_role_map_defaults.py
 │   │   ├── disposition_rules.py
 │   │   └── policy_defaults.py
-│   ├── fixtures/                          # Shipped fixture data (see 30.6)
+│   ├── fixtures/                          # Shipped fixture data (see 31.6)
 │   │   ├── easyecom_field_mapping.json
 │   │   ├── easyecom_error_translation.json
 │   │   ├── easyecom_sla_budget.json
 │   │   ├── marketplace.json
-│   │   ├── marketplace_channel.json
 │   │   ├── role.json
 │   │   └── workspace.json
 │   ├── tests/                             # Test suite (see Section 28)
@@ -4413,7 +4534,7 @@ environment_badge        Select     Y   Sandbox | Production
 # Setup section (Section 3.3.2)
 api_endpoint             Data       Y   Production https://api.easyecom.io
 x_api_key                Password   Y   Account-level; generated only from Primary Seller Account; no auto-expire; regeneration invalidates old instantly. Encrypted at rest
-email                    Data       Y   User with multi-location access in primary account
+email                    Password   Y   User with multi-location access in primary account. Credential: encrypted, write-only (Section 3.7)
 password                 Password   Y   Encrypted at rest
 rate_limit_tier          Select     Y   Default | Bronze | Silver | Gold | Diamond (no preset default; FDE sets to the tier EE assigned). Drives throttle + daily quota (Section 3.10)
 default_location_key     Link       N   EasyEcom Location (typically the primary location)
@@ -4759,27 +4880,26 @@ Append-only. Cannot be deleted or edited by any user. See Section 26.2 for full 
 
 See Section 24.2.
 
-### 31.2.18 Marketplace
+### 31.2.18 Marketplace (the flat channel list)
+
+One row per EasyEcom channel, keyed by EE marketplace_id. Synced from `/marketplaces/list` + `/current-channel-status` (Section 8.6). No parent/child channel hierarchy — EasyEcom is flat.
 
 ```
-marketplace_name         Data       Y   Unique (e.g., 'Amazon', 'Flipkart', 'Meesho')
-display_name             Data       Y
-country                  Link       Y   Country (default India)
-parent_marketplace       Link       N   Marketplace (e.g., 'Amazon FBA' has parent 'Amazon')
+marketplace_id           Int        Y   EasyEcom numeric id; unique; autoname on this; the stable join key
+marketplace_name         Data       Y   EE's name (e.g., 'Amazon.in', 'Cloudtail B2B', 'Customer Cash Sales')
+display_name             Data       N
+channel_type             Select     Y   B2C Marketplace | B2B | Quick-Commerce | Own Storefront | POS-Offline | Connector-Ignore (FDE-classified)
+country                  Link       N   Country (default India)
+reporting_parent         Link       N   Marketplace — optional rollup for reporting only (e.g., Amazon.in + Amazon_FBA → an 'Amazon' group). Not a claim about EE structure
+default_customer_pattern Data       N   e.g., 'Amazon FBA Buyer Pool' (for B2C marketplace channels)
 default_settlement_template Link    N   Settlement Template
-active                   Check      Y   Default 1
+is_active                Check      Y   Mirrors /current-channel-status (Active/Inactive)
+enabled                  Check      Y   Default 1 (our-side per-channel kill-switch)
 ```
 
-### 31.2.19 Marketplace Channel
+### 31.2.19 (removed)
 
-```
-channel_name             Data       Y   Unique (e.g., 'Amazon FBA', 'Amazon EasyShip', 'Flipkart F-Assured')
-marketplace              Link       Y   Marketplace
-display_name             Data       Y
-fulfilment_type          Select     Y   Self | Marketplace-Fulfilled | Hybrid
-default_customer_pattern Data       N   e.g., 'Amazon FBA Buyer Pool'
-active                   Check      Y   Default 1
-```
+The former Marketplace Channel DocType is removed. EasyEcom has no marketplace→channel hierarchy; the flat Marketplace list (31.2.18) is the single channel model. Any prior reference to a separate Marketplace Channel record now means a row in the flat Marketplace list.
 
 ### 31.2.20 Marketplace Account
 
@@ -4896,7 +5016,8 @@ GET  /Wms/Vendor/getVendor?location_key=<key>&vendorId=<id>
 GET  /Wms/Inventory/getLocations?company_id=<ee_co_id>
 
 # Channels
-GET  /Wms/Channels/getChannels?location_key=<key>
+GET  /marketplaces/list                       # full flat channel catalogue (id + name)
+GET  /current-channel-status                  # channels integrated for this account, with Active/Inactive status
 ```
 
 ### 31.3.3 Buying flow endpoints
@@ -5429,8 +5550,8 @@ All fixtures shipped with the parent app, in fixtures/ directory. Loaded via `be
 | easyecom_field_mapping.json | Initial library per Section 5.11 (16 rulesets) | FDE customisable; fixture is the methodology default |
 | easyecom_error_translation.json | Initial library per Section 25.3 (target 50+ entries) | FDE-extensible |
 | easyecom_sla_budget.json | Default budgets per Section 21.2 | Per-Company FDE-tunable |
-| marketplace.json | Amazon, Flipkart, Meesho, Myntra, Ajio, Tata CLiQ, Nykaa, JioMart, Snapdeal, Limeroad | 10 marketplaces |
-| marketplace_channel.json | FBA, EasyShip, Amazon Direct, Flipkart F-Assured, etc. | ~25 channels |
+| marketplace.json | Starter seed of common channels (Amazon.in, Flipkart, Meesho, Myntra, Ajio, Nykaa, JioMart, etc.) with default channel_type | Convenience seed only; the authoritative flat channel list is synced from EE at onboarding (Section 4.3 / 8.6). Keyed by marketplace_id |
+| accounting_dimension.json | The "Channel" Accounting Dimension (reference doctype Marketplace), per Section 4.4 | Ships the dimension; per-Company Dimension Defaults rows are set at onboarding, default optional (both Mandatory flags off) |
 | onboarding_step.json | 11 onboarding steps per Section 17.2.5 |  |
 | notification.json | Frappe Notifications for alerts per Section 18 |  |
 | email_template.json | Default Email Templates for Critical/Error/Warning alerts | FDE customisable |
@@ -5473,7 +5594,7 @@ def get_permission_query_conditions(user: str | None = None) -> str:
 
 These DocTypes are not Company-scoped; all roles can read; only specific roles can write:
 
-- Marketplace, Marketplace Channel — read by all integration roles; write by System Manager
+- Marketplace (the flat channel list) — read by all integration roles; write by System Manager
 - EasyEcom Field Mapping (when company_scope is empty) — read by all FDE roles; write by System Manager
 - EasyEcom Error Translation (when not Company-scoped) — same
 
@@ -5625,7 +5746,6 @@ fixtures = [
     "EasyEcom Error Translation",
     "EasyEcom SLA Budget",
     "Marketplace",
-    "Marketplace Channel",
     "Workspace",
     "Dashboard Chart",
     "Number Card",
@@ -5652,7 +5772,7 @@ def after_install():
 
 ## 31.9 Implementation order
 
-Recommended sequence for engineering, mirroring Section 16's phasing but ordered by dependency:
+Recommended sequence for engineering, mirroring Section 29's phasing but ordered by dependency:
 
 1. Foundation: hooks.py, exceptions.py, EasyEcomClient skeleton, three log DocTypes, EasyEcom Account, EasyEcom Company Settings, EasyEcom Location, queue facade (queue/__init__.py + workers.py + routing.py + concurrency.py — all built on frappe.enqueue)
 1. Field Mapping engine: compiler, executor, transformers, exceptions, FDE editing UI
@@ -5676,9 +5796,9 @@ When implementing this spec, Claude Code should:
 
 - Treat this section as the schema source of truth; treat earlier sections as the design rationale
 - When in doubt about a field name or fieldtype, prefer the convention here over inventing new
-- Implement DocTypes in the order specified in 30.9 — dependencies are real
+- Implement DocTypes in the order specified in 31.9 — dependencies are real
 - Always include the indexes specified in field schemas; index choices were made for query patterns the spec depends on
-- Always raise the specific exception class from 30.5; do not raise generic Exception
+- Always raise the specific exception class from 31.5; do not raise generic Exception
 - Always pass correlation_id through the call stack; do not generate new IDs at intermediate layers
 - Always call the Field Mapping engine for translation; do not write hardcoded translations even if 'simpler'
 - Always call the Error Translation library for failed records; do not bypass it for 'common' errors

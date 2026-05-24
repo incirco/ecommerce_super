@@ -4,16 +4,24 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 **Legend:** ☐ not started · 🔶 in progress · ✅ done · — n/a yet
 
-**Current focus:** _Section 3 — Authentication & Connection (the bootstrap root; build first)_
+**Current focus:** _§3+§4 combined into one Foundation packet (build-order decided 24-May: connection DocTypes → data model → client). Packet ready at spec_sections/foundation_section_3_and_4.md. Awaiting Approved ✅ + build instruction._
 
 ---
 
-## Foundation (build first, in this order)
+## Orientation (approve-only — no build; these set framing & principles)
 
 | Section | Spec ready | Acceptance | Approved | Built | Local test | Deployed | Team test | Live |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 3. Authentication & Connection | ✅ | ✅ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
-| 4. Data Model (DocTypes, custom fields, fixtures) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 1. Introduction | ✅ | n/a | ✅ 24-May | n/a | n/a | n/a | n/a | n/a |
+| 2. Architectural Principles | ✅ | n/a | ✅ 24-May | n/a | n/a | n/a | n/a | n/a |
+
+## Foundation (build first, in this order)
+
+> §3 and §4 are built together as one packet (`foundation_section_3_and_4.md`): §3's client/logging/health depend on §4's log DocTypes, so connection DocTypes → §4 data model → §3 client. §5–§7 follow.
+
+| Section | Spec ready | Acceptance | Approved | Built | Local test | Deployed | Team test | Live |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 3+4. Foundation: Connection Model + Data Model | ✅ | ✅ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 5. Field Mapping engine | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 6. Idempotency, Replay, Correlation, Queue | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 7. The Integration Contract | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
