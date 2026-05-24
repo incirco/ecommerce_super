@@ -94,3 +94,30 @@ def _user_company_filter(user: str) -> list[str] | None:
     if not perms:
         return None
     return list(perms)
+
+
+# ----- v16 apps-screen visibility -----
+
+
+_APPS_SCREEN_ROLES = frozenset(
+    {
+        "EasyEcom Operator",
+        "EasyEcom FDE",
+        "EasyEcom Replay Approver",
+        "EasyEcom System Manager",
+        "EasyEcom Auditor",
+        "System Manager",
+        "Administrator",
+    }
+)
+
+
+def has_app_screen_permission() -> bool:
+    """Whether the current user sees the EasyEcom icon on /desk (the v16
+    app launcher). Returns True for any user with one of the five EasyEcom
+    custom roles, plus Frappe's built-in System Manager and Administrator
+    (for development convenience)."""
+    user = frappe.session.user
+    if user in {"Administrator"}:
+        return True
+    return bool(set(frappe.get_roles(user)) & _APPS_SCREEN_ROLES)

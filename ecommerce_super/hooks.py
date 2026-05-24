@@ -17,6 +17,26 @@ app_license = "mit"
 
 
 # ============================================================
+# v16 apps screen (the launcher at /desk)
+# ============================================================
+#
+# The icon shown on the apps screen. Permission check returns True for
+# any user with at least one of the five EasyEcom custom roles; this is
+# the same gate as the Workspace's `roles` list so the launcher icon and
+# the workspace visibility stay aligned.
+
+add_to_apps_screen = [
+    {
+        "name": "ecommerce_super",
+        "logo": "/assets/ecommerce_super/images/easyecom.svg",
+        "title": "EasyEcom",
+        "route": "/app/easyecom",
+        "has_permission": "ecommerce_super.easyecom.permissions.has_app_screen_permission",
+    }
+]
+
+
+# ============================================================
 # Installation
 # ============================================================
 
