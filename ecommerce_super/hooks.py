@@ -9,11 +9,14 @@ after_install hook.
 from __future__ import annotations
 
 app_name = "ecommerce_super"
-app_title = "Ecommerce Super"
+app_title = "EasyEcom"
 app_publisher = "Incirco"
 app_description = "ERPNext-native EasyEcom integration"
 app_email = "nikhil@incirco.com"
 app_license = "mit"
+app_color = "blue"
+app_home = "/app/easyecom"
+app_logo_url = "/assets/ecommerce_super/images/easyecom.svg"
 
 
 # ============================================================
@@ -73,10 +76,9 @@ fixtures = [
     },
     "Marketplace",
     "Accounting Dimension",
-    # "Workspace",  # Skeleton present at fixtures/workspace.json but schema
-    # needs Frappe v16 verification (Workspace fields have shifted in recent
-    # versions); deferred so the foundation migrate stays clean. See build
-    # report deviations.
+    # Desktop Icon ships at ecommerce_super/desktop_icon/easyecom.json —
+    # Frappe auto-syncs from the per-app desktop_icon/ directory. Fixture
+    # entries get orphan-deleted on migrate; same pattern as Workspace.
 ]
 
 
