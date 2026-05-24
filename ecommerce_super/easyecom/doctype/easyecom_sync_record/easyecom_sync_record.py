@@ -139,3 +139,51 @@ def upsert(
     )
     doc.insert(ignore_permissions=True)
     return doc
+
+
+@frappe.whitelist()
+def retry_now(sync_record_name: str) -> dict:
+    """FDE-facing Retry Now action (§6.5.1).
+
+    Behaviour per §6.5.1:
+      - Status moves Failed → Pending (the AlreadySynced→Pending
+        transition is also allowed for force-resync, but force-resync
+        proper is §6.5.4 / §8 — out of scope here).
+      - `attempts` counter UNCHANGED — the inherited attempts history is
+        preserved per §6.1 'retry inherits original key', not reset.
+      - `last_error` and `last_error_translation_key` cleared.
+      - The original idempotency_key is REUSED (the row's existing
+        `idempotency_key` field is untouched). Per §6.1, retries never
+        recompute the key.
+
+    Re-enqueue (the actual job dispatch) is the flow handler's
+    responsibility per §6.7 — flow handlers detect Pending Sync Records
+    on their next polling tick or on doc-event fire. Until those
+    handlers ship (§8+), this method correctly marks the record
+    available for retry; an FDE who needs the immediate-dispatch flavour
+    of retry should use Queue Job's Retry button instead (which re-uses
+    enqueue_easyecom_job directly).
+    """
+    doc = frappe.get_doc("EasyEcom Sync Record", sync_record_name)
+    if doc.status not in {"Failed", "Cancelled"}:
+        frappe.throw(
+            frappe._(
+                "Only Failed or Cancelled Sync Records can be retried; this one is {0}."
+            ).format(doc.status)
+        )
+
+    doc.db_set(
+        {
+            "status": "Pending",
+            "last_error": None,
+            "last_error_translation_key": None,
+        },
+        update_modified=False,
+        commit=True,
+    )
+    return {
+        "name": sync_record_name,
+        "status": "Pending",
+        "attempts_preserved": doc.attempts,
+        "idempotency_key_preserved": doc.idempotency_key,
+    }

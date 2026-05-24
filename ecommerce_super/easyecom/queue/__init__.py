@@ -24,7 +24,6 @@ from ecommerce_super.easyecom.queue.routing import (
     timeout_for,
 )
 from ecommerce_super.easyecom.utils.correlation import new_correlation_id
-from ecommerce_super.easyecom.utils.hashing import sha256_hex
 from ecommerce_super.easyecom.utils.redaction import redact
 
 
@@ -74,12 +73,18 @@ def enqueue_easyecom_job(
         correlation_id = new_correlation_id()
 
     if not idempotency_key:
-        # Fallback formula: sha256(job_type:company:target:payload_hash).
-        # Real idempotency formulae per operation are in §6.1; flow handlers
-        # pass their own pre-computed key.
-        payload_hash = sha256_hex(payload or {})
-        idempotency_key = sha256_hex(
-            f"{job_type}:{company}:{target_doctype or ''}:{target_name or ''}:{payload_hash}"
+        # SPEC §6.1 / §2.7: the facade must not silently substitute a
+        # divergent generic formula. Callers MUST build the key with the
+        # appropriate per-operation builder from
+        # `easyecom.utils.idempotency` (e.g. item_push_key, po_push_key)
+        # or `internal_job_key` for internal-bookkeeping job types. This
+        # raise is the contract — a missing key is a programmer error,
+        # not a runtime detail to paper over.
+        raise ValueError(
+            f"enqueue_easyecom_job: idempotency_key is required for job_type "
+            f"{job_type!r}. Use a per-operation builder from "
+            "ecommerce_super.easyecom.utils.idempotency (e.g. item_push_key, "
+            "po_push_key) or internal_job_key for internal-bookkeeping jobs."
         )
 
     redacted_payload = redact(payload) if payload else None

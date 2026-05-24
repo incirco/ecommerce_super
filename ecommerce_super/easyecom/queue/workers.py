@@ -25,7 +25,10 @@ from ecommerce_super.easyecom.exceptions import (
     EasyEcomError,
     EasyEcomRateLimitError,
 )
-from ecommerce_super.easyecom.queue.concurrency import company_concurrency_semaphore
+from ecommerce_super.easyecom.queue.concurrency import (
+    company_concurrency_semaphore,
+    release_slot,
+)
 from ecommerce_super.easyecom.queue.routing import (
     max_attempts_for,
     queue_for,
@@ -189,6 +192,12 @@ def reclaim_orphaned_jobs() -> int:
             error="Reclaimed: worker died mid-job (no live RQ id).",
             translation_key="ECS_QJ_ORPHAN_RECLAIM",
         )
+        # §6.3.7 Crash-drift fix: a killed worker never ran its `finally`
+        # decrement, so the per-Company semaphore is still holding this
+        # job's slot. Release exactly one slot for the reclaimed job —
+        # NOT a hard reset, which would also free slots held by live
+        # workers for the same Company.
+        release_slot(qj.company)
         _reenqueue(qj, delay_seconds=backoff_s)
         reclaimed += 1
 

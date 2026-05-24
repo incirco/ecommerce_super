@@ -948,6 +948,8 @@ Every outbound mutating call to EasyEcom carries an idempotency_key. The key is 
 
 change_hash is the SHA-256 of the normalised JSON payload (sorted keys, no whitespace) before any transforms. Two pushes of an unchanged Item produce the same idempotency_key; two pushes that differ in any field produce different keys. This permits us to skip pushes when nothing has changed (common case) without missing pushes that should fire.
 
+These formulae are the **contract**: each operation type has a named key builder (item / customer / supplier / po / so / b2b_invoice). Callers (the flows) must use the builder for their operation; the enqueue facade must not silently substitute a generic key when a per-operation key is expected. The builders live in a small dedicated module (e.g. `easyecom/utils/idempotency.py`) so every flow computes its key the same way.
+
 ## 6.2 Correlation IDs
 
 Distinct from idempotency keys, every operational record carries a correlation_id — a UUIDv7 (time-ordered) generated at the entry point of a logical operation. The correlation_id propagates through every downstream record so the operation can be traced end-to-end across the three log DocTypes.
@@ -1155,13 +1157,13 @@ def execute_job(easyecom_queue_job: str):
         qj.db_set({
             "state": "Retrying",
             "next_attempt_at": frappe.utils.add_seconds(
-                frappe.utils.now_datetime(), e.retry_after_seconds),
+                frappe.utils.now_datetime(), e.retry_after),  # EasyEcomRateLimitError.retry_after
         })
         frappe.enqueue(
             method="ecommerce_super.easyecom.queue.workers.execute_job",
             queue=qj.queue_tier,
             job_name=f"{qj.name}-attempt-{qj.attempts + 1}",
-            enqueue_after=e.retry_after_seconds,
+            enqueue_after=e.retry_after,
             easyecom_queue_job=qj.name,
         )
 
@@ -1204,6 +1206,8 @@ def company_concurrency_semaphore(company: str):
 ```
 
 `CompanyConcurrencyExceeded` is treated as a transient retry (re-enqueued with short back-off), not a failure. This means workers don't sit idle waiting for a slot; they release back to the pool and try again.
+
+**Crash-drift caveat.** The semaphore decrement runs in a `finally` block, so a *clean* exit (success or handled error) always releases the slot. But a worker that is *killed* mid-execution (OOM, SIGKILL, container eviction) never runs `finally`, leaving the Company's counter one slot too high permanently. The crash-recovery path (§6.3.9) must therefore call `concurrency.reset(company)` — or decrement for the reclaimed job — when it reclaims an orphaned Running job, otherwise repeated crashes silently erode a Company's effective concurrency cap. The `reset()` method exists for this purpose; the reclaim hook must invoke it.
 
 ### 6.3.8 Retry policy
 

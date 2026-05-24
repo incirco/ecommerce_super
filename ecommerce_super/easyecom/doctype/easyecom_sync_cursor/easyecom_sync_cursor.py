@@ -47,10 +47,9 @@ class EasyEcomSyncCursor(Document):
         )
 
     def rewind(self, *, to_value: str, reason: str, actor: str) -> None:
-        """FDE rewind action (§6.5.3). System Manager only — caller must
-        check role before calling. This method writes the cursor and is
-        expected to be paired with an EasyEcom Configuration Audit entry
-        by the calling action."""
+        """Internal method that writes the cursor backwards. The role
+        gate and audit hook are owned by the `rewind_cursor` whitelisted
+        wrapper below — call that from the desk, not this directly."""
         self.db_set(
             {
                 "cursor_value": to_value,
@@ -60,6 +59,61 @@ class EasyEcomSyncCursor(Document):
             update_modified=False,
             commit=False,
         )
+
+
+@frappe.whitelist()
+def rewind_cursor(cursor_name: str, to_value: str, reason: str) -> dict:
+    """FDE-facing cursor rewind action (§6.5.3).
+
+    Enforces:
+      - System Manager role (any of "System Manager" or
+        "EasyEcom System Manager"). Per §6.5.3 the rewind must be
+        restricted to System Manager — we accept either the global role
+        or the EasyEcom-scoped equivalent. Anyone else gets
+        PermissionError.
+      - Non-empty `reason` (no silent rewinds — §2.7).
+      - `to_value` non-empty.
+
+    Configuration Audit row creation is DEFERRED to §28 — the
+    Configuration Audit DocType is not built yet. The stub call below
+    documents where the audit hook will live. Until then, the desk's
+    standard Version history captures who/when/from→to.
+    """
+    user = frappe.session.user
+    roles = set(frappe.get_roles(user))
+    if not roles.intersection({"System Manager", "EasyEcom System Manager"}):
+        raise frappe.PermissionError(
+            _("Cursor Rewind is restricted to System Manager (§6.5.3).")
+        )
+
+    if not (to_value or "").strip():
+        frappe.throw(_("Rewind target value is required."))
+    if not (reason or "").strip():
+        frappe.throw(_("Rewind reason is required (no silent rewinds, §2.7)."))
+
+    doc = frappe.get_doc("EasyEcom Sync Cursor", cursor_name)
+    before_value = doc.cursor_value
+    doc.rewind(to_value=to_value, reason=reason, actor=user)
+    frappe.db.commit()
+
+    # STUB — §28 Configuration Audit row will be written here when the
+    # EasyEcom Configuration Audit DocType ships. The contract per
+    # §6.5.3: capture actor=user, before_value, after_value, reason.
+    # _write_configuration_audit(
+    #     dt="EasyEcom Sync Cursor", dn=cursor_name,
+    #     action="rewind", actor=user,
+    #     before={"cursor_value": before_value},
+    #     after={"cursor_value": to_value},
+    #     reason=reason,
+    # )
+
+    return {
+        "cursor": cursor_name,
+        "before_value": before_value,
+        "after_value": to_value,
+        "actor": user,
+        "reason": reason,
+    }
 
 
 def get_or_create(

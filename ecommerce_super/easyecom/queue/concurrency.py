@@ -78,15 +78,75 @@ def company_concurrency_semaphore(company: str) -> Iterator[None]:
 
 
 def current_count(company: str) -> int:
-    """Return the current in-flight count for a Company (observability)."""
-    val = frappe.cache().get_value(_cache_key(company))
+    """Return the current in-flight count for a Company (observability).
+
+    `frappe.cache()` is a RedisWrapper that adds a per-site key prefix
+    via `make_key` for its `get_value`/`set_value`/`delete_value` API.
+    The inherited Redis methods (`incr`/`decr`/`get`) do NOT use that
+    prefix — they operate on the key verbatim. The semaphore uses
+    `incr/decr` with the unprefixed key, so reads must use the raw Redis
+    `get` against the same unprefixed key. (Using `get_value` here
+    silently reads from a *different* namespace and always returns None.)
+    """
+    cache = frappe.cache()
     try:
-        return int(val) if val is not None else 0
-    except TypeError, ValueError:
+        raw = cache.get(_cache_key(company))
+    except Exception:
+        return 0
+    if raw is None:
+        return 0
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    try:
+        return int(raw)
+    except Exception:
+        # Observability helper; never raise. A non-int in this slot is a
+        # cache-corruption signal that's caught elsewhere.
         return 0
 
 
+def release_slot(company: str) -> int:
+    """Decrement a Company's in-flight counter by exactly one slot.
+
+    Used by the crash-recovery reclaim path (§6.3.7 'Crash-drift caveat'):
+    when a worker is killed mid-execution, its `finally` decr never runs
+    and the counter stays one slot too high permanently. The reclaim hook
+    calls this once per reclaimed Running job to undo that drift —
+    *without* touching slots held by live workers.
+
+    Returns the post-decrement value (for observability / tests).
+    Floors at 0; never goes negative.
+    """
+    cache = frappe.cache()
+    key = _cache_key(company)
+    try:
+        new_value = cache.decr(key)
+    except Exception:
+        return current_count(company)
+    if new_value is None:
+        return 0
+    if new_value < 0:
+        # Nothing to release — delete the (unprefixed) key so it floors
+        # at 0. Using `delete_value` here would target a *different*
+        # prefixed key — incr/decr live in the unprefixed namespace.
+        try:
+            cache.delete(key)
+        except Exception:
+            pass
+        return 0
+    return int(new_value)
+
+
 def reset(company: str) -> None:
-    """Reset the counter for a Company. Used by reclaim_orphaned_jobs to
-    clear drift from worker crashes."""
-    frappe.cache().delete_value(_cache_key(company))
+    """Hard-reset the counter for a Company to zero. Use sparingly — it
+    zeros slots held by live workers too. The reclaim path prefers
+    `release_slot` per reclaimed job. Kept for admin-tool use.
+
+    Uses raw Redis `delete` against the unprefixed key (matching the
+    `incr`/`decr` namespace) — NOT `delete_value`, which would target a
+    different prefixed key and silently do nothing.
+    """
+    try:
+        frappe.cache().delete(_cache_key(company))
+    except Exception:
+        pass
