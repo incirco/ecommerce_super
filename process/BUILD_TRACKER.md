@@ -4,7 +4,7 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 **Legend:** ☐ not started · 🔶 in progress · ✅ done · — n/a yet
 
-**Current focus:** _§3+§4 combined into one Foundation packet (build-order decided 24-May: connection DocTypes → data model → client). Packet ready at spec_sections/foundation_section_3_and_4.md. Awaiting Approved ✅ + build instruction._
+**Current focus:** _§5 Field Mapping packet ready (spec_sections/section_5.md), awaiting approval+commit then build. Foundation §3+§4 FDE staging test running in parallel — foundation fixes take priority over §5 if issues land._
 
 ---
 
@@ -21,8 +21,8 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 | Section | Spec ready | Acceptance | Approved | Built | Local test | Deployed | Team test | Live |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 3+4. Foundation: Connection Model + Data Model | ✅ | ✅ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
-| 5. Field Mapping engine | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 3+4. Foundation: Connection Model + Data Model | ✅ | ✅ | ✅ 24-May | ✅ 24-May | ✅ 24-May | 🔄 | 🔄 FDE | ☐ |
+| 5. Field Mapping engine | ✅ | ✅ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 6. Idempotency, Replay, Correlation, Queue | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 7. The Integration Contract | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
