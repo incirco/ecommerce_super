@@ -16,3 +16,5 @@ node_modules/
 # Python envs
 .venv/
 env/
+
+START_HERE.md

@@ -424,7 +424,7 @@ Handling rules:
 
 ## 3.11 Acceptance criteria (Section 3 is done when…)
 
-This is the build-and-test contract for Section 3. Claude Code builds to it; the FDE team test script (`process/test_scripts/section_3.md`) verifies it on staging. Section 3 is done when all of the following hold:
+This is the build-and-test contract for Section 3. Claude Code builds to it; the FDE team test script (`process/test_scripts/foundation_section_3_and_4.md`) verifies it on staging. Section 3 is done when all of the following hold:
 
 - **Account config exists and is editable.** An EasyEcom Account record can be created with api_endpoint, x_api_key, email, password, and a mandatory rate_limit_tier (no preset default).
 - **Credentials are set-only and never readable back.** Every credential field (x_api_key, email, password, webhook_token, slack_webhook_url, jwt_token) is encrypted at rest and stored as a Password field. In the desk form they show a set/not-set indicator, never the value, with no reveal affordance. No role — including EasyEcom System Manager and Frappe's built-in System Manager — can retrieve a credential's plaintext through the form, any API or whitelisted method, a report, a list view, or an export; a credential can only be overwritten, never read out. The decrypted value appears only transiently inside the EasyEcomClient when building an outbound request. A test that attempts to read each credential back through every surface returns masked/empty, not plaintext (Section 3.7).
@@ -929,4 +929,4 @@ Build the connection model (§3) and data model (§4) as one foundation unit, in
 
 **Done when:** `bench migrate` is clean, the app installs on a fresh site with all roles/permissions/permlevels and the Channel dimension present (no manual step), and the §3.11 acceptance criteria are testable. Build tests at the unit + integration tier (§28.1). When migrate is clean and acceptance criteria are met, STOP and report; do not proceed to §5 or any flow.
 
-**Test against:** the §3.11 acceptance criteria (in PART A above). The FDE team will run `process/test_scripts/section_3.md` on staging.
+**Test against:** the §3.11 acceptance criteria (in PART A above). The FDE team will run `process/test_scripts/foundation_section_3_and_4.md` on staging.

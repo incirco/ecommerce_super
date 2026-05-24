@@ -434,7 +434,7 @@ A single Python class encapsulates every interaction with EasyEcom. No code outs
 ```
 # Illustrative shape, not full implementation
 class EasyEcomClient:
-    def __init__(self, account: str, location_key: str): ...
+    def __init__(self, company: str | None = None, location_key: str | None = None): ...
     def get(self, endpoint: str, params: dict) -> dict: ...
     def post(self, endpoint: str, body: dict, idempotency_key: str | None = None) -> dict: ...
     def authenticate(self) -> str: ...  # returns JWT for this location_key
@@ -530,7 +530,7 @@ Handling rules:
 
 ## 3.11 Acceptance criteria (Section 3 is done when…)
 
-This is the build-and-test contract for Section 3. Claude Code builds to it; the FDE team test script (`process/test_scripts/section_3.md`) verifies it on staging. Section 3 is done when all of the following hold:
+This is the build-and-test contract for Section 3. Claude Code builds to it; the FDE team test script (`process/test_scripts/foundation_section_3_and_4.md`) verifies it on staging. Section 3 is done when all of the following hold:
 
 - **Account config exists and is editable.** An EasyEcom Account record can be created with api_endpoint, x_api_key, email, password, and a mandatory rate_limit_tier (no preset default).
 - **Credentials are set-only and never readable back.** Every credential field (x_api_key, email, password, webhook_token, slack_webhook_url, jwt_token) is encrypted at rest and stored as a Password field. In the desk form they show a set/not-set indicator, never the value, with no reveal affordance. No role — including EasyEcom System Manager and Frappe's built-in System Manager — can retrieve a credential's plaintext through the form, any API or whitelisted method, a report, a list view, or an export; a credential can only be overwritten, never read out. The decrypted value appears only transiently inside the EasyEcomClient when building an outbound request. A test that attempts to read each credential back through every surface returns masked/empty, not plaintext (Section 3.7).
@@ -5097,7 +5097,10 @@ from typing import Optional, Any
 from datetime import datetime
 
 class EasyEcomClient:
-    def __init__(self, company: str, location_key: Optional[str] = None) -> None: ...
+    def __init__(self, company: Optional[str] = None, location_key: Optional[str] = None) -> None: ...
+    # company is optional: foundational calls (§7.7) — token acquisition, location
+    # discovery — are account-scoped and have no company (their API Call rows carry
+    # company=None, is_foundational=1). Operational calls pass company.
 
     def get_jwt(self) -> str: ...
     def refresh_jwt(self) -> str: ...
