@@ -111,8 +111,7 @@
    "fieldname": "setup_section",
    "fieldtype": "Section Break",
    "label": "Setup",
-   "collapsible": 1,
-   "description": "EasyEcom credentials. Credential fields are encrypted at rest and never readable back; they can only be set or overwritten (§3.7)."
+   "collapsible": 1
   },
   {
    "fieldname": "api_endpoint",
@@ -170,8 +169,7 @@
    "fieldname": "sync_window_section",
    "fieldtype": "Section Break",
    "label": "Sync Window",
-   "collapsible": 1,
-   "description": "Allowed time windows for background sync activity. All times in the deployment's default timezone."
+   "collapsible": 1
   },
   {
    "fieldname": "sync_window_enabled",
@@ -216,8 +214,7 @@
    "fieldname": "sync_tuning_section",
    "fieldtype": "Section Break",
    "label": "Sync Tuning",
-   "collapsible": 1,
-   "description": "Per-resource cadences and concurrency. Defaults suit a 5,000-orders/month client; FDEs adjust per deployment."
+   "collapsible": 1
   },
   {
    "fieldname": "poll_interval_orders_min",
@@ -362,14 +359,13 @@
    "fieldname": "webhook_section",
    "fieldtype": "Section Break",
    "label": "Inbound Webhook Auth",
-   "collapsible": 1,
-   "description": "Auth is mandatory; unauthenticated webhooks are rejected with 401."
+   "collapsible": 1
   },
   {
    "fieldname": "webhook_enabled",
    "fieldtype": "Check",
    "label": "Webhooks Enabled",
-   "default": "1",
+   "default": "0",
    "reqd": 1,
    "description": "If unchecked, all inbound webhooks return 503; integration operates in poll-only mode."
   },
@@ -411,8 +407,7 @@
    "fieldname": "grn_policy_section",
    "fieldtype": "Section Break",
    "label": "GRN / Inward Policy",
-   "collapsible": 1,
-   "description": "Business rules for GRN-to-Purchase-Receipt translation. Per-Company overrides available in EasyEcom Company Settings."
+   "collapsible": 1
   },
   {
    "fieldname": "default_rejected_warehouse",

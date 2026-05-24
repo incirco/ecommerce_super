@@ -26,6 +26,7 @@ from ecommerce_super.easyecom.exceptions import (
     EasyEcomAPIError,
     EasyEcomAuthError,
     EasyEcomError,
+    EasyEcomRateLimitError,
 )
 
 
@@ -91,6 +92,22 @@ def test_connection(account: str) -> dict[str, Any]:
             "message": f"Connected. JWT acquired for location {location_key}.",
             "location_key": location_key,
             "jwt_acquired": bool(jwt),
+        }
+    except EasyEcomRateLimitError as e:
+        # 60s lockout between token calls (§31.3.1). Distinct from auth
+        # failure — credentials are likely fine; the FDE just clicked
+        # Test Connection too soon after the last attempt.
+        return {
+            "ok": False,
+            "message": (
+                "Test Connection rate-limited. EasyEcom permits one /access/token "
+                "call per location per 60 seconds — wait a moment and try again. "
+                "Credentials are not the problem (the lockout fires before any "
+                "credential check)."
+            ),
+            "location_key": location_key,
+            "error_code": e.error_code,
+            "retry_after": e.retry_after,
         }
     except EasyEcomAuthError as e:
         return {

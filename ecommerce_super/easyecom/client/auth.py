@@ -22,6 +22,7 @@ from ecommerce_super.easyecom.client.rate_limit import acquire_token
 from ecommerce_super.easyecom.exceptions import (
     EasyEcomAPIError,
     EasyEcomAuthError,
+    EasyEcomRateLimitError,
     EasyEcomTimeoutError,
 )
 
@@ -166,17 +167,71 @@ def acquire_jwt(account, location) -> str:
             endpoint=TOKEN,
         )
 
-    jwt = response_payload.get("jwt") or response_payload.get("token")
+    # EasyEcom's /access/token response shape (probed against real EE prod):
+    #   {
+    #     "data": {
+    #       "companyname": "...", "userName": "...", "time_zone": "...",
+    #       "token": { "jwt_token": "<the actual JWT>", ... }
+    #     },
+    #     "message": null
+    #   }
+    # The `token` field is a DICT, not a string; the JWT lives at
+    # data.token.jwt_token. We also accept the simpler string shape (data.token
+    # or top-level token/jwt) for robustness against future EE shape changes.
+    data_envelope = (
+        response_payload.get("data") if isinstance(response_payload, dict) else None
+    )
+    token_field = (
+        data_envelope.get("token") if isinstance(data_envelope, dict) else None
+    )
+    jwt: str | None = None
+    if isinstance(token_field, dict):
+        jwt = (
+            token_field.get("jwt_token")
+            or token_field.get("token")
+            or token_field.get("jwt")
+        )
+    elif isinstance(token_field, str) and token_field:
+        jwt = token_field
+    if not jwt and isinstance(data_envelope, dict):
+        jwt = (
+            data_envelope.get("jwt")
+            if isinstance(data_envelope.get("jwt"), str)
+            else None
+        )
+    if not jwt and isinstance(response_payload, dict):
+        top_token = response_payload.get("token") or response_payload.get("jwt")
+        jwt = top_token if isinstance(top_token, str) else None
     if not jwt:
+        # JWT extraction failed despite HTTP 200 — surface a precise error
+        # so the FDE can diff the actual EE response shape against this
+        # parser. The API Call row was logged Success above (HTTP was 200);
+        # the application-level failure surfaces here.
+        keys = (
+            list(response_payload.keys())
+            if isinstance(response_payload, dict)
+            else "non-dict response"
+        )
+        data_keys = (
+            list(data_envelope.keys()) if isinstance(data_envelope, dict) else None
+        )
         raise EasyEcomAuthError(
-            f"Token response from EE did not include a 'jwt' field. Keys: {list(response_payload.keys())}",
+            f"Token response shape unrecognised for {location.location_key}. "
+            f"Top-level keys: {keys}; data keys: {data_keys}. "
+            "Expected token at response.data.token (or response.token).",
             status_code=response.status_code,
             response_body=response_payload,
             endpoint=TOKEN,
         )
 
     # Cache (encrypts via the Location controller, §3.7.2).
-    expires_in_s = int(response_payload.get("expires_in") or (90 * 24 * 3600))
+    # expires_in may live at top level or inside the data envelope; default
+    # to EasyEcom's documented 90-day validity (§3.6) when absent.
+    expires_in_s = int(
+        response_payload.get("expires_in")
+        or (isinstance(data_envelope, dict) and data_envelope.get("expires_in"))
+        or (90 * 24 * 3600)
+    )
     validity_days = max(int(expires_in_s / 86400), 1)
     location.set_jwt(jwt, validity_days=validity_days)
 
@@ -254,11 +309,19 @@ def _is_expired(location) -> bool:
 
 
 def _check_token_lockout(location_key: str) -> None:
-    """Raise if a token call was made for this location in the last 60s."""
+    """Raise if a token call was made for this location in the last 60s.
+
+    Per §31.3.1: EasyEcom rate-limits /access/token to 1 call per location
+    per 60 seconds. We pre-empt that with a local cache. This is a rate-
+    limit condition, NOT an auth failure — callers (especially the
+    interactive Test Connection action) must be able to distinguish them.
+    """
     key = TOKEN_CACHE_LOCKOUT_KEY.format(location_key=location_key)
     if frappe.cache().get_value(key):
-        raise EasyEcomAuthError(
-            f"Token call rate-limited for {location_key} — wait 60s between token acquisitions (§31.3.1)."
+        raise EasyEcomRateLimitError(
+            f"Token call rate-limited for {location_key}: 1 call per 60s "
+            "per §31.3.1. Wait a moment and retry.",
+            retry_after=60,
         )
 
 
