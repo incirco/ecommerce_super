@@ -1,0 +1,100 @@
+{
+ "app": "ecommerce_super",
+ "charts": [],
+ "content": "[{\"id\":\"hdr-config\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Configuration</b></span>\",\"col\":12}},{\"id\":\"sc-account\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Account\",\"col\":4}},{\"id\":\"sc-locations\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Locations\",\"col\":4}},{\"id\":\"sc-companies\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Company Settings\",\"col\":4}},{\"id\":\"spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr-ops\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Operations</b></span>\",\"col\":12}},{\"id\":\"sc-queue\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Queue Jobs\",\"col\":4}},{\"id\":\"sc-sync\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Sync Records\",\"col\":4}},{\"id\":\"sc-webhook\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Webhook Events\",\"col\":4}},{\"id\":\"sc-api\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"API Calls\",\"col\":4}},{\"id\":\"sc-cursor\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Cursors\",\"col\":4}},{\"id\":\"sc-marketplace\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Marketplaces\",\"col\":4}}]",
+ "creation": "2026-05-24 17:30:00",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "settings",
+ "idx": 0,
+ "indicator_color": "blue",
+ "is_hidden": 0,
+ "label": "EasyEcom",
+ "links": [],
+ "modified": "2026-05-24 17:30:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom",
+ "number_cards": [],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [
+  {"role": "EasyEcom FDE"},
+  {"role": "EasyEcom System Manager"},
+  {"role": "EasyEcom Operator"}
+ ],
+ "sequence_id": 50.0,
+ "shortcuts": [
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Account",
+   "link_to": "EasyEcom Account",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Locations",
+   "link_to": "EasyEcom Location",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Company Settings",
+   "link_to": "EasyEcom Company Settings",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "Queue Jobs",
+   "link_to": "EasyEcom Queue Job",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "Sync Records",
+   "link_to": "EasyEcom Sync Record",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "Webhook Events",
+   "link_to": "EasyEcom Webhook Event",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "API Calls",
+   "link_to": "EasyEcom API Call",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Cursors",
+   "link_to": "EasyEcom Sync Cursor",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "doc_view": "List",
+   "label": "Marketplaces",
+   "link_to": "Marketplace",
+   "type": "DocType"
+  }
+ ],
+ "title": "EasyEcom",
+ "type": "Workspace"
+}
