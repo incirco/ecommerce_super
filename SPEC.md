@@ -561,6 +561,7 @@ This section consolidates every DocType the integration introduces, plus the cus
 | EasyEcom Company Settings | Standard, per Company | Per-Company alert recipients, assigned FDE, per-Company overrides |
 | EasyEcom Location | Standard | Per-location_key flags (primary/operational), Company resolution, JWT cache, pull cursors |
 | EasyEcom Tax Rule Map | Standard, per (tax_rule_name, Company) | Maps an EasyEcom tax rule name → that company's Item Tax Template rows (with native Min/Max Net Rate slab bands); FDE-configured; resolver stamps onto items at sync (Section 8.5) |
+| EasyEcom Item Map | Standard, one per correspondence | Direction-agnostic registry linking an EasyEcom SKU ↔ an ERPNext Item or Product Bundle; stores ee_product_id/ee_cp_id for push; the join key and component-identity resolver for item sync both ways (Section 8.1) |
 | Marketplace | Flat channel list | One row per EasyEcom channel, keyed by marketplace_id; spans B2C marketplaces, B2B, storefronts, POS (Section 8.6). No child Marketplace-Channel hierarchy — EE is flat |
 | Marketplace Account | Standard, per (Company, Marketplace) | Seller account on a marketplace |
 | Warehouse Source-of-Truth Map | Standard, per Company | Per-warehouse SoT configuration |
@@ -1502,94 +1503,102 @@ Bidirectional declaration prevents the classic two-table drift where the push an
 
 Each master sub-section below references its corresponding Field Mapping ruleset by name. Items use the EasyEcom-Item-Sync ruleset, Customers use EasyEcom-Customer-Sync, and so on. The ownership matrices in those sub-sections (e.g., 4.1.2) are still authoritative for which side wins on conflicts; the Field Mapping ruleset is the implementation mechanism that performs the translation. The two work together: ownership defines policy, mapping ruleset defines mechanism.
 
-## 8.1 Item / Product master
+## 8.1 Item / Product master (bidirectional onboarding → ERPNext-mastered steady state)
 
-### 8.1.1 Direction of truth
+Item sync is the largest master. It is **bidirectional during onboarding** and **ERPNext-mastered in steady state**, with an explicit flip between the two phases. The design is grounded in the real EasyEcom Product Master API (five functions: GetProductMaster, GetProductMastersCount, CreateMasterProduct, UpdateMasterProduct, ActivateDeactivateProduct) and real `GetProductMaster` payloads.
 
-Items are bidirectional. An Item may be born on either side:
+### 8.1.1 Two phases, one explicit flip
 
-- Born in ERPNext: a B2B SKU configured by the procurement team, a private-label product that won't sell on marketplaces, an internal-use Item
-- Born in EasyEcom: a marketplace listing created by the catalog team in EasyEcom and now needs a financial counterpart for accounting purposes
-The integration handles both directions and reconciles continuously.
+- **Onboarding (bidirectional, supervised, one-time per client):** products may already exist on either side. The integration pulls EasyEcom products into ERPNext **and** pushes ERPNext items into EasyEcom, reconciling both catalogues into a single mapped set. This is a supervised migration, not a steady state — duplicates and conflicts are surfaced for FDE resolution.
+- **Steady state (ERPNext-mastered):** once the FDE marks onboarding complete, **ERPNext is the source of truth for items.** New items and changes flow ERPNext → EasyEcom (push). EasyEcom is downstream for the item master.
+- **The flip is explicit:** a mode flag (`item_master_mode`: `onboarding` | `erpnext_mastered`) on the EasyEcom Account / per-client settings. The FDE flips it only after reconciliation is complete. Behaviour differs by phase (below).
 
-### 8.1.2 Field-level ownership matrix
+### 8.1.2 The EasyEcom Item Map (direction-agnostic correspondence registry)
 
-Even with bidirectional sync, individual fields are owned by one side. The owning side is authoritative; the non-owning side mirrors. This prevents the classic distributed-systems write-conflict problem.
+The link between an EasyEcom product and an ERPNext item/bundle is an explicit, persistent record — **not** a field-equality computation. This is the single source of linkage for both directions and all downstream flows (orders, inventory).
 
-| Field | Owner | Rationale |
-| --- | --- | --- |
-| item_code (SKU) | Either (whichever creates first) | The natural key. Once set on either side, it is stable forever. |
-| item_name | ERPNext | Books-side description; can be edited freely in ERPNext |
-| description | ERPNext | Same — descriptive copy |
-| item_group | ERPNext | Inventory categorisation belongs to the books |
-| brand | ERPNext | Same |
-| uom (stock_uom) | ERPNext | UoM is a books concept; EE adapts via UoM mapping |
-| is_stock_item | ERPNext | Books-side classification |
-| valuation_method (FIFO/Moving Avg) | ERPNext | Books-side accounting choice |
-| hsn_code (gst_hsn_code) | ERPNext | GST classification — owned by books per India Compliance |
-| gst_rate | ERPNext | Tax treatment — books authority |
-| item_tax_template | ERPNext | Tax template selection |
-| weight_per_unit + weight_uom | EasyEcom | Operational dimensions, used for shipping calculations |
-| dimensions (LxWxH) | EasyEcom | Operational dimensions |
-| barcode | Either | Set wherever convenient; sync mirrors |
-| marketplace_skus (table) | EasyEcom | Per-marketplace listing IDs only exist in EE |
-| company_product_id (EE master ID) | EasyEcom | EE-issued; mirrored to ERPNext custom field ecs_easyecom_company_product_id |
-| mrp | EasyEcom | Operational pricing for marketplace display |
-| selling_price (default) | ERPNext | Books-side pricing; pushed to EE as a starting point |
-| batch_tracking_enabled | ERPNext | Books-side accounting choice |
-| serial_tracking_enabled | ERPNext | Same |
-| expiry_tracking_enabled | ERPNext | Same |
-| item_image | ERPNext | Stored locally; URL pushed to EE |
-| disabled | ERPNext | Books-side decision; if disabled, EE syncs to inactive but does not delete |
+- `EasyEcom Item Map` — one row per correspondence:
+  - `ee_sku` (the EasyEcom SKU — EE's unique product identifier per its own FAQ; the join key)
+  - `erpnext_item` (the linked ERPNext Item **or** Product Bundle — the link accommodates both object types, via a Dynamic Link or a type field)
+  - `ee_product_id`, `ee_cp_id` (EasyEcom internal ids — stored because the push functions, Update/ActivateDeactivate, key on `product_id`; not our join key)
+  - status / flags (Mapped, Created-Flagged, Flagged-Not-Created, Drift, Disabled)
+- The map is **direction-agnostic**: a row is created whether the product was born in EasyEcom (pull created it) or in ERPNext (push created it in EE). It is also the **component-identity resolver** for combos/bundles in both directions (below).
 
-### 8.1.3 Initial sync (onboarding)
+### 8.1.3 Matching (deliberately simple)
 
-During FDE-led onboarding, the existing Item populations on both sides are reconciled:
+EasyEcom guarantees SKU uniqueness (its FAQ: "SKU is the most unique identifier"; "sellers are mandated to maintain unique SKU codes"). So:
 
-1. Pull all EasyEcom master products via /Products/GetProductMaster
-1. Pull all ERPNext Items where item_group is in the marketplace-relevant groups (configurable)
-1. Match by item_code (SKU). Matched: link via ecs_easyecom_company_product_id custom field
-1. Items only in EasyEcom: create in ERPNext with EE-owned fields populated, ERPNext-owned fields filled with sensible defaults; flag for FDE review (especially HSN code, GST rate)
-1. Items only in ERPNext: create in EasyEcom via POST /Products/CreateMasterProduct with mapped fields
-1. Conflicts (same SKU exists on both sides but with mismatched fields): produce an Integration Discrepancy of type Master Mismatch — Item; FDE resolves manually before steady-state sync starts
-Initial sync is run once during onboarding. After that, steady-state delta sync takes over.
+- **Map row already exists** → use it.
+- **EE `sku` exactly equals an ERPNext `item_code`** (byte-for-byte, case- and whitespace-sensitive) → **auto-map** to that item + create the map row.
+- **Anything else** → **create a new ERPNext item + a new map row.**
 
-### 8.1.4 Steady-state delta sync
+There is no fuzzy matching, no EAN-based matching, and no matching-review queue. The chosen error direction is "never wrongly link" over "never duplicate": a non-exact case creates a new item (a visible, fixable duplicate at worst) rather than risk an incorrect auto-link (silent data corruption). `item_code` defaults to `sku` for items created by the pull.
 
-- New Item created in ERPNext → on insert, push to EE via POST /Products/CreateMasterProduct (async, EasyEcom Queue Job)
-- Item updated in ERPNext (any ERPNext-owned field changed) → push to EE via POST /Products/UpdateMasterProduct
-- Updates only push the ERPNext-owned fields — never the EE-owned fields, even if the local copy looks stale
-- New Item created in EasyEcom → detected via daily /Products/GetProductMaster pull (cursor-based, last_pull_master_products); created in ERPNext
-- Item updated in EasyEcom → same pull mechanism detects the change; only EE-owned fields are updated locally
-- EE update of an ERPNext-owned field is a conflict — see 4.1.5
+### 8.1.4 EE → ERPNext (pull)
 
-### 8.1.5 Conflict resolution
+The pull is the **inbound onboarding** flow, and after the flip becomes **drift detection** (below).
 
-Conflicts arise when the same field is changed on both sides between syncs. Resolution rules:
+- **Endpoint:** `GET /Products/GetProductMaster` (headers `x-api-key` + per-account `Bearer <jwt>`). `includeLocations=1` → **account-wide catalogue** (products are a catalogue keyed by globally-unique SKU; not a per-location sweep). `GET /Products/GetProductMastersCount` gives the total for progress.
+- **Job shape:** the catalogue is large (counts in the tens of thousands). The pull is a **cursor-paginated, count-aware, resumable background job**: read the count, then walk the `nextUrl` cursor page by page (≤200/page), **savepoint-isolated per product** (one bad product does not abort the page or the walk; the job resumes from the last cursor if interrupted). It is **not** a single synchronous call (which would time out).
+- **Incremental:** full pull on onboarding; `updated_after` deltas on the daily schedule.
+- **Field translation via the Field Mapping engine** (the `EasyEcom-Item-Pull` ruleset, reconciled to the real `GetProductMaster` payload — the shipped ruleset is stale, §8.0 policy). Maps `sku`, `product_name`, `description`, `brand`, `colour`, `size`, dimensions (with unit handling), `mrp`, `cost`, `hsn_code` → `gst_hsn_code`, `accounting_unit` → `stock_uom` (with a **default-UOM** transform for missing/garbage values — EE supplies no clean stock UOM), `active` → `disabled`, `custom_fields`.
+- **Tax:** calls **8c's `resolve_and_stamp_tax(item, product)`** per item (the product carries `tax_rule_name`, `tax_rate`, `cess`). Unmapped tax rule → 8c auto-creates a To-Configure Tax Rule Map + flags FDE.
+- **product_type branching** (on the **response string** value; the doc's integer enums are inconsistent across endpoints and are a push-side concern only):
+  - `normal_product` → ERPNext **Item**
+  - `combo_product` → ERPNext **Product Bundle** (its `sub_products` become bundle components, each resolved to an ERPNext item via its own map row)
+  - `variant_parent` / `child_product` / `kit_bom` / **any unknown or future type (e.g. a future "digital" type)** → **flag, do NOT create.** Variants, variant children, and kits/BOMs should not exist in an EasyEcom↔ERPNext item integration (manufacturing/variant modelling stays ERPNext-side); their appearance in the EE pull is an exception for the FDE, not a creation target. Unknown types fall through to the same flag (forward-safe).
+- **Content gating (create + flag):** a creatable product (normal/combo) that is missing HSN, has an unmapped tax rule, or has a dirty UOM is **created and flagged** (so the SKU exists for downstream orders) and surfaced in the review queue — never silently defaulted, never held.
+- `active: 0` in the payload → the ERPNext item is **disabled** (never deleted).
 
-- If the field is owned by one side per the matrix: the non-owning side's change is rejected and an Integration Discrepancy is raised. The owning side wins.
-- If the field is Either-owned: last-write-wins, with the timestamp comparison from each system's modified field. The losing change is logged.
-- If the conflict cannot be auto-resolved: an Integration Discrepancy of severity Warning is raised; the FDE reviews.
+### 8.1.5 ERPNext → EE (push)
 
-### 8.1.6 Account-global masters (sharing across Companies)
+The push is the **outbound onboarding** flow **and** the **steady-state mechanism** (once ERPNext is master, all item flow is push).
 
-- Items are master data and are account-global: they live at the primary location in EasyEcom and are synced once, not per operational Company.
-- In ERPNext the Item is shared across Companies via the standard Item Defaults table — one Item, multiple Company-specific defaults (income account, expense account, default warehouse). The integration does not duplicate the Item per Company.
-- Because masters are maintained at the primary location, there is a single EasyEcom master record per SKU for the whole account, not one per Company.
-- The mapping is stored in a child table on the Item, ecs_easyecom_mappings, keyed simply by easyecom_company_product_id (the EE master product identifier). Operational locations reference the same master; no per-(Company, location) master row is created.
+- **Endpoints:** `POST /Products/CreateMasterProduct` (new), `POST /Products/UpdateMasterProduct` (changed; keys on sku or productId; supports partial updates), `POST /Products/ActivateDeactivateProduct` (lifecycle; keys on product_id).
+- **Field translation** ERPNext item → EE create-payload. EasyEcom's create requires fields ERPNext items do not natively carry — these are **manufactured/defaulted** on push: `materialType` (mandatory in EE; absent in ERPNext → default **Finished Good = 1**), `itemType` (from the product's nature: normal = 0, combo = 1), `Brand` / `Category` / `ModelNumber` (sourced from the item or defaulted). `ProductTaxCode` = the item's HSN. `TaxRate` from the item's tax (allowed EE values 0/3/5/12/18/28). Dimensions in EE units (weight g, dimensions cm).
+- On `CreateMasterProduct`, EE returns `product_id` → written to the map row.
 
-### 8.1.7 Variants and bundles
+### 8.1.6 Product Bundles ↔ EasyEcom combos (bidirectional)
 
-- Item Variants in ERPNext (templates and variants) map to EasyEcom's variant model with the template as the master_product and each variant as a separate company_product
-- Item Bundles (Product Bundle in ERPNext) map to EasyEcom Combo SKUs — only the Combo gets a company_product_id; the individual components are tracked but not separately listed
-- Bundle composition changes are non-trivial — propagate carefully, with FDE review on first sync of each bundle change
+Bundles are bidirectional, mirroring normal items:
 
-### 8.1.8 Edge cases
+- **Pull:** EE `combo_product` → ERPNext Product Bundle (covered in 8.1.4).
+- **Push:** an ERPNext **Product Bundle** → an EasyEcom **combo** (a "virtual combo" — non-stocked selling wrapper; the components carry the stock, exactly as a Product Bundle is non-stocked in ERPNext). Pushed via `CreateMasterProduct` with `itemType = 1` (Combo) and the `subProducts` array assembled from the bundle's components — **each component resolved to its EasyEcom SKU via its own map row.**
+- **Dependency ordering:** components must exist in EasyEcom (and be mapped) before the combo is pushed. The push processes **components before combos**; if a component is missing or unmapped at combo-push time, the combo is **flagged, not pushed** (no broken combos).
+- **Constraint:** EasyEcom requires a combo's `subProducts` to contain **at least 2 products**; a bundle with fewer cannot be pushed and is flagged.
+- **The bundle gets its own map row** (bundle ↔ EE combo); its components resolve through their own rows. The map is thus the **component-identity resolver in both directions** (sub_product sku → ERPNext item on pull; ERPNext component → EE sku on push).
+- **No BOM / no Kit:** ERPNext BOMs are **not** pushed to EasyEcom (manufacturing stays ERPNext-side); EasyEcom `kit_bom` is flagged-not-created on pull. Only Product Bundles ↔ combos cross the boundary.
 
-- Item disabled in ERPNext: EE record set to inactive (not deleted)
-- Item deleted in ERPNext: forbidden if any operational document references it; the integration enforces this independently as a safety check before the EE call
-- EE archives an Item: detected on daily pull; ERPNext Item is set to disabled, not deleted, with a note in the Item's comments
-- HSN code missing on a marketplace-relevant Item: blocks push to EE until populated; FDE alerted via dashboard
+### 8.1.7 Lifecycle — deactivate / reactivate (both directions, phase-governed)
+
+- **Onboarding:** EE `active` flag → ERPNext disable/enable (pull side); ERPNext disable → EE `ActivateDeactivateProduct(status=0)` (push side).
+- **Steady state (ERPNext-mastered):** ERPNext disable/enable → pushed to EE. An EE-side deactivation is **not** accepted as truth — it is **flagged as drift** (below).
+- Deactivation never deletes on either side.
+
+### 8.1.8 After the flip — drift detection
+
+Once `item_master_mode = erpnext_mastered`:
+
+- The push (ERPNext → EE) is the authoritative item flow.
+- The pull continues only as **drift detection**: an EE-originated new product, or an EE-side edit to a mapped item, is **flagged for the FDE** — not accepted as truth, and **not auto-overwritten** from ERPNext (silently overwriting could destroy legitimate EE operational data; silently accepting would violate ERPNext mastership). The FDE decides per drift flag.
+
+### 8.1.9 Onboarding reconciliation (supervised) and the exception/review state
+
+- Onboarding reconciliation is **FDE-supervised**: after pulling EE products and pushing ERPNext items, duplicates (same physical product reached from both sides with non-matching identifiers) and conflicts are surfaced; the FDE resolves them; then the FDE flips to `erpnext_mastered`.
+- The **review/exception state** holds three kinds of items, all visible to the FDE:
+  - **Created-Flagged** — created but with a content problem (missing HSN, unmapped tax, dirty UOM) to fix.
+  - **Flagged-Not-Created** — an unsupported type (variant_parent / child_product / kit_bom / unknown) that was not created.
+  - **Drift** — (post-flip) an unexpected EE-side change or EE-origin product.
+
+### 8.1.10 Build sequence (one packet, internally sequential)
+
+Built as a single packet, in dependency order: (1) the `EasyEcom Item Map` + the `item_master_mode` substrate; (2) the EE → ERPNext pull (cursor job, engine ruleset reconciliation, tax-resolver integration, product_type branching, content gating); (3) the ERPNext → EE push (create/update, EE-mandatory-field manufacturing); (4) Product Bundle ↔ combo both ways (component resolution, dependency ordering); (5) lifecycle (deactivate/reactivate, phase-governed) and the post-flip drift detection. Reuses the Field Mapping engine (§8.0), 8c's tax resolver, the 8a per-record savepoint helper, and the workflow-fixture pattern (and its captured gotchas, including the `safe_eval`/`len()` condition rule).
+
+### 8.1.11 Out of scope (separate, later)
+
+- **Marketplace listings** (Amazon ASIN, Flipkart FSN, per-channel `marketplace_sku`): synced per-channel from the marketplaces into EasyEcom (EE FAQ); a separate listing-sync concern, not part of the item master.
+- **Stock / inventory sync** (per-location quantities): a separate concern from the product master (which is the account-wide catalogue).
+- Account-global sharing across Companies via ERPNext Item Defaults is the standard ERPNext mechanism; the integration does not duplicate the Item per Company.
 
 ## 8.2 Customer master
 
