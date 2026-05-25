@@ -141,6 +141,13 @@ scheduler_events = {
         "0 2 * * *": [
             "ecommerce_super.easyecom.client.auth.renew_aging_jwts",
         ],
+        # Daily EasyEcom location discovery (§8.4.3). Runs at 03:30 IST so
+        # the JWT renewal at 02:00 is already settled. Writes a
+        # Notification Log entry to EasyEcom FDE users when new
+        # locations appear; quiet on no-change ticks.
+        "30 3 * * *": [
+            "ecommerce_super.easyecom.flows.location_discovery.scheduled_discover_locations",
+        ],
         # Connection health rollup — every 5 minutes.
         "*/5 * * * *": [
             "ecommerce_super.easyecom.operational.connection_health.update_account_connection_status",

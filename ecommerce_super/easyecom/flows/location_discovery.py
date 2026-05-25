@@ -52,6 +52,69 @@ INITIAL_WORKFLOW_STATE: str = "To Map"
 DATA_KEY: str = "data"
 
 
+@frappe.whitelist()
+def discover_locations() -> dict:
+    """FDE-facing wrapper around `pull_locations`. Returns a plain dict
+    summary suitable for an inline form-button response.
+
+    Permission: callers need at least EasyEcom FDE / System Manager
+    privilege. The discovery pull is account-scoped and writes a
+    foundational API Call row plus EasyEcom Location rows; an Operator
+    role isn't sufficient.
+
+    Never raises through the whitelist — every failure path returns
+    {"ok": False, ...} so the JS handler can render a clean message
+    rather than a stack trace.
+    """
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Discover Locations requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+
+    try:
+        outcome = pull_locations()
+    except Exception as exc:  # noqa: BLE001 — the whitelist boundary
+        frappe.log_error(
+            title="EasyEcom Discover Locations failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {
+            "ok": False,
+            "message": (
+                f"Discovery pull failed: {type(exc).__name__}: {exc}. "
+                "See Error Log for the full trace."
+            ),
+        }
+
+    new_names, updated_names = _split_new_vs_updated(outcome.succeeded)
+    failed_summaries = [
+        {
+            "location_key": (row or {}).get("location_key") or "<unknown>",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        for row, exc in outcome.failed
+    ]
+
+    _notify_if_new_locations(new_names)
+
+    return {
+        "ok": True,
+        "total": outcome.total,
+        "new_count": len(new_names),
+        "updated_count": len(updated_names),
+        "failed_count": outcome.failed_count,
+        "new_locations": new_names[:10],  # cap for inline display
+        "updated_locations": updated_names[:10],
+        "failed_locations": failed_summaries[:10],
+    }
+
+
 def pull_locations(*, client: EasyEcomClient | None = None) -> BatchOutcome:
     """Fetch /getAllLocation and upsert one EasyEcom Location per row.
 
@@ -228,3 +291,139 @@ def _as_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+# ----- Trigger surface: scheduler + notification -----
+
+
+def scheduled_discover_locations() -> None:
+    """Scheduler-driven discovery run (§8.4.3 daily cadence).
+
+    Wired in hooks.py scheduler_events. Catches every exception so a
+    transient EE outage doesn't fail the whole scheduler tick; logs to
+    Error Log so the FDE sees it on the next desk visit.
+
+    Returns nothing — this is a scheduler hook, not a programmatic API.
+    Writes a Notification Log entry only when new locations are
+    discovered (no spam on quiet ticks).
+    """
+    try:
+        outcome = pull_locations()
+    except Exception as exc:  # noqa: BLE001 — scheduler boundary
+        frappe.log_error(
+            title="EasyEcom scheduled discovery failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return
+
+    new_names, _updated = _split_new_vs_updated(outcome.succeeded)
+    _notify_if_new_locations(new_names)
+
+
+def _split_new_vs_updated(docnames: list[str]) -> tuple[list[str], list[str]]:
+    """For a list of docnames returned by `pull_locations`, partition into
+    rows in 'To Map' (just discovered) vs everything else (re-pull update).
+
+    Heuristic: a brand-new row from `_create_new` lands in workflow_state
+    'To Map' with no FDE touches. A re-pull only updates EE-supplied
+    fields, never workflow_state. So workflow_state=='To Map' AND no
+    frappe_company == 'just discovered.' Anything else is an update.
+
+    This is a heuristic — a To Map row that was created in a PREVIOUS
+    run and is still unmapped will look 'new' on this run too. That's
+    acceptable for the notification's purpose ('here are the rows
+    waiting for you'). It is NOT used for any operational decision.
+    """
+    if not docnames:
+        return [], []
+    rows = frappe.db.get_all(
+        "EasyEcom Location",
+        filters={"name": ("in", list(docnames))},
+        fields=["name", "workflow_state", "frappe_company"],
+    )
+    new: list[str] = []
+    updated: list[str] = []
+    for row in rows:
+        if row.workflow_state == "To Map" and not row.frappe_company:
+            new.append(row.name)
+        else:
+            updated.append(row.name)
+    return new, updated
+
+
+def _notify_if_new_locations(new_docnames: list[str]) -> None:
+    """**§18 PLACEHOLDER — DO NOT EXPAND.**
+
+    Writes one Frappe Notification Log entry per EasyEcom FDE user when
+    new locations appear. Uses ONLY Frappe's stock bell-icon primitive
+    (Notification Log DocType) — does NOT touch the EasyEcom Integration
+    Alert DocType, the §18 routing / severity / suppression machinery,
+    or email fan-out. None of that exists yet, and we are NOT
+    anticipating its shape here.
+
+    When §18 ships, this whole function should be replaced wholesale by
+    a call into the alerts framework (likely an `EasyEcomIntegrationAlert`
+    constructor with severity="info", financial_impact=0, routing per
+    Company). At that point, delete this function and its call sites in
+    `discover_locations` and `scheduled_discover_locations`.
+
+    Until then: quiet on empty input (no notification ticks); one row
+    per FDE user when there's something to surface; no email.
+    """
+    if not new_docnames:
+        return
+
+    fde_users = _users_with_role("EasyEcom FDE")
+    if not fde_users:
+        # No FDEs yet (pre-onboarding); log silently rather than dropping.
+        frappe.log_error(
+            title="EasyEcom discovery: no EasyEcom FDE users to notify",
+            message=(
+                f"Discovered {len(new_docnames)} new EasyEcom Location row(s) "
+                f"but no user has the EasyEcom FDE role assigned. "
+                f"Locations: {', '.join(new_docnames[:10])}"
+            ),
+        )
+        return
+
+    count = len(new_docnames)
+    subject = frappe._(
+        "EasyEcom: {0} new location(s) to map"
+    ).format(count)
+    sample = ", ".join(new_docnames[:5])
+    suffix = f" ({count - 5} more)" if count > 5 else ""
+    body = frappe._(
+        "Discovery pull found {0} new EasyEcom Location row(s): {1}{2}. "
+        "Open the EasyEcom Location list filtered to 'To Map' to map them."
+    ).format(count, sample, suffix)
+
+    for user in fde_users:
+        notif = frappe.new_doc("Notification Log")
+        notif.update(
+            {
+                "for_user": user,
+                "type": "Alert",
+                "document_type": "EasyEcom Location",
+                # Linking to the first new docname gives the bell a
+                # clickable target; the body lists the full sample.
+                "document_name": new_docnames[0],
+                "subject": subject,
+                "email_content": body,
+                "from_user": "Administrator",
+            }
+        )
+        notif.insert(ignore_permissions=True)
+
+
+def _users_with_role(role: str) -> list[str]:
+    """Return the enabled, non-Guest users carrying `role`."""
+    return frappe.db.sql_list(
+        """SELECT DISTINCT hr.parent
+           FROM `tabHas Role` hr
+           JOIN `tabUser` u ON u.name = hr.parent
+           WHERE hr.role = %s
+             AND hr.parenttype = 'User'
+             AND u.enabled = 1
+             AND u.name NOT IN ('Guest', 'Administrator')""",
+        (role,),
+    )
