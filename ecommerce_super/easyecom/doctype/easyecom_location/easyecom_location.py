@@ -47,11 +47,15 @@ JWT_RENEW_AT_AGE_DAYS: int = 85
 # state (including Skipped) keeps is_operational = 0.
 OPERATIONAL_WORKFLOW_STATE: str = "Live"
 
-# Per §8.4.1 — the state-aware invariant on frappe_company:
-#   - states in UNMAPPED_STATES MUST have frappe_company empty
-#   - states in MAPPED_STATES MUST have frappe_company set
-#   - any other state (empty / pre-workflow) → short-circuit
-UNMAPPED_STATES: frozenset[str] = frozenset({"To Map", "Skipped"})
+# Per §8.4.1 — state-aware invariant on frappe_company:
+#   - MAPPED_STATES (Mapped but not Live, Live) MUST have frappe_company set
+#   - Skipped MUST have frappe_company empty
+#   - To Map has NO CONSTRAINT — it is the mid-mapping state where the FDE
+#     fills in frappe_company / mapped_warehouse in preparation for the Map
+#     workflow transition. Forcing it empty here would clear the field on
+#     plain Save and trap the FDE: clear → Map button vanishes (its
+#     condition is `doc.frappe_company`) → cannot transition out of To Map.
+SKIPPED_STATE: str = "Skipped"
 MAPPED_STATES: frozenset[str] = frozenset({"Mapped but not Live", "Live"})
 
 
@@ -59,14 +63,15 @@ class EasyEcomLocation(Document):
     def validate(self) -> None:
         # Order matters:
         #  1. derive_is_operational reads workflow_state.
-        #  2. clear_company_on_unmapped_states mutates frappe_company so the
-        #     invariant check below sees the cleaned value (handles the
-        #     Mapped→Skipped transition where the workflow flips state but
-        #     the FDE didn't manually clear the field).
-        #  3. validate_company_matches_workflow_state enforces the §8.4.1
-        #     invariant against the post-clear, post-transition state.
+        #  2. clear_company_on_skipped_transition fires ONLY when entering
+        #     Skipped from another state — so Mark Not Relevant from a
+        #     mapped/live row cleanly drops the Company without forcing
+        #     the FDE to clear the fields manually first.
+        #  3. validate_company_matches_workflow_state enforces the
+        #     §8.4.1 invariant against the post-clear, post-transition
+        #     state.
         self._derive_is_operational_from_workflow_state()
-        self._clear_company_on_unmapped_states()
+        self._clear_company_on_skipped_transition()
         self._validate_exactly_one_primary()
         self._validate_company_matches_workflow_state()
         self._validate_mapped_warehouse_in_company()
@@ -82,25 +87,36 @@ class EasyEcomLocation(Document):
             return
         self.is_operational = 1 if self.workflow_state == OPERATIONAL_WORKFLOW_STATE else 0
 
-    def _clear_company_on_unmapped_states(self) -> None:
-        """When the post-transition state is To Map or Skipped, the row by
-        §8.4.1 contract carries no Frappe Company. This hook clears
-        frappe_company (and mapped_warehouse, which would be orphaned
-        without a Company) so the invariant check below passes — most
-        importantly on the Mapped but not Live → Skipped transition, where
-        the FDE clicks Mark Not Relevant and shouldn't be expected to
-        first clear the field in a separate save.
+    def _clear_company_on_skipped_transition(self) -> None:
+        """When the doc TRANSITIONS into Skipped (prior state != Skipped),
+        clear frappe_company and mapped_warehouse. The §8.4.1 contract
+        says Skipped rows carry no Company; Mark Not Relevant from a
+        mapped/live row should drop the mapping cleanly without forcing
+        the FDE to do a separate manual clear save first.
 
-        Short-circuits when workflow_state is empty (same back-fill
-        exemption as the is_operational derivation).
+        Does NOT fire when:
+          - workflow_state is empty (back-fill path)
+          - workflow_state is not Skipped (the only auto-clear state;
+            To Map is the deliberately-unconstrained mid-mapping state)
+          - prior workflow_state was already Skipped (re-save within
+            Skipped, not a transition — invariant below catches any
+            disallowed Company that snuck in)
+          - the doc is new (an inserter that wants to seed a row
+            directly into Skipped with a phantom Company gets the
+            invariant rejection instead of a silent strip)
         """
-        if not self.workflow_state:
+        if not self.workflow_state or self.workflow_state != SKIPPED_STATE:
             return
-        if self.workflow_state in UNMAPPED_STATES:
-            if self.frappe_company:
-                self.frappe_company = None
-            if self.mapped_warehouse:
-                self.mapped_warehouse = None
+        if self.is_new():
+            return
+        prior = self.get_doc_before_save()
+        if prior is None or prior.workflow_state == SKIPPED_STATE:
+            return
+        # Real transition INTO Skipped — clear the mapping fields.
+        if self.frappe_company:
+            self.frappe_company = None
+        if self.mapped_warehouse:
+            self.mapped_warehouse = None
 
     def _validate_exactly_one_primary(self) -> None:
         if not self.is_primary:
@@ -121,34 +137,36 @@ class EasyEcomLocation(Document):
     def _validate_company_matches_workflow_state(self) -> None:
         """State-aware invariant (§8.4.1):
 
-          - workflow_state in {To Map, Skipped}            → frappe_company empty
+          - workflow_state == Skipped                      → frappe_company empty
           - workflow_state in {Mapped but not Live, Live}  → frappe_company set
+          - workflow_state == To Map                       → no constraint
+            (this is the mid-mapping state — the FDE may set
+            frappe_company in preparation for the Map transition; the
+            transition's own condition `doc.frappe_company` is the gate
+            into Mapped but not Live)
 
-        Short-circuits when workflow_state is empty. The back-fill patch
-        is the only legitimate caller hitting that path — it sets
-        workflow_state via db.set_value, bypassing this rule, and lands
-        rows in states where the invariant subsequently holds.
+        Short-circuits when workflow_state is empty (back-fill exemption —
+        the patch bypasses validate via db.set_value).
 
         This rule subsumes the older "is_operational requires
-        frappe_company" check (Live is the only is_operational=1 state and
-        Live requires Company; conversely is_operational=0 states are
-        Mapped/To Map/Skipped, each handled here).
+        frappe_company" check: Live is the only is_operational=1 state and
+        Live requires Company.
         """
         if not self.workflow_state:
             return
-        if self.workflow_state in UNMAPPED_STATES:
+        if self.workflow_state == SKIPPED_STATE:
             if self.frappe_company:
-                # The clear hook above SHOULD have stripped this. If we get
-                # here, something bypassed it (subclass override, direct
-                # field write between clear and validate, etc.) — still
-                # refuse so the invariant holds at persistence boundary.
+                # Clear hook only fires on transition INTO Skipped; a
+                # plain save while in Skipped with a Company set comes
+                # here. Refuse — the FDE should use Reconsider (→ To Map)
+                # to re-engage with the location, not direct field writes.
                 frappe.throw(
                     _(
-                        "Workflow state {0} must not carry a Frappe Company. "
-                        "Use the workflow's Mark Not Relevant or Reconsider "
-                        "actions to change scope; do not set the field directly."
-                    ).format(self.workflow_state),
-                    title=_("Company Set on Unmapped Location"),
+                        "Workflow state Skipped must not carry a Frappe Company. "
+                        "Use the workflow's Reconsider action to move the row "
+                        "back to To Map before assigning a Company."
+                    ),
+                    title=_("Company Set on Skipped Location"),
                 )
         elif self.workflow_state in MAPPED_STATES:
             if not self.frappe_company:

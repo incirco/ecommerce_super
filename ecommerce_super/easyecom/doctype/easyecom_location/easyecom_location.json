@@ -83,7 +83,9 @@
    "default": "To Map",
    "in_list_view": 1,
    "no_copy": 1,
-   "description": "Per §8.4.1: To Map → Mapped but not Live → Live, branch Skipped. Owned by the EasyEcom Location Workflow fixture; FDE transitions via standard form action buttons. is_operational is derived from this — never user-toggled."
+   "hidden": 1,
+   "read_only": 1,
+   "description": "Per §8.4.1: To Map → Mapped but not Live → Live, branch Skipped. Owned by the EasyEcom Location Workflow fixture. Hidden on the form because the workflow badge in the title bar already shows it and the Actions menu drives transitions — direct editing is not the path. Field is needed (Workflow reads/writes it) but never user-facing."
   },
   {
    "fieldname": "is_primary",

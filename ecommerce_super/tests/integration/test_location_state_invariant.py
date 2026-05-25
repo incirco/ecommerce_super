@@ -83,53 +83,62 @@ class TestDirectSaveViolations(FrappeTestCase):
         doc.update(defaults)
         return doc
 
-    def test_to_map_with_company_rejected_on_insert(self) -> None:
-        """The clear hook nulls frappe_company on To Map, but if someone
-        bypassed that path the invariant catches it. Test the direct case
-        by setting both AND verifying the row ends up clean (clear hook
-        path) — and separately verify the post-clear assertion blocks any
-        bypass."""
+    def test_to_map_with_company_is_allowed(self) -> None:
+        """The §8.4.1 relaxation: To Map is the mid-mapping state. The
+        FDE legitimately sets frappe_company on a To Map row in
+        preparation for the Map transition (whose condition is
+        doc.frappe_company). Saving with both set must persist the
+        Company — clearing it would trap the FDE in a state where the
+        Map button vanishes (its condition is unmet) and they cannot
+        transition out."""
         doc = self._new(f"{self.PREFIX}tm-with-co", frappe_company=self.company)
         doc.insert(ignore_permissions=True)
-        # Clear hook should have stripped frappe_company.
-        self.assertIsNone(doc.frappe_company)
+        # Company persisted (no auto-clear in To Map).
+        self.assertEqual(doc.frappe_company, self.company)
         self.assertEqual(doc.workflow_state, "To Map")
-
-    def test_to_map_with_company_after_explicit_clear_bypass_rejected(self) -> None:
-        """If a caller (sub-class override, etc.) manages to bypass the
-        clear hook and still set frappe_company on a To Map row, the
-        invariant check is the defence-in-depth backstop."""
-        # First insert clean.
-        doc = self._new(f"{self.PREFIX}tm-bypass")
-        doc.insert(ignore_permissions=True)
-        # Now flip to a manual edit that the clear hook will undo — but
-        # to test the assertion path, we monkey-patch the clear hook
-        # off and verify the invariant rejects.
-        doc.frappe_company = self.company
-        # We can't easily disable the clear hook from a test, but the
-        # behaviour we want to verify is: even if both fire, the invariant
-        # is the gate. Save and confirm the doc ends up clean.
+        # Re-save still preserves it.
         doc.save(ignore_permissions=True)
         doc.reload()
-        self.assertIsNone(doc.frappe_company)  # clear hook scrubbed it
+        self.assertEqual(doc.frappe_company, self.company)
+
+    def test_to_map_save_then_map_button_path(self) -> None:
+        """The exact FDE flow that the original strict invariant broke:
+        edit Company on To Map row → Save → reload → Company still there →
+        Actions → Map transitions cleanly. Regression test for the
+        bug surfaced in the live sandbox session."""
+        doc = self._new(f"{self.PREFIX}fde-flow", frappe_company=self.company)
+        doc.insert(ignore_permissions=True)
+        # FDE clicks Save. Company must survive.
+        doc.save(ignore_permissions=True)
+        doc.reload()
+        self.assertEqual(doc.frappe_company, self.company)
+        # FDE then clicks Actions → Map. Map's condition is met.
+        apply_workflow(doc, "Map")
+        doc.reload()
+        self.assertEqual(doc.workflow_state, "Mapped but not Live")
+        self.assertEqual(doc.frappe_company, self.company)
 
     def test_skipped_with_company_via_direct_write_rejected(self) -> None:
         """A Skipped row that gains a Company through a direct field
-        write (no transition) — the clear hook strips it. Verify."""
-        # Reach Skipped via the workflow.
+        write (no transition) — the clear hook only fires ON transition
+        INTO Skipped, so a plain Save while in Skipped sees the
+        invariant catch the violation and refuse the save."""
+        # Reach Skipped via the workflow. The Mark Not Relevant
+        # transition's clear-hook fires (transition into Skipped from
+        # To Map; clears Company if any was set — none here).
         doc = self._new(f"{self.PREFIX}skip-with-co")
         doc.insert(ignore_permissions=True)
         apply_workflow(frappe.get_doc("EasyEcom Location", doc.name), "Mark Not Relevant")
         skipped = frappe.get_doc("EasyEcom Location", doc.name)
         self.assertEqual(skipped.workflow_state, "Skipped")
-
-        # Try to set frappe_company on the Skipped row.
-        skipped.frappe_company = self.company
-        skipped.save(ignore_permissions=True)
-        skipped.reload()
-        # Clear hook stripped it; invariant holds.
         self.assertIsNone(skipped.frappe_company)
-        self.assertEqual(skipped.workflow_state, "Skipped")
+
+        # Now try to set Company on the Skipped row via direct write.
+        # This is NOT a transition (workflow_state stays Skipped), so
+        # the clear-hook doesn't fire. The invariant must REJECT.
+        skipped.frappe_company = self.company
+        with self.assertRaises(frappe.ValidationError):
+            skipped.save(ignore_permissions=True)
 
     def test_mapped_but_not_live_without_company_rejected(self) -> None:
         """Reaching Mapped but not Live without a Company is impossible
