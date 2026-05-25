@@ -1,33 +1,22 @@
-### Ecommerce Super
+# ecommerce_super
 
-ERPNext-native EasyEcom integration
+ERPNext-native integration between ERPNext (v16) and **EasyEcom**, with marketplace settlement reconciliation. FDE-deployed.
 
-### Installation
+## Where to start
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+- **FDEs (testing / onboarding):** start at **[`process/primers/START_HERE_FDE.md`](process/primers/START_HERE_FDE.md)**. It walks you through the primers, the test scripts, and the build status board, in order.
+- **Developers / build context:** read `CLAUDE.md` (working agreement and the single-writer rule), then `SPEC.md` (the full specification). `BRD.md` and `PRD.md` give the business and product context.
 
-```bash
-cd $PATH_TO_YOUR_BENCH
-bench get-app $URL_OF_THIS_REPO --branch version-16
-bench install-app ecommerce_super
-```
+## Layout
 
-### Contributing
+| Path | What's there |
+| --- | --- |
+| `process/primers/` | FDE primers — understand the product and what's built |
+| `process/test_scripts/` | How-to-test guide + per-section test checklists |
+| `process/BUILD_TRACKER.md` | Live status board: what's built, tested, next |
+| `spec_sections/` | The frozen build packets, one per section |
+| `docs/` | The full spec as a Word document + playbooks |
+| `SPEC.md` | The canonical specification (Markdown source of the docx) |
+| `easyecom/` | The application code |
 
-This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
-
-```bash
-cd apps/ecommerce_super
-pre-commit install
-```
-
-Pre-commit is configured to use the following tools for checking and formatting your code:
-
-- ruff
-- eslint
-- prettier
-- pyupgrade
-
-### License
-
-mit
+The spec and packets are the source of truth; they are written through a single controlled path (see `CLAUDE.md`). Please don't edit them ad hoc.
