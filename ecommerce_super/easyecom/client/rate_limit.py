@@ -102,7 +102,7 @@ def acquire_token(account: str, location_key: str | None) -> None:
         tokens = frappe.cache().get_value(tokens_key)
         try:
             tokens_int = int(tokens) if tokens is not None else burst
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             tokens_int = burst
 
         if tokens_int >= 1:
@@ -138,7 +138,7 @@ def _refill(
         return
     try:
         last_f = float(last)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         last_f = now
 
     elapsed = now - last_f
@@ -151,7 +151,7 @@ def _refill(
 
     try:
         current = int(frappe.cache().get_value(tokens_key) or 0)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         current = 0
     new_value = min(burst, current + add)
     frappe.cache().set_value(tokens_key, new_value)
@@ -168,7 +168,7 @@ def current_daily_quota(account: str) -> int:
     val = frappe.cache().get_value(_quota_key(account))
     try:
         return int(val) if val is not None else 0
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return 0
 
 

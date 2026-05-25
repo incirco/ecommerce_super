@@ -502,7 +502,7 @@ def _parse_retry_after(value: str | None) -> int | None:
         return None
     try:
         return int(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 

@@ -161,7 +161,7 @@ def sum_path(payload: Any, path: str) -> float:
     for v in get_path(payload, path):
         try:
             total += float(v)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             continue
     return total
 
