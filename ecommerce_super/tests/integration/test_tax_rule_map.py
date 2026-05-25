@@ -25,6 +25,7 @@ from frappe.tests.utils import FrappeTestCase
 from ecommerce_super.easyecom.doctype.easyecom_tax_rule_map.easyecom_tax_rule_map import (
     _effective_rate_for_template,
     resolve_and_stamp_tax,
+    test_resolve,
 )
 from ecommerce_super.tests.integration.test_location_workflow import (
     _ensure_admin_has_fde_role,
@@ -503,6 +504,172 @@ class TestDbUnique(FrappeTestCase):
             )
         ):
             _make_map(tax_rule_name=f"{self.PREFIX}dup", company=self.company)
+
+
+class TestDryRunMatchesRealResolver(FrappeTestCase):
+    """The load-bearing guarantee of the Test Resolve UI: the dry-run's
+    reconciliation verdict for a given map + sample rate is the SAME
+    verdict the real resolver produces for an item-sync against the
+    same map with a product carrying that rate.
+
+    Both paths flow through preview_stamp + reconcile_rate (the shared
+    pure functions). This test pins that wiring — if anyone refactors
+    one path without the other, the test fails immediately and
+    surfaces the divergence.
+    """
+
+    PREFIX = "tax-parity-"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.company = _ensure_test_company()
+
+    def setUp(self) -> None:
+        _wipe_tax_maps(self.PREFIX)
+
+    def tearDown(self) -> None:
+        _wipe_tax_maps(self.PREFIX)
+
+    def _make_flat_map(self) -> str:
+        return _make_map(
+            tax_rule_name=f"{self.PREFIX}flat",
+            company=self.company,
+            rows=[{"item_tax_template": GST_18_TEMPLATE}],
+        )
+
+    def _make_slab_map(self) -> str:
+        return _make_map(
+            tax_rule_name=f"{self.PREFIX}slab",
+            company=self.company,
+            rows=[
+                {"item_tax_template": GST_5_TEMPLATE, "minimum_net_rate": 0, "maximum_net_rate": 2500},
+                {"item_tax_template": GST_18_TEMPLATE, "minimum_net_rate": 2500},
+            ],
+        )
+
+    def _make_empty_map(self) -> str:
+        return _make_map(tax_rule_name=f"{self.PREFIX}empty", company=self.company)
+
+    def _real_verdict(self, map_doc: "frappe.model.document.Document", rate: float) -> tuple[bool, list[str]]:
+        """Run the real resolver against a fresh item; return its
+        verdict + discrepancies."""
+        item = _make_test_item(f"parity-item-{rate}")
+        product = {"tax_rule_name": map_doc.tax_rule_name, "tax_rate": rate}
+        r = resolve_and_stamp_tax(item, product, self.company)
+        return r.reconciled, r.discrepancies
+
+    def _dry_verdict(self, map_name: str, rate: float) -> tuple[bool, list[str]]:
+        """Run the dry-run; return its verdict + discrepancies."""
+        d = test_resolve(map_name=map_name, sample_tax_rate=rate)
+        return d["reconciled"], d["discrepancies"]
+
+    def test_flat_rule_in_band_parity(self) -> None:
+        name = self._make_flat_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        real_v, real_d = self._real_verdict(map_doc, 0.18)
+        dry_v, dry_d = self._dry_verdict(name, 0.18)
+        self.assertEqual(real_v, dry_v, "reconciled verdict diverged (in-band flat)")
+        self.assertEqual(real_v, True)
+        self.assertEqual(real_d, dry_d, "discrepancy text diverged (in-band flat)")
+        self.assertEqual(real_d, [])
+
+    def test_flat_rule_out_of_band_parity(self) -> None:
+        name = self._make_flat_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        real_v, real_d = self._real_verdict(map_doc, 0.12)
+        dry_v, dry_d = self._dry_verdict(name, 0.12)
+        self.assertEqual(real_v, dry_v, "reconciled verdict diverged (out-of-band flat)")
+        self.assertEqual(real_v, False)
+        # Both paths must produce the SAME discrepancy text — they go
+        # through the same reconcile_rate function.
+        self.assertEqual(real_d, dry_d)
+        self.assertEqual(len(real_d), 1)
+        self.assertIn("0.12", real_d[0])
+
+    def test_slab_rule_low_band_parity(self) -> None:
+        name = self._make_slab_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        real_v, real_d = self._real_verdict(map_doc, 0.05)
+        dry_v, dry_d = self._dry_verdict(name, 0.05)
+        self.assertEqual(real_v, dry_v)
+        self.assertEqual(real_d, dry_d)
+        self.assertTrue(real_v)
+
+    def test_slab_rule_high_band_parity(self) -> None:
+        name = self._make_slab_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        real_v, real_d = self._real_verdict(map_doc, 0.18)
+        dry_v, dry_d = self._dry_verdict(name, 0.18)
+        self.assertEqual(real_v, dry_v)
+        self.assertEqual(real_d, dry_d)
+        self.assertTrue(real_v)
+
+    def test_slab_rule_out_of_band_parity(self) -> None:
+        name = self._make_slab_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        real_v, real_d = self._real_verdict(map_doc, 0.28)
+        dry_v, dry_d = self._dry_verdict(name, 0.28)
+        self.assertEqual(real_v, dry_v)
+        self.assertEqual(real_d, dry_d)
+        self.assertFalse(real_v)
+
+    def test_empty_map_parity(self) -> None:
+        """A map with no rows: real resolver returns mapped=True,
+        reconciled=False, discrepancy='no Item Tax Template rows'.
+        The dry-run reaches the same verdict via the same code path."""
+        name = self._make_empty_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        real_v, real_d = self._real_verdict(map_doc, 0.18)
+        dry_result = test_resolve(map_name=name, sample_tax_rate=0.18)
+        self.assertFalse(dry_result["mapped"])
+        self.assertFalse(real_v)
+        # The dry-run wraps the empty_reason as preview-level info;
+        # the real resolver wraps the same string into result.discrepancies.
+        # Both refer to the same underlying preview.empty_reason text.
+        self.assertEqual(len(real_d), 1)
+        self.assertIn("has no", real_d[0])
+        self.assertIn("has no", dry_result["empty_reason"])
+
+    def test_no_sample_rate_skips_reconciliation_parity(self) -> None:
+        """A None sample tax_rate means 'preview only'; both paths
+        treat that as reconciled=True (no rate to fail against)."""
+        name = self._make_flat_map()
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", name)
+        # Real path: product with no tax_rate.
+        item = _make_test_item("no-rate")
+        r = resolve_and_stamp_tax(
+            item, {"tax_rule_name": map_doc.tax_rule_name}, self.company
+        )
+        # Dry-run: pass blank.
+        d = test_resolve(map_name=name, sample_tax_rate=None)
+        self.assertEqual(r.reconciled, d["reconciled"])
+        self.assertEqual(r.discrepancies, d["discrepancies"])
+        self.assertTrue(r.reconciled)
+
+    def test_dry_run_does_not_persist_anything(self) -> None:
+        """Calling test_resolve against an unmapped rule MUST NOT
+        auto-create a map (that's the production path only). And it
+        MUST NOT mutate any existing map."""
+        # No map exists for this rule — dry-run is called against an
+        # existing map only, but the FDE could in principle hit
+        # test_resolve on a map and then we check that calling it
+        # doesn't modify the map's rows / state.
+        name = self._make_flat_map()
+        before = frappe.get_doc("EasyEcom Tax Rule Map", name).as_dict()
+        # Run dry-run several times with various inputs.
+        for rate in (0.05, 0.12, 0.18, 0.28, None):
+            test_resolve(map_name=name, sample_tax_rate=rate, sample_cess=7.5)
+        after = frappe.get_doc("EasyEcom Tax Rule Map", name).as_dict()
+        # Snapshot equality on the load-bearing fields (modified
+        # timestamps change naturally; exclude those).
+        for f in (
+            "tax_rule_name",
+            "company",
+            "workflow_state",
+            "taxes",
+        ):
+            self.assertEqual(before.get(f), after.get(f), f"field {f} mutated by dry-run")
 
 
 class TestWorkflowFixture(FrappeTestCase):

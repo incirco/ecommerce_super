@@ -92,6 +92,118 @@ class EasyEcomTaxRuleMap(Document):
 # ----- Resolver result + the resolver itself -----
 
 
+# ----- Pure preview / reconcile (shared by real resolver + dry-run) -----
+
+
+@dataclass
+class StampPreview:
+    """A pure, item-free view of what a Tax Rule Map would stamp.
+
+    Shared between the real resolver and the Test Resolve dry-run so
+    the two CANNOT diverge — if the FDE's dry-run says 'reconciled,'
+    a real sync of the same product against the same map will also
+    say 'reconciled,' and vice versa. Adding this gate is the whole
+    point of having a Test Resolve UI: a feedback mechanism the FDE
+    trusts only if it's wired to the same code the production path
+    runs.
+    """
+
+    rows_to_stamp: list[dict]  # field set matches Item Tax child columns
+    template_rates: dict[str, float]  # template_name → effective rate (for reconcile feedback)
+    mapped: bool  # False iff the map has zero rows (FDE hasn't configured)
+    empty_reason: str | None  # populated when mapped=False on an existing map
+
+
+def preview_stamp(map_doc: "EasyEcomTaxRuleMap") -> StampPreview:
+    """Compute the rows the resolver WOULD stamp from this map.
+
+    Pure — never mutates the map, never touches an item, never
+    persists anything. Used by both `resolve_and_stamp_tax` (the real
+    path) and `test_resolve` (the dry-run).
+    """
+    rows = [
+        {
+            "item_tax_template": r.item_tax_template,
+            "tax_category": r.tax_category,
+            "valid_from": r.valid_from,
+            "minimum_net_rate": r.minimum_net_rate,
+            "maximum_net_rate": r.maximum_net_rate,
+        }
+        for r in map_doc.taxes or []
+    ]
+    template_rates: dict[str, float] = {}
+    for r in rows:
+        rate = _effective_rate_for_template(r["item_tax_template"])
+        if rate is not None:
+            template_rates[r["item_tax_template"]] = rate
+    if not rows:
+        return StampPreview(
+            rows_to_stamp=[],
+            template_rates={},
+            mapped=False,
+            empty_reason=(
+                f"EasyEcom Tax Rule Map {map_doc.name} exists but has no "
+                f"Item Tax Template rows. The FDE must complete the "
+                f"mapping (workflow: Configure transition is gated on "
+                f"the taxes table being non-empty)."
+            ),
+        )
+    return StampPreview(
+        rows_to_stamp=rows, template_rates=template_rates, mapped=True, empty_reason=None
+    )
+
+
+def reconcile_rate(
+    *,
+    resolved_rate: Any,
+    preview: StampPreview,
+    map_docname: str | None = None,
+    rule_name: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Pure reconciliation: does `resolved_rate` match any of the
+    preview's template effective rates?
+
+    Returns (reconciled, discrepancies). The discrepancy strings are
+    deliberately user-facing — they're the messages the FDE sees in
+    the desk's Test Resolve dialog AND the messages the queue surfaces
+    when the production resolver flags a real sync as failed.
+
+    None / unparseable inputs are handled defensively:
+      - resolved_rate is None → reconciled=True, no discrepancy (the
+        product didn't carry a rate; the stamp still happened; ERPNext
+        will apply the template's rate at invoice time).
+      - resolved_rate is non-numeric → reconciled=False, discrepancy.
+    """
+    if resolved_rate is None:
+        return True, []
+    try:
+        resolved_f = float(resolved_rate)
+    except (TypeError, ValueError):
+        return False, [f"product.tax_rate is not a number: {resolved_rate!r}"]
+
+    mapped_rates = list(preview.template_rates.values())
+    if not mapped_rates:
+        return False, [
+            f"Could not read effective rates for any of the "
+            f"{len(preview.rows_to_stamp)} Item Tax Templates"
+            + (f" on {map_docname}" if map_docname else "")
+            + "; reconciliation skipped."
+        ]
+
+    if any(abs(resolved_f - r) <= RATE_RECONCILE_TOLERANCE for r in mapped_rates):
+        return True, []
+
+    rule_descr = f" EE rule {rule_name!r}" if rule_name else " the EE rule"
+    return False, [
+        f"product.tax_rate={resolved_f} does not match any of the mapped "
+        f"rates"
+        + (f" on {map_docname}" if map_docname else "")
+        + f": {sorted(mapped_rates)}."
+        f"{rule_descr} may have changed, or the FDE entered a wrong band — "
+        "review the mapping."
+    ]
+
+
 @dataclass
 class TaxResolutionResult:
     """What the resolver tells its caller (8d Item sync).
@@ -183,13 +295,15 @@ def resolve_and_stamp_tax(item: Any, product: dict, company: str) -> TaxResoluti
             ],
         )
 
-    # Mapped path — stamp the rows and reconcile.
+    # Mapped path — preview, stamp, reconcile via the SHARED pure
+    # functions (preview_stamp / reconcile_rate). The Test Resolve
+    # dry-run uses the same two functions, so what the FDE sees in
+    # the desk dialog is exactly what this production path does.
     map_doc = frappe.get_doc("EasyEcom Tax Rule Map", map_name)
+    preview = preview_stamp(map_doc)
 
-    if not map_doc.taxes:
-        # Map exists for (rule, company) but the FDE hasn't filled in
-        # any rows — the "company-has-no-rows" failure mode from
-        # §8.5.7. Don't silently pass.
+    if not preview.mapped:
+        # Empty taxes — §8.5.7 'company has no rows for its rule'.
         return TaxResolutionResult(
             mapped=True,
             auto_created=False,
@@ -197,20 +311,15 @@ def resolve_and_stamp_tax(item: Any, product: dict, company: str) -> TaxResoluti
             stamped_count=0,
             cess=cess_value,
             reconciled=False,
-            discrepancies=[
-                f"EasyEcom Tax Rule Map {map_doc.name} exists but has no "
-                f"Item Tax Template rows. The FDE must complete the "
-                f"mapping (workflow: Configure transition is gated on "
-                f"the taxes table being non-empty)."
-            ],
+            discrepancies=[preview.empty_reason or ""],
         )
 
-    stamped = _stamp_taxes_onto_item(item, map_doc)
-    discrepancies: list[str] = []
-    reconciled = _reconcile_resolved_rate(
-        product=product,
-        map_doc=map_doc,
-        discrepancies=discrepancies,
+    stamped = _stamp_preview_onto_item(item, preview)
+    reconciled, discrepancies = reconcile_rate(
+        resolved_rate=product.get("tax_rate"),
+        preview=preview,
+        map_docname=map_doc.name,
+        rule_name=tax_rule_name,
     )
 
     return TaxResolutionResult(
@@ -227,84 +336,28 @@ def resolve_and_stamp_tax(item: Any, product: dict, company: str) -> TaxResoluti
 # ----- Helpers -----
 
 
-def _stamp_taxes_onto_item(item: Any, map_doc: "EasyEcomTaxRuleMap") -> int:
-    """Replace item.taxes with copies of the map's rows. Both child
-    tables use the same DocType (Item Tax) so the field set is
-    identical — a straight row-copy. Returns the number of rows
-    stamped.
+def _stamp_preview_onto_item(item: Any, preview: StampPreview) -> int:
+    """Apply the preview's rows onto item.taxes. Both source (preview)
+    and target (Item.taxes) speak the same Item Tax field set, so this
+    is a straight row-copy. Returns the number of rows stamped.
+
+    The clearing semantics match the resolver's contract: the map is
+    the source of truth for the item's Item Tax Template rows; any
+    pre-existing rows on the item are wiped before the stamp.
     """
-    # Clear any existing taxes — the map is the source of truth for
-    # this item's tax templates.
     item.set("taxes", [])
-    for row in map_doc.taxes or []:
+    for row in preview.rows_to_stamp:
         item.append(
             "taxes",
             {
-                "item_tax_template": row.item_tax_template,
-                "tax_category": row.tax_category,
-                "valid_from": row.valid_from,
-                "minimum_net_rate": row.minimum_net_rate,
-                "maximum_net_rate": row.maximum_net_rate,
+                "item_tax_template": row["item_tax_template"],
+                "tax_category": row["tax_category"],
+                "valid_from": row["valid_from"],
+                "minimum_net_rate": row["minimum_net_rate"],
+                "maximum_net_rate": row["maximum_net_rate"],
             },
         )
-    return len(map_doc.taxes or [])
-
-
-def _reconcile_resolved_rate(
-    *,
-    product: dict,
-    map_doc: "EasyEcomTaxRuleMap",
-    discrepancies: list[str],
-) -> bool:
-    """The product carries the rate EE *resolved* for it (e.g. 0.18 for
-    GST 18%). Check that it matches one of the mapped templates'
-    effective rates. Mismatch → append to discrepancies; return False.
-
-    Note: the Item Tax Template's effective rate is read from the
-    template doc's `taxes` child (the per-account-head rate rows). For
-    a typical GST template like 'GST 18% - {abbr}', the effective rate
-    is the sum of the CGST + SGST account rates (e.g. 9 + 9 = 18%).
-    We use _effective_rate_for_template(...) which handles this.
-    """
-    resolved = product.get("tax_rate")
-    if resolved is None:
-        # No resolved rate on the payload — nothing to reconcile against.
-        # Treat as reconciled (the FDE will see the stamp; ERPNext applies
-        # the template's rate at invoice time).
-        return True
-    try:
-        resolved_f = float(resolved)
-    except (TypeError, ValueError):
-        discrepancies.append(
-            f"product.tax_rate is not a number: {resolved!r}"
-        )
-        return False
-
-    mapped_rates: list[float] = []
-    for row in map_doc.taxes or []:
-        rate = _effective_rate_for_template(row.item_tax_template)
-        if rate is not None:
-            mapped_rates.append(rate)
-
-    if not mapped_rates:
-        # Can't reconcile — template rates were unreadable. Don't false-
-        # positive: surface as a discrepancy.
-        discrepancies.append(
-            f"Could not read effective rates for any of the {len(map_doc.taxes or [])} "
-            f"Item Tax Templates on {map_doc.name}; reconciliation skipped."
-        )
-        return False
-
-    if any(abs(resolved_f - r) <= RATE_RECONCILE_TOLERANCE for r in mapped_rates):
-        return True
-
-    discrepancies.append(
-        f"product.tax_rate={resolved_f} does not match any of the mapped "
-        f"rates on {map_doc.name}: {sorted(mapped_rates)}. EE rule "
-        f"{map_doc.tax_rule_name!r} may have changed, or the FDE entered "
-        f"a wrong band — review the mapping."
-    )
-    return False
+    return len(preview.rows_to_stamp)
 
 
 def _effective_rate_for_template(template_name: str | None) -> float | None:
@@ -466,3 +519,99 @@ def _notify_fde_of_new_unconfigured_map(map_docname: str) -> None:
             }
         )
         notif.insert(ignore_permissions=True)
+
+
+# ----- Test Resolve dry-run (FDE desk-facing) -----
+
+
+@frappe.whitelist()
+def test_resolve(
+    map_name: str,
+    sample_tax_rate: float | str | None = None,
+    sample_cess: float | str | None = None,
+) -> dict:
+    """Dry-run the resolver against a sample tax_rate + optional cess.
+
+    Mirrors the §5 Test Mapping pattern: lets the FDE verify a Tax
+    Rule Map in the desk without an Item Sync round-trip and without
+    persisting anything — no item stamping, no auto-create on the
+    'unmapped' branch (we're verifying an existing map, not invoking
+    the production unmapped path), no DB writes.
+
+    Uses the SAME pure preview_stamp + reconcile_rate functions the
+    real `resolve_and_stamp_tax` calls. So a 'reconciled' verdict in
+    Test Resolve is the same verdict an Item Sync of the same product
+    against the same map will produce.
+
+    Returns a JSON-friendly dict the form-side dialog renders.
+    """
+    if not frappe.has_permission("EasyEcom Tax Rule Map", "read", doc=map_name):
+        frappe.throw(
+            _("You don't have read permission on EasyEcom Tax Rule Map {0}.").format(
+                map_name
+            ),
+            frappe.PermissionError,
+        )
+
+    if not frappe.db.exists("EasyEcom Tax Rule Map", map_name):
+        return {"ok": False, "message": _("Tax Rule Map {0} not found.").format(map_name)}
+
+    map_doc = frappe.get_doc("EasyEcom Tax Rule Map", map_name)
+    preview = preview_stamp(map_doc)
+
+    # Normalise the sample inputs. Frappe sends blank/empty over the
+    # wire when the FDE leaves a Float / Currency field empty.
+    sample_rate_f: float | None = None
+    if sample_tax_rate not in (None, "", "None"):
+        try:
+            sample_rate_f = float(sample_tax_rate)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "message": _(
+                    "Sample tax_rate {0!r} is not a number."
+                ).format(sample_tax_rate),
+            }
+
+    sample_cess_f: float = 0.0
+    if sample_cess not in (None, "", "None"):
+        try:
+            sample_cess_f = float(sample_cess)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "message": _("Sample cess {0!r} is not a number.").format(sample_cess),
+            }
+
+    reconciled, discrepancies = reconcile_rate(
+        resolved_rate=sample_rate_f,
+        preview=preview,
+        map_docname=map_doc.name,
+        rule_name=map_doc.tax_rule_name,
+    )
+
+    return {
+        "ok": True,
+        "map_name": map_doc.name,
+        "tax_rule_name": map_doc.tax_rule_name,
+        "company": map_doc.company,
+        "workflow_state": map_doc.workflow_state,
+        "mapped": preview.mapped,
+        "empty_reason": preview.empty_reason,
+        "rows_to_stamp": [
+            {
+                "item_tax_template": r["item_tax_template"],
+                "tax_category": r["tax_category"],
+                "valid_from": str(r["valid_from"]) if r["valid_from"] else None,
+                "minimum_net_rate": r["minimum_net_rate"],
+                "maximum_net_rate": r["maximum_net_rate"],
+                "effective_rate": preview.template_rates.get(r["item_tax_template"]),
+            }
+            for r in preview.rows_to_stamp
+        ],
+        "stamped_count": len(preview.rows_to_stamp),
+        "sample_tax_rate": sample_rate_f,
+        "reconciled": reconciled,
+        "discrepancies": discrepancies,
+        "cess": sample_cess_f,
+    }
