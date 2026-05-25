@@ -47,7 +47,8 @@ class TestChannelPullOutputContract(FrappeTestCase):
     def test_active_channel_maps_cleanly(self) -> None:
         row = {"marketplace_name": "Flipkart", "marketplace_id": 2, "status": "Active"}
         out = self.executor.pull(row)
-        self.assertEqual(out["marketplace_id"], "2")  # int_to_str
+        # marketplace_id is Int (§31.2.18) — identity transform, no coercion.
+        self.assertEqual(out["marketplace_id"], 2)
         self.assertEqual(out["marketplace_name"], "Flipkart")
         self.assertEqual(out["is_active"], 1)
 
@@ -75,10 +76,13 @@ class TestChannelPullOutputContract(FrappeTestCase):
         leaked = FORBIDDEN_OUTPUT_FIELDS.intersection(set(out.keys()))
         self.assertEqual(leaked, set())
 
-    def test_int_marketplace_id_coerced_to_string(self) -> None:
+    def test_marketplace_id_preserved_as_int(self) -> None:
+        """marketplace_id is Int per §31.2.18 — the ruleset's identity
+        transform must preserve the int (no string coercion)."""
         row = {"marketplace_name": "Meesho", "marketplace_id": 122, "status": "Active"}
         out = self.executor.pull(row)
-        self.assertIsInstance(out["marketplace_id"], str)
+        self.assertEqual(out["marketplace_id"], 122)
+        self.assertIsInstance(out["marketplace_id"], int)
 
     def test_marketplace_id_required(self) -> None:
         from ecommerce_super.easyecom.exceptions import (

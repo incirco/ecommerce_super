@@ -82,9 +82,21 @@ class TestRolesShippedAsFixtures(FrappeTestCase):
 
 class TestComposedFixtures(FrappeTestCase):
     def test_marketplace_starter_seed_loaded(self) -> None:
-        """Phase I shipped 6 starter marketplaces."""
-        count = frappe.db.count("Marketplace", filters={"name": ["like", "starter-%"]})
-        self.assertGreaterEqual(count, 6)
+        """§8b refactor (marketplace_id Data → Int): the seed now ships
+        well-known channels with their REAL EE numeric ids. The legacy
+        string-keyed starter-* entries were dropped by the
+        drop_starter_marketplace_rows pre-model-sync patch."""
+        # Real EE ids the §8b refactor seeded.
+        for mid in (2, 8, 60, 100, 122):
+            self.assertTrue(
+                frappe.db.exists("Marketplace", {"marketplace_id": mid}),
+                f"Seed Marketplace marketplace_id={mid} not loaded",
+            )
+        # And confirm the legacy starter-* names are absent.
+        legacy = frappe.db.count(
+            "Marketplace", filters={"name": ["like", "starter-%"]}
+        )
+        self.assertEqual(legacy, 0)
 
     def test_channel_accounting_dimension_present(self) -> None:
         row = frappe.db.get_value(

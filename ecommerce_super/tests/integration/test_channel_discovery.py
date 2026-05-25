@@ -19,14 +19,30 @@ from ecommerce_super.easyecom.flows.channel_discovery import (
 from ecommerce_super.tests.factories import make_location
 
 
-def _wipe_marketplaces(prefix: str | None = None) -> None:
-    filters = {"marketplace_id": ("like", f"{prefix}%")} if prefix else {}
-    for n in frappe.db.get_all("Marketplace", filters=filters, pluck="name"):
+def _wipe_marketplaces(mids: list[int]) -> None:
+    """Wipe the specific Marketplace rows the test created. marketplace_id
+    is Int (§31.2.18) — we filter by id list rather than name-prefix."""
+    if not mids:
+        return
+    for n in frappe.db.get_all(
+        "Marketplace",
+        filters={"marketplace_id": ("in", mids)},
+        pluck="name",
+    ):
         try:
             frappe.delete_doc("Marketplace", n, force=True, ignore_permissions=True)
         except Exception:
             pass
     frappe.db.commit()
+
+
+# Test marketplace_ids — high range to avoid colliding with the seed
+# (Flipkart=2, Amazon.in=8, TaTa Cliq=60, Customer Cash Sales=100,
+# meesho=122) or real EE ids.
+TEST_MID_FLIPKART = 99002
+TEST_MID_TATA_CLIQ = 99060
+TEST_MID_MEESHO = 99122
+TEST_MIDS = [TEST_MID_FLIPKART, TEST_MID_TATA_CLIQ, TEST_MID_MEESHO]
 
 
 def _wipe_locations(prefix: str) -> None:
@@ -65,14 +81,12 @@ class TestPerLocationSweep(FrappeTestCase):
     workflow_state, and MUST dedupe by marketplace_id."""
 
     PREFIX_LOC = "chan-sweep-loc-"
-    PREFIX_MID = "chan-sweep-"
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        # Three locations in different workflow states — the sweep covers
-        # all four (To Map, Mapped but not Live, Live, Skipped) per the
-        # §8.6.3 contract.
+        # Two locations in different workflow states — the sweep covers
+        # them both (and every other state) per the §8.6.3 contract.
         cls.loc_to_map = make_location(
             location_key=f"{cls.PREFIX_LOC}to-map", workflow_state="To Map"
         )
@@ -86,10 +100,7 @@ class TestPerLocationSweep(FrappeTestCase):
         super().tearDownClass()
 
     def setUp(self) -> None:
-        _wipe_marketplaces("chan-sweep-")
-        # Also clean any real-id channels the test creates.
-        for mid in (2, 60, 122):
-            _wipe_marketplaces(str(mid))
+        _wipe_marketplaces(TEST_MIDS)
         self._original_client = channel_discovery.EasyEcomClient
         channel_discovery.EasyEcomClient = _StubClient
         _StubClient.PER_LOCATION_RESPONSES = {}
@@ -97,9 +108,7 @@ class TestPerLocationSweep(FrappeTestCase):
 
     def tearDown(self) -> None:
         channel_discovery.EasyEcomClient = self._original_client
-        _wipe_marketplaces("chan-sweep-")
-        for mid in (2, 60, 122):
-            _wipe_marketplaces(str(mid))
+        _wipe_marketplaces(TEST_MIDS)
 
     def test_sweep_polls_every_location_regardless_of_workflow_state(self) -> None:
         """To Map AND Skipped locations both polled — channel catalogue
@@ -108,10 +117,10 @@ class TestPerLocationSweep(FrappeTestCase):
         may have leaked Location rows)."""
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX_LOC}to-map": {
-                "data": [{"marketplace_id": 2, "marketplace_name": "Flipkart", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_FLIPKART, "marketplace_name": "Flipkart", "status": "Active"}]
             },
             f"{self.PREFIX_LOC}skipped": {
-                "data": [{"marketplace_id": 122, "marketplace_name": "meesho", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_MEESHO, "marketplace_name": "meesho", "status": "Active"}]
             },
         }
         result = sweep_all_locations()
@@ -119,24 +128,26 @@ class TestPerLocationSweep(FrappeTestCase):
         succeeded = set(result["succeeded_location_keys"])
         self.assertIn(f"{self.PREFIX_LOC}to-map", succeeded)
         self.assertIn(f"{self.PREFIX_LOC}skipped", succeeded)
-        # Both channels landed.
-        self.assertTrue(frappe.db.exists("Marketplace", {"marketplace_id": "2"}))
-        self.assertTrue(frappe.db.exists("Marketplace", {"marketplace_id": "122"}))
+        # Both channels landed (filter by int marketplace_id — field is Int per §31.2.18).
+        self.assertTrue(frappe.db.exists("Marketplace", {"marketplace_id": TEST_MID_FLIPKART}))
+        self.assertTrue(frappe.db.exists("Marketplace", {"marketplace_id": TEST_MID_MEESHO}))
 
     def test_dedupe_by_marketplace_id(self) -> None:
         """Same channel on two locations → ONE Marketplace row."""
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX_LOC}to-map": {
-                "data": [{"marketplace_id": 2, "marketplace_name": "Flipkart", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_FLIPKART, "marketplace_name": "Flipkart", "status": "Active"}]
             },
             f"{self.PREFIX_LOC}skipped": {
-                "data": [{"marketplace_id": 2, "marketplace_name": "Flipkart", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_FLIPKART, "marketplace_name": "Flipkart", "status": "Active"}]
             },
         }
         sweep_all_locations()
-        # Exactly one Marketplace row exists for id 2 (deduped across the
-        # two-location response).
-        rows = frappe.db.get_all("Marketplace", filters={"marketplace_id": "2"})
+        # Exactly one Marketplace row exists for the test id (deduped
+        # across the two-location response).
+        rows = frappe.db.get_all(
+            "Marketplace", filters={"marketplace_id": TEST_MID_FLIPKART}
+        )
         self.assertEqual(len(rows), 1)
 
     def test_is_active_promoted_when_active_on_any_location(self) -> None:
@@ -144,15 +155,15 @@ class TestPerLocationSweep(FrappeTestCase):
         the catalogue (active-on-any-location)."""
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX_LOC}to-map": {
-                "data": [{"marketplace_id": 60, "marketplace_name": "TaTa Cliq", "status": "Inactive"}]
+                "data": [{"marketplace_id": TEST_MID_TATA_CLIQ, "marketplace_name": "TaTa Cliq", "status": "Inactive"}]
             },
             f"{self.PREFIX_LOC}skipped": {
-                "data": [{"marketplace_id": 60, "marketplace_name": "TaTa Cliq", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_TATA_CLIQ, "marketplace_name": "TaTa Cliq", "status": "Active"}]
             },
         }
         sweep_all_locations()
         is_active = frappe.db.get_value(
-            "Marketplace", {"marketplace_id": "60"}, "is_active"
+            "Marketplace", {"marketplace_id": TEST_MID_TATA_CLIQ}, "is_active"
         )
         self.assertEqual(int(is_active), 1)
 
@@ -162,15 +173,13 @@ class TestPerLocationSweep(FrappeTestCase):
         helper."""
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX_LOC}to-map": {
-                "data": [{"marketplace_id": 2, "marketplace_name": "Flipkart", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_FLIPKART, "marketplace_name": "Flipkart", "status": "Active"}]
             },
             # Skipped location will RAISE.
         }
         _StubClient.RAISE_FOR_LOCATIONS = {f"{self.PREFIX_LOC}skipped"}
         result = sweep_all_locations()
         # The to-map location succeeded; the skipped location failed.
-        # Assert on our specific locations rather than total count
-        # (other suite tests may have leaked Locations).
         succeeded = set(result["succeeded_location_keys"])
         self.assertIn(f"{self.PREFIX_LOC}to-map", succeeded)
         self.assertNotIn(f"{self.PREFIX_LOC}skipped", succeeded)
@@ -180,16 +189,18 @@ class TestPerLocationSweep(FrappeTestCase):
             if loc["location_key"] == f"{self.PREFIX_LOC}skipped":
                 self.assertIsInstance(exc, RuntimeError)
         # The successful location's channel still landed.
-        self.assertTrue(frappe.db.exists("Marketplace", {"marketplace_id": "2"}))
+        self.assertTrue(frappe.db.exists("Marketplace", {"marketplace_id": TEST_MID_FLIPKART}))
 
     def test_new_channels_land_in_unclassified(self) -> None:
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX_LOC}to-map": {
-                "data": [{"marketplace_id": 122, "marketplace_name": "meesho", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_MEESHO, "marketplace_name": "meesho", "status": "Active"}]
             },
         }
         sweep_all_locations()
-        ws = frappe.db.get_value("Marketplace", {"marketplace_id": "122"}, "workflow_state")
+        ws = frappe.db.get_value(
+            "Marketplace", {"marketplace_id": TEST_MID_MEESHO}, "workflow_state"
+        )
         self.assertEqual(ws, "Unclassified")
 
     def test_repull_skips_existing_does_not_reclassify(self) -> None:
@@ -198,7 +209,7 @@ class TestPerLocationSweep(FrappeTestCase):
         # First sweep: discover the channel.
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX_LOC}to-map": {
-                "data": [{"marketplace_id": 122, "marketplace_name": "meesho", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_MEESHO, "marketplace_name": "meesho", "status": "Active"}]
             },
         }
         sweep_all_locations()
@@ -206,7 +217,7 @@ class TestPerLocationSweep(FrappeTestCase):
         # in the test — production goes through Actions → Classify).
         frappe.db.set_value(
             "Marketplace",
-            {"marketplace_id": "122"},
+            {"marketplace_id": TEST_MID_MEESHO},
             {"channel_type": "B2C Marketplace", "workflow_state": "Classified"},
         )
         frappe.db.commit()
@@ -215,8 +226,12 @@ class TestPerLocationSweep(FrappeTestCase):
         # Counted as existing, not new.
         self.assertEqual(len(result2["new_channels"]), 0)
         # FDE-set fields untouched.
-        ws = frappe.db.get_value("Marketplace", {"marketplace_id": "122"}, "workflow_state")
-        ct = frappe.db.get_value("Marketplace", {"marketplace_id": "122"}, "channel_type")
+        ws = frappe.db.get_value(
+            "Marketplace", {"marketplace_id": TEST_MID_MEESHO}, "workflow_state"
+        )
+        ct = frappe.db.get_value(
+            "Marketplace", {"marketplace_id": TEST_MID_MEESHO}, "channel_type"
+        )
         self.assertEqual(ws, "Classified")
         self.assertEqual(ct, "B2C Marketplace")
 
@@ -244,16 +259,12 @@ class TestWhitelistWrapper(FrappeTestCase):
         channel_discovery.EasyEcomClient = _StubClient
         _StubClient.PER_LOCATION_RESPONSES = {}
         _StubClient.RAISE_FOR_LOCATIONS = set()
-        _wipe_marketplaces("chan-wl-")
-        for mid in (2,):
-            _wipe_marketplaces(str(mid))
+        _wipe_marketplaces([TEST_MID_FLIPKART])
 
     def tearDown(self) -> None:
         frappe.set_user(self._original_user)
         channel_discovery.EasyEcomClient = self._original_client
-        _wipe_marketplaces("chan-wl-")
-        for mid in (2,):
-            _wipe_marketplaces(str(mid))
+        _wipe_marketplaces([TEST_MID_FLIPKART])
         for email in ("nofde-channels@test.local",):
             if frappe.db.exists("User", email):
                 frappe.delete_doc("User", email, force=True, ignore_permissions=True)
@@ -275,7 +286,7 @@ class TestWhitelistWrapper(FrappeTestCase):
     def test_summary_shape_on_success(self) -> None:
         _StubClient.PER_LOCATION_RESPONSES = {
             f"{self.PREFIX}loc": {
-                "data": [{"marketplace_id": 2, "marketplace_name": "Flipkart", "status": "Active"}]
+                "data": [{"marketplace_id": TEST_MID_FLIPKART, "marketplace_name": "Flipkart", "status": "Active"}]
             },
         }
         result = discover_channels()
@@ -293,9 +304,9 @@ class TestWhitelistWrapper(FrappeTestCase):
             "failed_locations",
         ):
             self.assertIn(key, result)
-        # Our specific channel is in new_channels (or already existed).
+        # Our specific channel is in the DB after the sweep.
         self.assertTrue(
-            frappe.db.exists("Marketplace", {"marketplace_id": "2"}),
+            frappe.db.exists("Marketplace", {"marketplace_id": TEST_MID_FLIPKART}),
             "Discover Channels did not create the Marketplace row our stub returned",
         )
 

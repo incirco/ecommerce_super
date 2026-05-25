@@ -596,9 +596,9 @@
         "erpnext_path": "marketplace_id",
         "easyecom_path": "marketplace_id",
         "transform_push": "identity",
-        "transform_pull": "int_to_str",
+        "transform_pull": "identity",
         "required": 1,
-        "notes": "EE sends marketplace_id as Int (2, 60, 122). Marketplace.marketplace_id is Data (autoname compatibility with the §5-era starter seed); int_to_str coerces."
+        "notes": "EE sends marketplace_id as Int (2, 60, 122). Marketplace.marketplace_id is Int (§31.2.18). identity — no coercion needed."
       },
       {
         "erpnext_path": "marketplace_name",

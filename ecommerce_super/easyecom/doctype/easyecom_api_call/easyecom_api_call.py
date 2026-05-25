@@ -20,16 +20,42 @@ from frappe.model.document import Document
 
 class EasyEcomAPICall(Document):
     def validate(self) -> None:
-        # Foundational calls leave company blank and bear is_foundational=1.
-        # Entity-sync calls require company. Enforce the rule.
+        # Three valid shapes (the §31.2.4 binary plus the §8b per-location
+        # extension):
+        #
+        #   1. is_foundational=1, company blank
+        #      → token / /getAllLocation / connection test (§7.7). Always
+        #        account-scoped.
+        #
+        #   2. is_foundational=0, company set
+        #      → entity-sync call against a mapped location whose Frappe
+        #        Company is known. The §31.2.4 default.
+        #
+        #   3. is_foundational=0, company blank, location_key set
+        #      → per-location call against a location that does NOT yet
+        #        resolve to a Frappe Company (To Map / Skipped). The §8b
+        #        channel-discovery sweep is the first user of this shape:
+        #        it polls EVERY location regardless of workflow_state,
+        #        because the channel catalogue must be complete (a channel
+        #        can be live on a not-yet-mapped location). Per-Company
+        #        filtering of these rows is by location_key, not company.
+        #
+        # Anything else is a bug.
         if self.is_foundational and self.company:
             frappe.throw(
                 _(
                     "Foundational API Calls (token/location/test — §7.7) must leave Company blank."
                 )
             )
-        if not self.is_foundational and not self.company:
-            frappe.throw(_("Non-foundational API Calls require a Company."))
+        if not self.is_foundational and not self.company and not self.location_key:
+            frappe.throw(
+                _(
+                    "Non-foundational API Calls require either a Company "
+                    "(entity-sync against a mapped location) or a Location Key "
+                    "(per-location call against an as-yet-unmapped location, "
+                    "e.g. §8b channel discovery)."
+                )
+            )
 
     def on_update(self) -> None:
         """Defence in depth: append-only is also enforced via has_permission

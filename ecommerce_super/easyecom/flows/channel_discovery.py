@@ -136,18 +136,25 @@ def sweep_all_locations() -> dict:
 
     # Accumulators threaded through the per-location loop. The union/
     # dedupe lives at the sweep level (not per location) — channel
-    # identity is account-level (§8.6.3).
-    seen_ids: set[str] = set()
+    # identity is account-level (§8.6.3). marketplace_id is Int per
+    # §31.2.18; we use int as the dedupe key throughout.
+    seen_ids: set[int] = set()
     new_channel_names: list[str] = []
     existing_channel_names: list[str] = []
     # marketplace_id → bool — "is_active = active on ANY location"
-    active_anywhere: dict[str, bool] = {}
+    active_anywhere: dict[int, bool] = {}
     failed_locations: list[tuple[dict, BaseException]] = []
     succeeded_location_keys: list[str] = []
 
     def _handle(loc: dict) -> None:
         location_key = loc["location_key"]
-        client = EasyEcomClient(location_key=location_key)
+        # Pass the location's Frappe Company when known so the per-call
+        # API Call row is correctly company-scoped. For unmapped
+        # locations (To Map / Skipped, no frappe_company), company stays
+        # None — the API Call validation accepts that shape because
+        # location_key is set (see easyecom_api_call.py:validate).
+        company = loc.get("frappe_company")
+        client = EasyEcomClient(company=company, location_key=location_key)
         response = client.get(CHANNELS_GET)
         rows = response.get(DATA_KEY) or []
         if not isinstance(rows, list):
@@ -157,33 +164,32 @@ def sweep_all_locations() -> dict:
             )
         for raw in rows:
             erpnext_fields = executor.pull(raw)
-            mid = erpnext_fields.get("marketplace_id")
-            if mid is None or mid == "":
-                # Engine would have raised on missing required field; defensive belt.
+            mid_raw = erpnext_fields.get("marketplace_id")
+            if mid_raw is None or mid_raw == "":
+                # Engine would have raised on missing required field;
+                # defensive belt.
                 continue
-            mid_key = str(mid)
+            try:
+                mid = int(mid_raw)
+            except (TypeError, ValueError):
+                # Bad payload row — log and skip; sibling rows continue.
+                frappe.log_error(
+                    title=f"Channel discovery: non-int marketplace_id {mid_raw!r}",
+                    message=f"location={location_key} row={raw!r}",
+                )
+                continue
             # Track active-anywhere BEFORE the dedupe skip so the active
             # status from a later location can promote an earlier-discovered
             # Inactive channel.
             this_active = bool(erpnext_fields.get("is_active"))
-            active_anywhere[mid_key] = active_anywhere.get(mid_key, False) or this_active
-            if mid_key in seen_ids:
+            active_anywhere[mid] = active_anywhere.get(mid, False) or this_active
+            if mid in seen_ids:
                 # Already handled within THIS sweep (a later location
                 # returned the same channel) — no doc write, but the
                 # active-anywhere accumulator above still reflects it.
                 continue
-            seen_ids.add(mid_key)
-            docname = _upsert_channel(erpnext_fields, mid_key)
-            if docname in new_channel_names or docname in existing_channel_names:
-                # Belt-and-braces: should be unreachable given seen_ids.
-                continue
-            # Was the row pre-existing? Compare against pre-upsert state.
-            # _upsert_channel returns the docname either way; we infer
-            # newness from whether the row was just inserted (we set a
-            # marker via creation timestamp proximity, but the simpler
-            # check is to re-query is_new state). Use the helper
-            # _classify_new_or_existing which compares creation to a
-            # sweep-start marker — see below.
+            seen_ids.add(mid)
+            _upsert_channel(erpnext_fields, mid)
         succeeded_location_keys.append(location_key)
 
     def _on_failure(loc: dict, exc: BaseException) -> None:
@@ -210,14 +216,14 @@ def sweep_all_locations() -> dict:
     # Second pass: apply the active-anywhere accumulator (a channel
     # seen Inactive then Active gets promoted to is_active=1) and
     # partition new vs existing by creation time vs sweep_start.
-    for mid_key in seen_ids:
-        docname = _docname_for_marketplace_id(mid_key)
+    for mid in seen_ids:
+        docname = _docname_for_marketplace_id(mid)
         if not docname:
             continue
         was_just_created = _was_created_during_sweep(docname, sweep_start)
         # Promote is_active = active-anywhere if it changed.
         current_active = frappe.db.get_value("Marketplace", docname, "is_active")
-        target_active = 1 if active_anywhere.get(mid_key, False) else 0
+        target_active = 1 if active_anywhere.get(mid, False) else 0
         if int(current_active or 0) != target_active:
             frappe.db.set_value(
                 "Marketplace", docname, "is_active", target_active, update_modified=True
@@ -251,31 +257,30 @@ def _enumerate_locations() -> list[dict]:
     )
 
 
-def _upsert_channel(erpnext_fields: dict[str, Any], mid_key: str) -> str:
-    """Find-or-create the Marketplace row for marketplace_id=mid_key.
+def _upsert_channel(erpnext_fields: dict[str, Any], mid: int) -> str:
+    """Find-or-create the Marketplace row for marketplace_id=mid (Int).
 
     If the row exists, return its name UNCHANGED — re-pull never
     re-classifies a channel or stomps an FDE override of channel_type /
     reporting_parent. The active-anywhere promotion happens AFTER the
     sweep loop, not here.
     """
-    existing = frappe.db.exists("Marketplace", {"marketplace_id": mid_key})
+    existing = frappe.db.exists("Marketplace", {"marketplace_id": mid})
     if existing:
         return existing if isinstance(existing, str) else existing[0]
     doc = frappe.new_doc("Marketplace")
-    doc.update(
-        {k: v for k, v in erpnext_fields.items() if v is not None}
-    )
-    # Defensive: ensure marketplace_id is the string we deduped on
-    # (engine emits it via int_to_str, but be explicit).
-    doc.marketplace_id = mid_key
+    doc.update({k: v for k, v in erpnext_fields.items() if v is not None})
+    # Defensive: ensure marketplace_id is the int we deduped on (engine
+    # emits it via identity from EE's int payload, but be explicit so a
+    # future stale-engine-output bug doesn't silently land str values).
+    doc.marketplace_id = mid
     doc.workflow_state = INITIAL_WORKFLOW_STATE
     doc.insert(ignore_permissions=True)
     return doc.name
 
 
-def _docname_for_marketplace_id(mid_key: str) -> str | None:
-    name = frappe.db.exists("Marketplace", {"marketplace_id": mid_key})
+def _docname_for_marketplace_id(mid: int) -> str | None:
+    name = frappe.db.exists("Marketplace", {"marketplace_id": mid})
     if isinstance(name, str):
         return name
     if isinstance(name, tuple):

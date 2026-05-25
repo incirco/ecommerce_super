@@ -21,12 +21,12 @@
  "fields": [
   {
    "fieldname": "marketplace_id",
-   "fieldtype": "Data",
+   "fieldtype": "Int",
    "label": "Marketplace ID",
    "reqd": 1,
    "unique": 1,
    "in_list_view": 1,
-   "description": "EasyEcom numeric id (stored as string for autoname). The stable join key for Marketplace Account, Marketplace Order Map, and the Channel accounting dimension. Per §31.2.18 this is semantically an Int; kept as Data so the §5-era starter seed (string keys like 'starter-amazon-in') continues to load."
+   "description": "EasyEcom numeric id — the stable join key for Marketplace Account, Marketplace Order Map, and the Channel accounting dimension. Int per §31.2.18 (EasyEcom's marketplace_id is genuinely an integer; the join key must be unambiguous before downstream flows reference it). Autoname `field:marketplace_id` produces a numeric docname (e.g. \"2\", \"122\")."
   },
   {
    "fieldname": "marketplace_name",
