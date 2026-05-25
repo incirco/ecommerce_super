@@ -539,7 +539,7 @@ This is the build-and-test contract for Section 3. Claude Code builds to it; the
 - **JWT is cached per location and reused.** A second call against the same location does not re-acquire a token; the cached JWT (90-day validity) is reused. jwt_acquired_at / jwt_expires_at are populated.
 - **Day-85 renewal is scheduled.** The renewal job (`renew_aging_jwts`) is registered in scheduler_events and, when a JWT's age crosses 85 days (simulated by back-dating jwt_acquired_at), renews it on the next run.
 - **On-401 re-auth works.** If a call returns 401 (simulated by invalidating the cached JWT), the client re-authenticates once and retries transparently; the caller does not see the 401.
-- **Locations are discovered and recorded.** A location pull (/getAllLocation) creates EasyEcom Location records. Exactly one can be flagged is_primary; is_operational is independent; frappe_company is required iff is_operational and may repeat across locations (many-to-one). A location with neither flag is inert.
+- **Locations are discovered and recorded.** A location pull (`/getAllLocation`) creates EasyEcom Location records. Exactly one can be flagged is_primary; is_operational is independent; frappe_company is required iff is_operational and may repeat across locations (many-to-one). A location with neither flag is inert.
 - **Foundational calls are logged account-scoped.** The token and location-discovery calls each write an EasyEcom API Call row with easyecom_account set, company blank, is_foundational = 1, credentials redacted in the stored payload.
 - **Rate-limit tier drives the throttle.** With tier = Default, outbound throughput is capped at 5 req/sec and the daily-quota counter increments; with tier = Diamond the cap is 30 req/sec. Changing the tier field changes the effective cap with no code change.
 - **429 and 5xx back off and surface.** A simulated 429 triggers back-off and requeue; sustained failure raises the configured alert and the Connection Health status reflects Degraded / Down.
@@ -1395,7 +1395,7 @@ Everything else — logging, correlation, the state machine, per-record isolatio
 
 ## 7.7 Foundational calls and the bootstrap order
 
-A small set of calls exist below the business flows: they establish or describe the connection itself rather than syncing a business entity. These are token acquisition (/access/token), scheduled token renewal (day 85), location discovery (/getAllLocation), and connection test. They obey the full contract — logged as API Call rows, carry a correlation_id, surfaced in the Timeline and Connection Health, retried and alerted on failure — but they differ from entity-sync work in two defined ways:
+A small set of calls exist below the business flows: they establish or describe the connection itself rather than syncing a business entity. These are token acquisition (/access/token), scheduled token renewal (day 85), location discovery (`/getAllLocation`), and connection test. They obey the full contract — logged as API Call rows, carry a correlation_id, surfaced in the Timeline and Connection Health, retried and alerted on failure — but they differ from entity-sync work in two defined ways:
 
 - **They are account-scoped, not company-scoped.** A token or location-discovery call belongs to the EasyEcom Account, not to any one Company. Where the contract elsewhere requires a resolved Company on a record, foundational API Call rows record the Account and (where applicable) the location_key, with company left blank. This is the single legitimate exception to "every operational record carries a company"; it applies only to this foundational class.
 - **They produce no per-entity Sync Record.** There is no "entity" being synced — there is no Item or Order whose state is being tracked. Their success/failure lives on the API Call row (and, for token renewal, on the EasyEcom Location's JWT fields and connection_status). The per-record state machine of 7.3 does not apply; the API Call's own status is the record of what happened.
@@ -1404,9 +1404,9 @@ The two foundational calls that the rest of the contract depends on have a defin
 
 1. **Token acquisition is the first call.** Every other call needs a JWT, so token acquisition cannot itself present a prior JWT — it authenticates with x-api-key + email + password + location_key and returns the JWT. It is still logged as an API Call (with the credentials redacted per Section 3.7) and still throttled under the rate-limit tier. It is the one call whose own precondition is only the account credentials, not a session.
 
-2. **Location discovery is what creates the company-resolution data**, so it cannot resolve company the normal way. The /getAllLocation pull returns the account's locations; the integration uses it to create or update EasyEcom Location records. Until the FDE has set is_operational and frappe_company on those records (onboarding), the locations resolve to no Company — and that is correct, not an error. Location discovery therefore runs account-scoped: it writes its API Call row against the Account, creates/updates EasyEcom Location rows as its output, and does not attempt company resolution on itself. Company resolution (the location → frappe_company rule the rest of the contract relies on) only becomes meaningful after these records exist and are mapped.
+2. **Location discovery is what creates the company-resolution data**, so it cannot resolve company the normal way. The `/getAllLocation` pull returns the account's locations; the integration uses it to create or update EasyEcom Location records. Until the FDE has set is_operational and frappe_company on those records (onboarding), the locations resolve to no Company — and that is correct, not an error. Location discovery therefore runs account-scoped: it writes its API Call row against the Account, creates/updates EasyEcom Location rows as its output, and does not attempt company resolution on itself. Company resolution (the location → frappe_company rule the rest of the contract relies on) only becomes meaningful after these records exist and are mapped.
 
-The practical bootstrap sequence at onboarding, therefore: configure the EasyEcom Account credentials → Test Connection (acquires a token for the primary location) → pull locations (/getAllLocation) → FDE flags each location primary/operational and maps frappe_company and warehouse → from this point every subsequent call has both a JWT to present and a location→company map to resolve against, and the entity-sync portion of the contract applies in full.
+The practical bootstrap sequence at onboarding, therefore: configure the EasyEcom Account credentials → Test Connection (acquires a token for the primary location) → pull locations (`/getAllLocation`) → FDE flags each location primary/operational and maps frappe_company and warehouse → from this point every subsequent call has both a JWT to present and a location→company map to resolve against, and the entity-sync portion of the contract applies in full.
 
 # Part III — The Integrations
 
@@ -1417,6 +1417,17 @@ The practical bootstrap sequence at onboarding, therefore: configure the EasyEco
 **Build-order prerequisite.** This section and every flow section that follows (Sections 9-13) is an *implementation* of the Integration Contract (Section 7) — not a standalone build. Per the contract and the phasing plan (Section 29.2), the foundation (connection, the log/queue DocTypes, the EasyEcomClient) and the integration contract itself are built and tested first, against the token and location-discovery calls, before any master or flow in Sections 8-13 is started. Each section below declares only its endpoints, mapping, unit-of-work, and idempotency key (the list in Section 7.6); it inherits all logging, correlation, per-record isolation, the Partial/Failed state machine, surfacing, retry, and disposition from the contract. Do not build a flow before the contract exists, or its failure-handling will be re-invented inconsistently.
 
 Master data — Items, Customers, Suppliers, Warehouses, Tax Categories, Channels — is the foundation of every operational flow. If a Sales Order references an Item that doesn't exist in EasyEcom, the order push fails. If a GRN comes back from EasyEcom referencing a Vendor not in ERPNext, the Purchase Receipt cannot be created. Master sync must be reliable, deterministic, and bidirectional with clear conflict resolution rules.
+
+> **Build order (read before building).** Section 8 is built as a sequence of small, independently-deliverable packets — one master at a time — ordered by *dependency*, not by the subsection numbering below. The subsection numbers (8.1 Item, 8.2 Customer, …) are kept stable because the rest of the spec cross-references them; they are NOT the build order. The build order is:
+>
+> 1. **Location** (§8.4's location-discovery half) — the resolution substrate: nothing resolves to a Company until locations are discovered and mapped. Pull + FDE map, never pushed.
+> 2. **Channel** (§8.6) — the flat Marketplace list pull.
+> 3. **Tax Category** (§8.5) — precondition for Item (HSN → Item Tax Template must exist before an Item can sync with correct tax).
+> 4. **Item / Product master** (§8.1) — the first hard, bidirectional master; builds the reusable per-record savepoint helper (the Section 7.1 isolation obligation) — though that helper is in fact built earlier, with Location, so every packet from Location onward uses it.
+> 5. **Customer master** (§8.2).
+> 6. **Supplier / Vendor master** (§8.3).
+>
+> Lookup tables (§8.7) are folded into whichever master first needs them, not built as a standalone packet. The Warehouse **Source-of-Truth Map** (§8.4.1) is *not* part of the Location packet — it concerns inventory authority and is deferred to the buying/stock flows (Sections 9-10) where stock actually moves. Each packet is built, tested, and signed off on its own; later packets reuse the patterns (savepoint isolation, discovery-pull, the FDE workflow) the earlier ones establish.
 
 Each master gets the same treatment in this section: direction of truth, field-level mapping, conflict resolution, account-global sharing across Companies, edge cases.
 
@@ -1659,32 +1670,82 @@ Because PII may be absent for either reason, the integration never depends on bu
 
 ## 8.4 Warehouse / Location master
 
-### 8.4.1 The Warehouse Source-of-Truth Map
+This section covers two distinct things that were historically bundled and are now separated:
 
-The most consequential master, because it determines which system owns inventory, which system originates Purchase Receipts, and which side wins on stock disputes. The map is the explicit, per-location intersection of Frappe warehouses and EasyEcom locations — and it is deliberately partial (see 4.4.3). Every Frappe Warehouse that participates in EasyEcom-mediated operations has a row:
+- **Location discovery and mapping (§8.4.1)** — pulling the account's locations from EasyEcom and mapping each to a Frappe Company and warehouse. This is the *resolution substrate* (the first thing built in the Section 8 sequence) and is purely pull + FDE map.
+- **The Warehouse Source-of-Truth Map (§8.4.2)** — which system owns inventory authority per warehouse. This is an *inventory-flow* concern, not a discovery concern, and is **deferred to the buying/stock flows (Sections 9-10)** where stock actually moves. It is NOT part of the Location packet.
 
-| Field | Type | Notes |
+### 8.4.1 Location discovery and mapping
+
+EasyEcom locations are **born in EasyEcom and only ever pulled into ERPNext** — ERPNext never creates or pushes a location. The flow is discovery (pull) + FDE mapping (done in ERPNext on the standard form), nothing more. The EasyEcom Location DocType (§31.2.2) already exists; this flow populates and maintains it.
+
+**Discovery pull.** The integration calls EasyEcom's location-list endpoint, **`/getAllLocation`** — confirmed live (returns HTTP 200 with the location array). Note: the foundation code currently carries a constant `/Wms/Inventory/getLocations` (from §31.3.2, an earlier guess); that constant must be corrected to `/getAllLocation` in the §8a build. The real payload shape (captured live) is the authoritative Location ruleset reference — see the field table below. It creates or updates one EasyEcom Location row per `location_key`, populating the EE-supplied fields and leaving the ERPNext-side mapping fields (`frappe_company`, `mapped_warehouse`) blank for the FDE.
+
+**Real `/getAllLocation` payload → EasyEcom Location mapping** (from a live response; this is the §8a ruleset reference and test fixture). The response is `{code, message, data:[ ... ]}`; each element of `data[]` is one location:
+
+| EE payload field | EasyEcom Location field | Notes |
 | --- | --- | --- |
-| warehouse | Link → Warehouse | The Frappe Warehouse |
-| company | Link → Company | The warehouse's Company. Resolved from the linked location's frappe_company; recorded here for query convenience and isolation |
-| easyecom_location_key | Link → EasyEcom Location | The EasyEcom location this warehouse maps to. Blank for internal-only warehouses |
-| is_linked | Check | Computed: True iff easyecom_location_key is set |
-| inventory_master | Select: ERPNext / EasyEcom | Who is authoritative for stock balance |
-| pr_origination | Select: ERPNext direct / EasyEcom GRN flow | Who originates Purchase Receipts |
-| adjustment_origination | Select: ERPNext / EasyEcom | Who originates stock adjustments |
-| mirror_stock_reservations | Check | Whether B2B SOR-events mirror to ERPNext SRE |
-| enabled | Check | Per-warehouse kill-switch |
+| location_key | location_key | The natural key; autoname ECS-LOC-{key} |
+| location_name | location_name |  |
+| company_id | ee_company_id | EE's internal company id (numeric) |
+| stockHandle | is_wms_location | **Derived on discovery:** stockHandle=1 → is_wms_location=1 (operational/stock-handling); 0 → 0. FDE may override on the form |
+| is_store | is_store | New field; EE store-vs-warehouse flag |
+| copy_master_from_primary | copy_master_from_primary | New field; whether this location inherits masters from primary (recorded; not a primary-detection signal) |
+| city | city | New field |
+| state | state | New field — **GST place-of-supply critical** |
+| country | country | New field |
+| zip | pincode | Name differs (EE `zip` → ERPNext-style `pincode`) |
+| address | address_line | The flat address string |
+| address type.billing_address.* | billing_* (street/state/zipcode/country) | Nested billing address |
+| address type.pickup_address.* | pickup_* | Nested pickup address |
+| api_token | — (dropped) | **Irrelevant today; a credential-shaped string — never stored, redacted if ever logged** |
+| userId, phone number | — (optional/ignored) | `phone number` has a literal space in the key — the mapping engine must handle space-bearing source keys; not currently mapped |
 
-The map is keyed per location, not per Company. Because location→Company is many-to-one, a single Company may own several rows here (several warehouses, each linked to a distinct EasyEcom location).
+Fields EE does **not** supply that the Location DocType needs: `gstin` (FDE-set per operational location, like the Item stock-UOM gap — never inferred), and `is_primary` (no signal in the payload — FDE designates exactly one). `is_operational` is workflow-derived (set by Go Live), never taken from the payload.
 
-### 8.4.2 Sync rules
+**The FDE mapping workflow.** A discovered location is not passively unmapped — it carries an explicit, FDE-facing workflow state (implemented with Frappe's standard **Workflow** primitive, shipped as a fixture; not a hand-rolled status field), so pending FDE work is visible and filterable upfront (and feeds a future "locations awaiting mapping" task count on the dashboard, Sections 17/24). The states:
+
+| State | Meaning | FDE action |
+| --- | --- | --- |
+| To Map | Just pulled from EasyEcom; needs Company + warehouse assigned | This is the FDE's task list — filter the Location list to this state |
+| Mapped but not Live | Company/warehouse assigned and reviewed, but not yet syncing | Review, then Go Live |
+| Live | Mapped and actively syncing operational flows | — (steady state) |
+| Skipped | FDE has decided this location is out of scope (master-only primary location, non-ERPNext locations) | Deliberate; not an error |
+
+Transitions are role-gated to **EasyEcom FDE** (System Manager inherits): To Map → Mapped but not Live ("Map"; gated on frappe_company being set, so the workflow enforces that mapping actually happened); Mapped but not Live → Live ("Go Live"; this transition sets is_operational); To Map / Mapped → Skipped ("Mark Not Relevant"); and reverse transitions (Live → Mapped but not Live to pause, Skipped → To Map to reconsider) so no state is a dead end. The discovery pull creates new rows in the **To Map** state automatically.
+
+**The workflow state is the source of truth.** is_operational is *derived* from it — set true by the Go Live transition, false by Live → Mapped but not Live — so there is one authoritative notion of whether a location is on, not two competing booleans. The FDE works entirely through the standard Frappe form and the action buttons the Workflow generates; no custom mapping UI is built.
+
+**Re-pull (steady state).** Discovery runs again on a daily cadence. A location id not seen before is created fresh in the **To Map** state and the FDE is alerted (a new location needs mapping). An already-known location updates in place (its EE-supplied fields refresh) and its workflow state is left untouched — re-pull never auto-advances or resets the workflow. An unmapped location is a normal, expected state (To Map / Skipped), never an error: per §8.4.4, the steady state legitimately includes locations that are out of scope. Existing Location rows entered manually before this discovery flow existed are back-filled into the appropriate state on first migration (mapped-and-operational → Live, mapped-not-yet-on → Mapped but not Live, the rest → To Map).
+
+### 8.4.2 The Warehouse Source-of-Truth Map (built with Location)
+
+The most consequential map for inventory, because it determines which system owns inventory, which system originates Purchase Receipts, and which side wins on stock disputes. It is the explicit, per-location intersection of Frappe warehouses and EasyEcom locations — and it is deliberately partial (see 4.4.3). Every Frappe Warehouse that participates in EasyEcom-mediated operations has a row.
+
+**The full DocType is built with the Location packet, and the FDE configures every field at onboarding** — including the inventory-authority fields. These are business facts about how the client operates (who owns stock, who receives goods, who makes corrections), known up front and decided once during onboarding; the flows that *act* on them (Sections 9-11) are built later and read this map rather than extend it. Config exists first; the flow code that consumes it arrives with each flow.
+
+| Field | Type | Meaning | Acted on by |
+| --- | --- | --- | --- |
+| warehouse | Link → Warehouse | The Frappe Warehouse | — |
+| company | Link → Company | The warehouse's Company. Resolved from the linked location's frappe_company; recorded here for query convenience and isolation | — |
+| easyecom_location_key | Link → EasyEcom Location | The EasyEcom location this warehouse maps to. Blank for internal-only warehouses | — |
+| is_linked | Check | Computed: True iff easyecom_location_key is set | — |
+| inventory_master | Select: ERPNext / EasyEcom | Which system holds the authoritative running stock balance for this warehouse. On a dispute or drift, the master side wins; the other is reconciled to match. | §9 / §10 |
+| pr_origination | Select: ERPNext direct / EasyEcom GRN flow | Who originates Purchase Receipts. "EasyEcom GRN flow" = goods received in EE (GRN) and ERPNext creates the PR from the GRN event (§9); "ERPNext direct" = PRs made in ERPNext, warehouse not driven by EE GRNs. | §9 |
+| adjustment_origination | Select: ERPNext / EasyEcom | Who originates *stock adjustments* — corrections that are not a sale/purchase/transfer (cycle-count corrections, damage write-offs, found stock, shrinkage). If EasyEcom: the adjustment is made in EE and ERPNext mirrors it with a Stock Reconciliation/Stock Entry. If ERPNext: made in ERPNext and pushed to EE. Distinct from inventory_master because a warehouse may have EE as the running-balance master yet still take adjustments from ERPNext (finance-controlled), or vice versa. | §10 |
+| mirror_stock_reservations | Check | Whether an EasyEcom "inventory reserved" event (stock committed to a B2B order before dispatch) is mirrored into ERPNext as a Stock Reservation Entry against the matching Sales Order — so ERPNext's available-to-promise reflects what EE has committed. True where stock-promise accuracy matters (high-value B2B); False where the extra entries are unwanted churn (fast-moving B2C). | §11 |
+| enabled | Check | Per-warehouse kill-switch | — |
+
+The map is keyed per location, not per Company. Because location→Company is many-to-one, a single Company may own several rows here (several warehouses, each linked to a distinct EasyEcom location). The "Acted on by" column indicates which later flow's code *reads* a behavior field; the field itself is built and FDE-configured now, with the Location packet.
+
+### 8.4.3 Sync rules
 
 - EasyEcom Location records and the Source-of-Truth Map are configured by the FDE during onboarding
-- New EasyEcom locations created post-onboarding: detected on daily /getAllLocation pull; FDE alerted to map them (or to mark them not-relevant)
+- New EasyEcom locations created post-onboarding: detected on daily `/getAllLocation` pull; FDE alerted to map them (or to mark them not-relevant)
 - Frappe Warehouses created post-onboarding: do NOT auto-create EE locations; FDE explicitly maps if needed
 - De-mapping a warehouse (setting easyecom_location_key blank) is allowed only if no open operational documents reference the link
 
-### 8.4.3 Partial mapping is normal
+### 8.4.4 Partial mapping is normal
 
 The map covers only the warehouses and locations that participate in the integration. Both sides legitimately hold things the other never sees, and the integration treats this as the expected steady state, not an error:
 
@@ -4656,21 +4717,40 @@ default_in_transit_warehouse_override Link N  Warehouse (optional per-Company ov
 
 ### 31.2.2 EasyEcom Location
 
-One record per location_key (Section 3.4). Carries primary/operational flags, Company resolution, warehouse mapping, JWT cache, and per-location pull cursors.
+One record per location_key (Section 3.4). Carries primary/operational flags, Company resolution, warehouse mapping, JWT cache, per-location pull cursors, and the EE-supplied location attributes from `/getAllLocation` (§8.4.1).
 
 ```
 location_key             Data       Y   Unique within the account; autoname format ECS-LOC-{key}
 location_name            Data       Y
-is_primary               Check      Y   Default 0. Exactly one location per account has this set
-is_operational           Check      Y   Default 0. Whether operational flows run against this location
-is_wms_location          Check      Y   Default 0. WMS plan (PO/GRN/cycle-count/putaway) vs OMS-only Non-WMS. Gates the Section 9 buying/GRN flow
+is_primary               Check      Y   Default 0. Exactly one location per account has this set.
+                                         FDE-designated — NOT supplied by /getAllLocation
+is_operational           Check      Y   Default 0. Workflow-DERIVED (set by Go Live transition);
+                                         not user-toggled, not from payload
+is_wms_location          Check      Y   Default 0. Derived on discovery from EE stockHandle
+                                         (stockHandle=1 → 1). WMS plan (PO/GRN/cycle-count/putaway)
+                                         vs OMS-only. Gates the Section 9 buying/GRN flow. FDE may override
 serialization_enabled    Check      Y   Default 0. If set, GRN qty pushed per-serial (Section 9)
 frappe_company           Link       N   Company. Set iff is_operational. Nullable. NOT unique (many-to-one)
-ee_company_value         Data       N   Company value EE records on this location; reference only, never operational
 mapped_warehouse         Link       N   Warehouse (within frappe_company); blank for non-operational locations
-ee_company_id            Data       N   EasyEcom internal company ID (as reported by EE)
-gstin                    Data       N   Validated against India Compliance (operational locations)
-pincode                  Data       N
+ee_company_id            Data       N   EasyEcom internal company id (payload: company_id)
+is_store                 Check      N   EE store-vs-warehouse flag (payload: is_store)
+copy_master_from_primary Check      N   Whether this location inherits masters from primary
+                                         (payload: copy_master_from_primary). Recorded; not a primary signal
+city                     Data       N   payload: city
+state                    Data       N   payload: state — GST place-of-supply critical
+country                  Data       N   payload: country
+pincode                  Data       N   payload: zip (name differs)
+address_line             Data       N   payload: address (flat string)
+billing_street           Data       N   payload: address type.billing_address.street
+billing_state            Data       N   payload: address type.billing_address.state
+billing_zipcode          Data       N   payload: address type.billing_address.zipcode
+billing_country          Data       N   payload: address type.billing_address.country
+pickup_street            Data       N   payload: address type.pickup_address.street
+pickup_state             Data       N   payload: address type.pickup_address.state
+pickup_zipcode           Data       N   payload: address type.pickup_address.zipcode
+pickup_country           Data       N   payload: address type.pickup_address.country
+gstin                    Data       N   Validated against India Compliance (operational locations).
+                                         NOT supplied by /getAllLocation — FDE-set, never inferred
 jwt_token                Long Text  N   Cached JWT for this location_key, encrypted at rest (read-only)
 jwt_acquired_at          Datetime   N   (read-only)
 jwt_expires_at           Datetime   N   (read-only) 90-day validity; proactive refresh ahead of expiry
@@ -4679,11 +4759,24 @@ last_pull_orders         Datetime   N   Cursor (read-only)
 last_pull_returns        Datetime   N   Cursor (read-only)
 last_pull_grn            Datetime   N   Cursor (read-only)
 
+# Dropped from the /getAllLocation payload (not stored):
+#  - api_token : irrelevant today; a credential-shaped string — never stored; redacted if ever logged
+#  - userId, "phone number" : not currently mapped. NB "phone number" has a literal space in
+#    the EE key — the mapping engine must tolerate space-bearing source keys
+#  - (the former spec field ee_company_value is removed — no such field in the real payload)
+
 # Validation:
-#  - exactly one location per account has is_primary = 1
+#  - exactly one location per account has is_primary = 1 (FDE-set)
 #  - frappe_company required iff is_operational = 1; must be empty otherwise
 #  - frappe_company is non-unique by design (many locations may resolve to one Company)
 #  - a location with neither flag set is inert (recorded but not synced or transacted)
+#
+# Workflow (per §8.4.1): a Frappe Workflow is attached to this DocType (shipped as a
+# fixture), adding the standard workflow_state field with states
+# To Map | Mapped but not Live | Live | Skipped. The workflow state is the source of
+# truth for whether the location is operational; is_operational is DERIVED from it
+# (set true by the Go Live transition). Discovery-pull creates new rows in state To Map,
+# pre-populating is_wms_location from stockHandle.
 ```
 
 ### 31.2.3 EasyEcom Sync Record
@@ -5004,18 +5097,24 @@ escalation_level         Int        Y   Default 0
 
 ### 31.2.23 Source-of-Truth Map
 
-Per-Company per-Warehouse mapping declaring which side owns inventory authority.
+Per-location (per-Warehouse) mapping. The full DocType — including the inventory-authority fields — is built with the Location packet (§8.4.1-8.4.2) and FDE-configured at onboarding; the later flows (§9-11) read these fields rather than add them. Keyed per location; location→Company is many-to-one, so a Company may own several rows.
 
 ```
 map_name                 Data       Y   autoname {company}-{warehouse}
-company                  Link       Y
+company                  Link       Y   Resolved from the linked location's frappe_company
 warehouse                Link       Y   Warehouse
-ee_location_key          Link       N   EasyEcom Location (null if ERPNext-only)
-inventory_owner          Select     Y   ERPNext | EasyEcom | Both (Bidirectional)
+ee_location_key          Link       N   EasyEcom Location (null if ERPNext-only / internal-only)
+is_linked                Check      Y   Computed: True iff ee_location_key is set
+inventory_master         Select     Y   ERPNext | EasyEcom — authoritative running balance (read by §9/§10)
+pr_origination           Select     Y   ERPNext direct | EasyEcom GRN flow — who originates PRs (read by §9)
+adjustment_origination   Select     Y   ERPNext | EasyEcom — who originates stock adjustments (read by §10)
+mirror_stock_reservations Check     N   Mirror EE reservation → ERPNext SRE (read by §11)
 allow_negative_stock     Check      N   Default 0
+enabled                  Check      Y   Default 1; per-warehouse kill-switch
 notes                    Small Text N
 
 # Indexes: (company, warehouse) UNIQUE
+# All fields built with the Location packet; the §9-11 flows read the authority fields.
 ```
 
 ## 31.3 EasyEcom API endpoint reference
@@ -5049,7 +5148,7 @@ POST /Wms/Vendor/createVendor
 GET  /Wms/Vendor/getVendor?location_key=<key>&vendorId=<id>
 
 # Locations
-GET  /Wms/Inventory/getLocations?company_id=<ee_co_id>
+GET  /getAllLocation                          # confirmed live; returns the account's location array (see §8.4.1 for the real payload + field mapping)
 
 # Channels
 GET  /marketplaces/list                       # full flat channel catalogue (id + name)

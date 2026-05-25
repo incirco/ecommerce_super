@@ -4,7 +4,7 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 **Legend:** ☐ not started · 🔶 in progress · ✅ done · — n/a yet
 
-**Current focus:** _§5 + §6 built and locally tested (committed locally, awaiting push + staging redeploy — §6 carries 2 foundation fixes incl. the Redis-namespace bug). §3+§4 and §5 out for FDE staging test. §7 Integration Contract is a verify-and-carry contract (not a build): its enforceable infra is foundation-built; pending a contract-verification pass, then its per-flow rules (§7.1.1 unit-of-work = atomic doc; Sync Record Line child table; binary Success|Failed per-record outcome) fold into the §8 packet. Next buildable: §8 Master Sync (first real flow; applies the real-payload findings + the §7 per-flow obligations)._
+**Current focus:** _§5/§6/§7 built + locally tested (commits 7123669, fd955e7, c0ad884 + except-sweep — all local, awaiting push + staging redeploy). §7 verified (contract has teeth) + built the empty EasyEcom Sync Record Line child table; per-record savepoint helper deferred to §8d-Item (the first real batch — §7/A3 obligation). Formatter ghost resolved (Black/Ruff py314 except-tuple strip; pinned to py313 + global hook now lint-only). §8 split into 6 dependency-ordered packets (8a Location → 8b Channel → 8c Tax → 8d Item → 8e Customer → 8f Supplier; lookups folded in). NEXT: scope 8a Location packet (pull + FDE map, pull-only no push; resolve endpoint vs sandbox)._
 
 ---
 
@@ -30,7 +30,14 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 | Section | Spec ready | Acceptance | Approved | Built | Local test | Deployed | Team test | Live |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 8. Master Sync | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8. Master Sync (split into 6 dependency-ordered packets below) | — | — | — | — | — | — | — | — |
+| 8a. Location (pull + FDE map; resolution substrate) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8b. Channel (flat Marketplace list pull) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8c. Tax Category (mapping; precondition for Item) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8d. Item / Product master (first hard master; builds savepoint helper) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8e. Customer master (incl. anonymous pseudo-customers) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8f. Supplier / Vendor master | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| (Lookups — UOM, Brand, Item Group, Category Map — folded into whichever master first needs them, not a standalone packet) | — | — | — | — | — | — | — | — |
 | 9. Buying & Inwarding | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 10. Stock Transfers | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 11. B2B Sales | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
