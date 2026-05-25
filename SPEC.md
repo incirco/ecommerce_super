@@ -560,7 +560,7 @@ This section consolidates every DocType the integration introduces, plus the cus
 | EasyEcom Account | Standard, one per deployment | Credentials + account-wide config; the connection/sync boundary |
 | EasyEcom Company Settings | Standard, per Company | Per-Company alert recipients, assigned FDE, per-Company overrides |
 | EasyEcom Location | Standard | Per-location_key flags (primary/operational), Company resolution, JWT cache, pull cursors |
-| EasyEcom Tax Mapping | Standard, per Company | Translates ERPNext Tax Category ↔ EE tax category |
+| EasyEcom Tax Rule Map | Standard, per (tax_rule_name, Company) | Maps an EasyEcom tax rule name → that company's Item Tax Template rows (with native Min/Max Net Rate slab bands); FDE-configured; resolver stamps onto items at sync (Section 8.5) |
 | Marketplace | Flat channel list | One row per EasyEcom channel, keyed by marketplace_id; spans B2C marketplaces, B2B, storefronts, POS (Section 8.6). No child Marketplace-Channel hierarchy — EE is flat |
 | Marketplace Account | Standard, per (Company, Marketplace) | Seller account on a marketplace |
 | Warehouse Source-of-Truth Map | Standard, per Company | Per-warehouse SoT configuration |
@@ -1757,28 +1757,58 @@ The map covers only the warehouses and locations that participate in the integra
 
 Validation must not flag the existence of unmapped warehouses or unmapped locations. Onboarding tooling may surface them as a checklist so the FDE can confirm each is intentionally out of scope, but the steady state legitimately includes unmapped entities on both sides.
 
-## 8.5 Tax Category and HSN sync
+## 8.5 Tax (EasyEcom Tax Rule → Item Tax Template mapping)
 
-Tax category mapping is critical for Purchase Receipt creation (Section 9) and Sales Invoice creation (Sections 11, 8) to apply correct GST. Without it, downstream invoices have wrong tax lines, ITC is mis-attributed, and reconciliation fails.
+Tax mapping is critical for Sales Invoice creation (Sections 11, 12) and Purchase Receipt creation (Section 9) to apply correct GST. Without it, downstream invoices have wrong tax lines, ITC is mis-attributed, and reconciliation fails.
 
-### 8.5.1 Components
+### 8.5.1 The EasyEcom tax reality (grounded in real payloads + the EE Tax Master)
 
-- ERPNext Tax Category drives tax template selection on transactions
-- ERPNext Item Tax Template defines actual tax rates per item
-- HSN code on Item determines GST rate per India Compliance
-- EasyEcom has its own tax category notion at the product and at the location level
+EasyEcom has **no separate tax-master API**. Tax rules are configured in EasyEcom's UI (Masters >> Tax Master) and attached per product. Tax therefore arrives **inside the product payload** (`/Products/GetProductMaster`), never from a standalone endpoint. Each product carries:
+- **`tax_rule_name`** — the name of the EE tax rule (e.g. `GST`, `5`, `tax_28%`, `TAx Rule5`, `GST-18`). These names are arbitrary, human-typed, and **not parseable** — a rule named `5` applies 5%, a rule named `GST` may apply 5% or 18% depending on price. The name is an **opaque key only**.
+- **`tax_rate`** — the **resolved** decimal rate EE applied for that product (e.g. `0.18`). For a slab rule, EE has already evaluated the slab; this is the resolved answer, not the rule definition.
+- **`cess`** — per-product cess (in the order payload), separate from the rule.
+- **`hsn_code`** — the product's HSN.
 
-### 8.5.2 Mapping
+An EE tax rule (from the Tax Master) is **HSN or Non-HSN**, calculated on Unit or Selling Price, and may define **price slabs**: Min/Max value ranges each with a GST rate (e.g. rule `GST` = 0–2500 → 5%, 2500+ → 18%). A blank Max means a uniform rate. The slab structure lives **only in EE's UI** — there is no API to read it.
 
-- EasyEcom Tax Mapping DocType (per Company) maps ERPNext Tax Category ↔ EasyEcom tax category
-- HSN Tax Template Mapping fixture (parent app) maps HSN code → Item Tax Template — shipped pre-populated for common HSN-to-GST-rate cases
-- FDE reviews mapping during onboarding; methodology team maintains the standard fixture
+### 8.5.2 ERPNext supports price slabs natively
 
-### 8.5.3 Failure modes
+ERPNext's Item **Taxes** child table (the Item Tax tab) has native **Minimum Net Rate** and **Maximum Net Rate** columns per row. This means a price-slab tax maps directly onto an item: one Taxes row per band (e.g. `GST 5%` [0–2500], `GST 18%` [2500+]), and **ERPNext resolves the correct band by net rate natively at invoice time**. The integration therefore never replicates slab logic — it populates the item's native Taxes rows and lets ERPNext resolve. A flat rule is just a single Taxes row with blank min/max.
 
-- Item with no HSN code: cannot be pushed to EE; cannot have a Sales Invoice raised against it; integration blocks
-- Item with HSN that does not map to any Item Tax Template: alert FDE, transaction blocked
-- EE returns a tax category in payload that is not mapped: integration logs and uses ERPNext default; FDE alerted
+### 8.5.3 The EasyEcom Tax Rule Map DocType (§31.2.x)
+
+An FDE-configured mapping, **one document per (tax_rule_name, company)**:
+- `tax_rule_name` (Data) — the EE rule name (the opaque key from the payload)
+- `company` (Link → Company) — the document is scoped to one company
+- Natural key / unique: **(tax_rule_name, company)**
+- `taxes` — child table **reusing ERPNext's native "Item Tax" child DocType** (item_tax_template, tax_category, valid_from, minimum_net_rate, maximum_net_rate). Holds **only this company's** Item Tax Templates. One row for a flat rule; multiple banded rows for a slab rule. The FDE picks real templates from the dropdown and enters the bands, reading the slab structure from EE's Tax Master UI (no API to pull it).
+
+Because the child rows hold actual company-specific Item Tax Templates (e.g. `GST 18% - OTC`), there is **no rate→name parsing** — the FDE selects the real template. The document being per-company means opening "GST / OTC" shows only OTC's rows.
+
+### 8.5.4 The resolver (8c-owned; called by Item sync, §8.1 / 8d)
+
+`resolve_and_stamp_tax(item, product)`:
+1. Read `product.tax_rule_name` and the item's company.
+2. Look up the Tax Rule Map document for **(tax_rule_name, company)**.
+3. **Stamp** that document's `taxes` rows (template + min/max band) onto the item's native Taxes table. ERPNext resolves the band at invoice time.
+4. **Reconciliation:** check the product's resolved `tax_rate` falls within a mapped band; a mismatch raises a Discrepancy (catches a mis-entered band or a changed EE rule).
+5. **CESS** is applied to the item from the product's own `cess` value — outside this map.
+6. **Unmapped (tax_rule_name, company):** if no document exists, **auto-create one in workflow state To Configure** and flag the FDE (the "discovered → needs config" pattern). The item's tax is not silently defaulted; the missing mapping is a visible FDE task.
+
+### 8.5.5 FDE workflow
+
+A Frappe Workflow (shipped as a fixture, reusing the 8a/8b pattern) on the Tax Rule Map: **To Configure → Configured**, branch **Ignored**. The Configure transition is gated on the `taxes` table being non-empty. New (rule, company) pairs auto-appear in **To Configure** when Item sync encounters an unmapped one; the FDE may also pre-create them from EE's Tax Master before syncing items. "Configured" means the FDE has set up that (rule, company); per-company completeness (a company with no rows for a rule) surfaces at stamp time as an FDE task, not via the workflow.
+
+### 8.5.6 Build order
+
+Tax (8c) is built **before** Item (8d): the resolver and the map must exist for Item sync to stamp correct tax. 8c owns the DocType, the workflow, and the resolver; 8d calls the resolver. The standard GST-rate Item Tax Templates (`GST 5/12/18/28% - {abbr}`, `Exempted`) are ERPNext/India-Compliance natives the FDE selects from; 8c does not create templates.
+
+### 8.5.7 Failure modes
+
+- **Unmapped (tax_rule_name, company):** auto-creates a To-Configure Tax Rule Map doc; FDE alerted; item tax not silently defaulted.
+- **Item's company has no rows for its rule** (rule mapped for other companies but not this one): resolver finds nothing to stamp → FDE task.
+- **Resolved `tax_rate` outside all mapped bands:** Discrepancy raised (mis-entered band or changed EE rule).
+- **Item with no HSN:** flagged per India Compliance requirements (HSN is required for GST documents); handled in Item sync (8d).
 
 ## 8.6 Channel master
 
@@ -2675,7 +2705,7 @@ A catalogue of every recurring failure pattern with the documented FDE response.
 | Failure | FDE response |
 | --- | --- |
 | Item push fails — HSN missing | Add HSN to Item; retry from Force Resync action |
-| Item push fails — UoM not mapped | Add UoM mapping in EasyEcom Tax Mapping or add UoM lookup row; retry |
+| Item push fails — UoM not mapped | Add the UoM mapping (UoM lookup / Field Mapping) and retry |
 | Item push fails — variant template not synced | Sync template first; then variants follow |
 | Customer push fails — GSTIN format invalid | Correct GSTIN; retry |
 | Supplier push fails — supplier_group not mapped | Configure supplier_group mapping (or use default); retry |
