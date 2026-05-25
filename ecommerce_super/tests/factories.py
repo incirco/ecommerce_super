@@ -44,24 +44,58 @@ def make_location(
     is_operational: bool = False,
     frappe_company: str | None = None,
     mapped_warehouse: str | None = None,
+    workflow_state: str | None = None,
 ) -> str:
-    """Insert an EasyEcom Location. Returns its docname."""
+    """Insert an EasyEcom Location. Returns its docname.
+
+    `is_operational` is now workflow-derived (§8.4.1). The factory keeps
+    its old kwarg signature for back-compat: passing `is_operational=True`
+    auto-sets `workflow_state="Live"` so the derive resolves to 1; passing
+    `is_operational=False` with `frappe_company` set lands "Mapped but not
+    Live"; otherwise "To Map". Callers can override with the explicit
+    `workflow_state` kwarg.
+    """
     docname = f"ECS-LOC-{location_key}"
     if frappe.db.exists("EasyEcom Location", docname):
         return docname
+    if workflow_state is None:
+        if is_operational and frappe_company:
+            workflow_state = "Live"
+        elif frappe_company:
+            workflow_state = "Mapped but not Live"
+        else:
+            workflow_state = "To Map"
+    # Frappe's active Workflow auto-applies on insert and refuses
+    # skip-transitions from the initial state. Always insert in "To Map"
+    # (the workflow's initial state), then bump the row's workflow_state
+    # via db.set_value if the caller asked for something else. For test
+    # data this is fine — production paths use apply_workflow.
     doc = frappe.new_doc("EasyEcom Location")
     doc.update(
         {
             "location_key": location_key,
             "location_name": f"Test Location {location_key}",
             "is_primary": 1 if is_primary else 0,
-            "is_operational": 1 if is_operational else 0,
-            "frappe_company": frappe_company,
-            "mapped_warehouse": mapped_warehouse,
+            "workflow_state": "To Map",
+            "frappe_company": None,  # set after if requested (avoids non-op + co rejection)
+            "mapped_warehouse": None,
             "enabled": 1,
         }
     )
     doc.insert(ignore_permissions=True)
+    # Now apply the requested workflow_state + mapping side without
+    # re-running validate (which would re-derive is_operational and
+    # might disagree with the caller's intent).
+    updates: dict = {"workflow_state": workflow_state}
+    if frappe_company:
+        updates["frappe_company"] = frappe_company
+    if mapped_warehouse:
+        updates["mapped_warehouse"] = mapped_warehouse
+    # is_operational is workflow-derived; only Live → 1.
+    updates["is_operational"] = 1 if workflow_state == "Live" else 0
+    frappe.db.set_value(
+        "EasyEcom Location", doc.name, updates, update_modified=False
+    )
     return doc.name
 
 

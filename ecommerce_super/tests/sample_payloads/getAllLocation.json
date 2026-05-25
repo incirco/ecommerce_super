@@ -1,0 +1,66 @@
+{
+  "code": 200,
+  "message": "Successful",
+  "data": [
+    {
+      "company_id": 171721,
+      "location_key": "ne29488101841",
+      "location_name": "prod_wh_2",
+      "is_store": 0,
+      "city": "Bangalore",
+      "state": "Karnataka",
+      "country": "India",
+      "zip": "560102",
+      "copy_master_from_primary": 1,
+      "address": "Banglore bangalore",
+      "api_token": "redact-never-store-this-string-it-is-credential-shaped",
+      "userId": 180681,
+      "phone number": "9876598765",
+      "address type": {
+        "billing_address": {
+          "street": "Banglore bangalore",
+          "state": "Karnataka",
+          "zipcode": "560102",
+          "country": "India"
+        },
+        "pickup_address": {
+          "street": "Banglore bangalore",
+          "state": "Karnataka",
+          "zipcode": "560102",
+          "country": "India"
+        }
+      },
+      "stockHandle": 1
+    },
+    {
+      "company_id": 171721,
+      "location_key": "ne29488101842",
+      "location_name": "primary_master_only",
+      "is_store": 1,
+      "city": "Bangalore",
+      "state": "Karnataka",
+      "country": "India",
+      "zip": "560001",
+      "copy_master_from_primary": 0,
+      "address": "Primary HO",
+      "api_token": "another-credential-shaped-string-do-not-store",
+      "userId": 180681,
+      "phone number": "9876500000",
+      "address type": {
+        "billing_address": {
+          "street": "Primary HO",
+          "state": "Karnataka",
+          "zipcode": "560001",
+          "country": "India"
+        },
+        "pickup_address": {
+          "street": "Primary HO",
+          "state": "Karnataka",
+          "zipcode": "560001",
+          "country": "India"
+        }
+      },
+      "stockHandle": 0
+    }
+  ]
+}

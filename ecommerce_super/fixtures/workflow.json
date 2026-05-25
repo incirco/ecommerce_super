@@ -1,0 +1,164 @@
+[
+ {
+  "doctype": "Workflow",
+  "name": "EasyEcom Location Workflow",
+  "workflow_name": "EasyEcom Location Workflow",
+  "document_type": "EasyEcom Location",
+  "is_active": 1,
+  "send_email_alert": 0,
+  "override_status": 0,
+  "workflow_state_field": "workflow_state",
+  "states": [
+   {
+    "doctype": "Workflow Document State",
+    "state": "To Map",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "To Map",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Mapped but not Live",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Mapped but not Live",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Live",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Live",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Skipped",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Skipped",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   }
+  ],
+  "transitions": [
+   {
+    "doctype": "Workflow Transition",
+    "state": "To Map",
+    "action": "Map",
+    "next_state": "Mapped but not Live",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1,
+    "condition": "doc.frappe_company"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "To Map",
+    "action": "Map",
+    "next_state": "Mapped but not Live",
+    "allowed": "System Manager",
+    "allow_self_approval": 1,
+    "condition": "doc.frappe_company"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Mapped but not Live",
+    "action": "Go Live",
+    "next_state": "Live",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1,
+    "condition": "doc.frappe_company"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Mapped but not Live",
+    "action": "Go Live",
+    "next_state": "Live",
+    "allowed": "System Manager",
+    "allow_self_approval": 1,
+    "condition": "doc.frappe_company"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "To Map",
+    "action": "Mark Not Relevant",
+    "next_state": "Skipped",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "To Map",
+    "action": "Mark Not Relevant",
+    "next_state": "Skipped",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Mapped but not Live",
+    "action": "Mark Not Relevant",
+    "next_state": "Skipped",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Mapped but not Live",
+    "action": "Mark Not Relevant",
+    "next_state": "Skipped",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Live",
+    "action": "Pause",
+    "next_state": "Mapped but not Live",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Live",
+    "action": "Pause",
+    "next_state": "Mapped but not Live",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Skipped",
+    "action": "Reconsider",
+    "next_state": "To Map",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Skipped",
+    "action": "Reconsider",
+    "next_state": "To Map",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   }
+  ]
+ }
+]

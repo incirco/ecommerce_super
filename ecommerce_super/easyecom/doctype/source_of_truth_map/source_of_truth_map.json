@@ -1,0 +1,192 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:{company}-{warehouse}",
+ "creation": "2026-05-25 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "mapping_section",
+  "company",
+  "warehouse",
+  "mapping_col_2",
+  "ee_location_key",
+  "is_linked",
+  "enabled",
+  "authority_section",
+  "inventory_master",
+  "pr_origination",
+  "authority_col_2",
+  "adjustment_origination",
+  "mirror_stock_reservations",
+  "behaviour_section",
+  "allow_negative_stock",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "mapping_section",
+   "fieldtype": "Section Break",
+   "label": "Mapping"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "description": "Resolved from the linked EasyEcom Location's frappe_company. Recorded here for query convenience and per-Company isolation."
+  },
+  {
+   "fieldname": "warehouse",
+   "fieldtype": "Link",
+   "label": "Warehouse",
+   "options": "Warehouse",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "description": "The Frappe Warehouse this row governs. Must belong to Company above."
+  },
+  {
+   "fieldname": "mapping_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ee_location_key",
+   "fieldtype": "Link",
+   "label": "EasyEcom Location",
+   "options": "EasyEcom Location",
+   "in_list_view": 1,
+   "description": "The EasyEcom location this warehouse maps to. Blank for internal-only / ERPNext-only warehouses (§8.4.4 — partial mapping is normal)."
+  },
+  {
+   "fieldname": "is_linked",
+   "fieldtype": "Check",
+   "label": "Is Linked",
+   "read_only": 1,
+   "default": "0",
+   "description": "Computed: True iff EasyEcom Location is set. Maintained by validate()."
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Per-warehouse kill-switch."
+  },
+  {
+   "fieldname": "authority_section",
+   "fieldtype": "Section Break",
+   "label": "Inventory Authority (§9–§11 read these)",
+   "description": "Who owns inventory authority for this warehouse. Built and FDE-configured now (§8.4.2); the flows that act on these fields ship with §9 (PR / GRN), §10 (stock adjustments), §11 (B2B reservations)."
+  },
+  {
+   "fieldname": "inventory_master",
+   "fieldtype": "Select",
+   "label": "Inventory Master",
+   "options": "ERPNext\nEasyEcom",
+   "reqd": 1,
+   "default": "ERPNext",
+   "description": "Which system holds the authoritative running stock balance for this warehouse. On a dispute or drift, the master side wins; the other is reconciled to match. Read by §9 / §10."
+  },
+  {
+   "fieldname": "pr_origination",
+   "fieldtype": "Select",
+   "label": "PR Origination",
+   "options": "ERPNext direct\nEasyEcom GRN flow",
+   "reqd": 1,
+   "default": "ERPNext direct",
+   "description": "Who originates Purchase Receipts. 'EasyEcom GRN flow' = goods received in EE (GRN) and ERPNext creates the PR from the GRN event (§9). 'ERPNext direct' = PRs made in ERPNext, warehouse not driven by EE GRNs. Read by §9."
+  },
+  {
+   "fieldname": "authority_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "adjustment_origination",
+   "fieldtype": "Select",
+   "label": "Adjustment Origination",
+   "options": "ERPNext\nEasyEcom",
+   "reqd": 1,
+   "default": "ERPNext",
+   "description": "Who originates stock adjustments — cycle-count corrections, damage write-offs, found stock, shrinkage. Distinct from inventory_master because a warehouse may have EE as the running-balance master yet still take adjustments from ERPNext (finance-controlled), or vice versa. Read by §10."
+  },
+  {
+   "fieldname": "mirror_stock_reservations",
+   "fieldtype": "Check",
+   "label": "Mirror Stock Reservations",
+   "default": "0",
+   "description": "Whether an EasyEcom 'inventory reserved' event (stock committed to a B2B order before dispatch) is mirrored into ERPNext as a Stock Reservation Entry against the matching Sales Order. True where stock-promise accuracy matters (high-value B2B); False where the extra entries are unwanted churn (fast-moving B2C). Read by §11."
+  },
+  {
+   "fieldname": "behaviour_section",
+   "fieldtype": "Section Break",
+   "label": "Behaviour",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "allow_negative_stock",
+   "fieldtype": "Check",
+   "label": "Allow Negative Stock",
+   "default": "0"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes",
+   "description": "FDE-facing freeform context for why this warehouse is mapped this way."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-25 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "Source-of-Truth Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

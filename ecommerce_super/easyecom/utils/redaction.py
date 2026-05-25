@@ -36,6 +36,7 @@ REDACTED_FIELDS: frozenset[str] = frozenset(
         "access-token",
         "api_key",
         "apikey",
+        "api_token",
     }
 )
 

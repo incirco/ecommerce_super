@@ -1,0 +1,30 @@
+[
+ {
+  "doctype": "Workflow State",
+  "name": "To Map",
+  "workflow_state_name": "To Map",
+  "style": "Warning",
+  "icon": "flag"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Mapped but not Live",
+  "workflow_state_name": "Mapped but not Live",
+  "style": "Primary",
+  "icon": "edit"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Live",
+  "workflow_state_name": "Live",
+  "style": "Success",
+  "icon": "tick"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Skipped",
+  "workflow_state_name": "Skipped",
+  "style": "Inverse",
+  "icon": "small-message"
+ }
+]

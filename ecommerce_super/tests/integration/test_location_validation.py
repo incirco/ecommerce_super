@@ -1,15 +1,20 @@
 """§3.11 acceptance bar 7-ish: Location validation rules.
 
 - Exactly one Location per account has is_primary = 1.
-- frappe_company is mandatory iff is_operational = 1, and must be empty
-  when is_operational = 0.
+- frappe_company is mandatory when is_operational = 1.
 - frappe_company is non-unique by design (many-to-one).
 - A Location with neither flag is inert — created without error.
+
+§8.4.1 changes the lifecycle: is_operational is workflow-derived (set
+by the Go Live transition). Tests that need a Location in Live state
+transition through the workflow rather than skip-setting workflow_state
+on insert (which Frappe's active workflow refuses).
 """
 
 from __future__ import annotations
 
 import frappe
+from frappe.model.workflow import apply_workflow
 from frappe.tests.utils import FrappeTestCase
 
 from ecommerce_super.tests.factories import cleanup_easyecom_state
@@ -49,11 +54,25 @@ def _ensure_test_company(name: str = "_Test Company") -> str:
     return doc.name
 
 
+def _ensure_admin_has_fde_role_for_validation() -> None:
+    """Same as test_location_workflow's helper — Administrator needs
+    EasyEcom FDE to operate the Workflow."""
+    admin = frappe.get_doc("User", "Administrator")
+    has = any(r.role == "EasyEcom FDE" for r in admin.roles)
+    if not has:
+        admin.append("roles", {"role": "EasyEcom FDE"})
+        admin.save(ignore_permissions=True)
+        frappe.db.commit()
+    frappe.clear_cache(user="Administrator")
+    frappe.set_user("Administrator")
+
+
 class TestLocationValidation(FrappeTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
         cls.company = _ensure_test_company()
+        _ensure_admin_has_fde_role_for_validation()
 
     def setUp(self) -> None:
         cleanup_easyecom_state()
@@ -61,13 +80,37 @@ class TestLocationValidation(FrappeTestCase):
     def tearDown(self) -> None:
         cleanup_easyecom_state()
 
+    def _make_live(self, key: str, *, frappe_company: str | None = None) -> str:
+        """Insert in To Map, then transition through Map → Go Live to land
+        in Live state. Returns the docname."""
+        doc = self._new_location(
+            location_key=key,
+            workflow_state="To Map",
+            frappe_company=None,
+        )
+        doc.insert(ignore_permissions=True)
+        if frappe_company:
+            frappe.db.set_value(
+                "EasyEcom Location", doc.name, "frappe_company", frappe_company
+            )
+        reloaded = frappe.get_doc("EasyEcom Location", doc.name)
+        apply_workflow(reloaded, "Map")
+        reloaded.reload()
+        apply_workflow(reloaded, "Go Live")
+        return doc.name
+
     def _new_location(self, **fields) -> "frappe.model.document.Document":
+        """Build a Location doc. is_operational is now workflow-derived
+        (§8.4.1) — set workflow_state explicitly to drive it:
+          - workflow_state='Live'                → is_operational=1
+          - workflow_state='To Map'/'Mapped'/'Skipped' → is_operational=0
+        """
         defaults = {
             "location_key": "L1",
             "location_name": "Test Location",
             "enabled": 1,
             "is_primary": 0,
-            "is_operational": 0,
+            "workflow_state": "To Map",
             "is_wms_location": 0,
             "serialization_enabled": 0,
         }
@@ -84,54 +127,77 @@ class TestLocationValidation(FrappeTestCase):
         with self.assertRaises(frappe.ValidationError):
             b.insert(ignore_permissions=True)
 
-    def test_frappe_company_required_iff_operational(self) -> None:
-        # Operational without company → reject.
-        op_no_co = self._new_location(
-            location_key="L-OP-NOCO", is_operational=1, frappe_company=None
+    def test_frappe_company_required_when_operational(self) -> None:
+        # Try to reach Live without a Company → the workflow's Map
+        # transition condition (doc.frappe_company) blocks it. The
+        # controller's validate-time check is defence in depth; in
+        # practice the workflow stops you first.
+        doc = self._new_location(
+            location_key="L-OP-NOCO", workflow_state="To Map", frappe_company=None
         )
+        doc.insert(ignore_permissions=True)
+        # Map without Company → workflow condition fails.
         with self.assertRaises(frappe.ValidationError):
-            op_no_co.insert(ignore_permissions=True)
+            apply_workflow(frappe.get_doc("EasyEcom Location", doc.name), "Map")
 
-        # Non-operational with company → reject.
-        nonop_with_co = self._new_location(
-            location_key="L-NONOP-CO",
-            is_operational=0,
-            frappe_company=self.company,
-        )
-        with self.assertRaises(frappe.ValidationError):
-            nonop_with_co.insert(ignore_permissions=True)
+        # Reach Live properly: To Map → set Company → Map → Go Live.
+        name = self._make_live("L-OP-OK", frappe_company=self.company)
+        live = frappe.get_doc("EasyEcom Location", name)
+        self.assertEqual(live.workflow_state, "Live")
+        self.assertEqual(live.is_operational, 1)
 
-        # Operational with company → OK.
-        ok = self._new_location(
-            location_key="L-OP-OK", is_operational=1, frappe_company=self.company
+    def test_frappe_company_set_in_mapped_but_not_live_is_allowed(self) -> None:
+        """§8.4.1 intermediate state: Map transition assigns
+        frappe_company BEFORE Go Live flips is_operational. Therefore
+        frappe_company set + is_operational=0 is a legal mid-lifecycle
+        state, not a validation error."""
+        doc = self._new_location(
+            location_key="L-MID-LIFECYCLE",
+            workflow_state="To Map",
+            frappe_company=None,
         )
-        ok.insert(ignore_permissions=True)
+        doc.insert(ignore_permissions=True)
+        # Set Company then Map → lands in Mapped but not Live.
+        frappe.db.set_value(
+            "EasyEcom Location", doc.name, "frappe_company", self.company
+        )
+        reloaded = frappe.get_doc("EasyEcom Location", doc.name)
+        apply_workflow(reloaded, "Map")
+        reloaded.reload()
+        self.assertEqual(reloaded.workflow_state, "Mapped but not Live")
+        # Must not raise — Mapped but not Live with Company set is valid.
+        self.assertEqual(reloaded.is_operational, 0)
+        self.assertEqual(reloaded.frappe_company, self.company)
 
     def test_frappe_company_is_non_unique(self) -> None:
         """Many-to-one resolution: two Locations may resolve to the same Company."""
-        a = self._new_location(
-            location_key="L-CO-1",
-            is_operational=1,
-            frappe_company=self.company,
-        )
-        a.insert(ignore_permissions=True)
-        b = self._new_location(
-            location_key="L-CO-2",
-            is_operational=1,
-            frappe_company=self.company,
-        )
+        self._make_live("L-CO-1", frappe_company=self.company)
         # Must not raise — two locations sharing a Company is the design.
-        b.insert(ignore_permissions=True)
+        self._make_live("L-CO-2", frappe_company=self.company)
+        # Both Live, both pointing at the same Company.
+        self.assertEqual(
+            frappe.db.get_value(
+                "EasyEcom Location", "ECS-LOC-L-CO-1", "frappe_company"
+            ),
+            self.company,
+        )
+        self.assertEqual(
+            frappe.db.get_value(
+                "EasyEcom Location", "ECS-LOC-L-CO-2", "frappe_company"
+            ),
+            self.company,
+        )
 
     def test_inert_location_is_valid(self) -> None:
         """Neither primary nor operational → recorded but not synced (§3.1.3)."""
         inert = self._new_location(
             location_key="L-INERT",
             is_primary=0,
-            is_operational=0,
+            workflow_state="To Map",
         )
         inert.insert(ignore_permissions=True)
         self.assertFalse(inert.is_primary)
+        # Derive sets is_operational=0 for non-Live states.
         self.assertFalse(inert.is_operational)
         self.assertIsNone(inert.frappe_company)
 
@@ -141,7 +207,7 @@ class TestLocationValidation(FrappeTestCase):
         )
 
         inert = self._new_location(
-            location_key="L-INERT-2", is_primary=0, is_operational=0
+            location_key="L-INERT-2", is_primary=0, workflow_state="To Map"
         )
         inert.insert(ignore_permissions=True)
         self.assertIsNone(resolve_company("L-INERT-2"))

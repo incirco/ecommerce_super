@@ -1,0 +1,27 @@
+[
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Map",
+  "workflow_action_name": "Map"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Go Live",
+  "workflow_action_name": "Go Live"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Mark Not Relevant",
+  "workflow_action_name": "Mark Not Relevant"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Pause",
+  "workflow_action_name": "Pause"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Reconsider",
+  "workflow_action_name": "Reconsider"
+ }
+]

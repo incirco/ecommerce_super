@@ -9,18 +9,37 @@
   "location_key",
   "location_name",
   "enabled",
+  "workflow_state",
   "is_primary",
   "is_operational",
   "is_wms_location",
+  "is_store",
   "serialization_enabled",
+  "copy_master_from_primary",
   "resolution_section",
   "frappe_company",
   "mapped_warehouse",
   "resolution_col_2",
   "ee_company_id",
-  "ee_company_value",
   "gstin",
+  "address_section",
+  "city",
+  "state",
+  "country",
   "pincode",
+  "address_line",
+  "billing_section",
+  "billing_street",
+  "billing_state",
+  "billing_col_2",
+  "billing_zipcode",
+  "billing_country",
+  "pickup_section",
+  "pickup_street",
+  "pickup_state",
+  "pickup_col_2",
+  "pickup_zipcode",
+  "pickup_country",
   "jwt_section",
   "jwt_token",
   "jwt_acquired_at",
@@ -57,13 +76,23 @@
    "description": "Per-location kill-switch."
   },
   {
+   "fieldname": "workflow_state",
+   "fieldtype": "Link",
+   "label": "Workflow State",
+   "options": "Workflow State",
+   "default": "To Map",
+   "in_list_view": 1,
+   "no_copy": 1,
+   "description": "Per §8.4.1: To Map → Mapped but not Live → Live, branch Skipped. Owned by the EasyEcom Location Workflow fixture; FDE transitions via standard form action buttons. is_operational is derived from this — never user-toggled."
+  },
+  {
    "fieldname": "is_primary",
    "fieldtype": "Check",
    "label": "Primary",
    "default": "0",
    "reqd": 1,
    "in_list_view": 1,
-   "description": "Exactly one location per account has this set. Marks the master/user-management location."
+   "description": "Exactly one location per account has this set. FDE-designated — never inferred from /getAllLocation payload."
   },
   {
    "fieldname": "is_operational",
@@ -71,8 +100,9 @@
    "label": "Operational",
    "default": "0",
    "reqd": 1,
+   "read_only": 1,
    "in_list_view": 1,
-   "description": "Whether the integration runs operational flows against this location and posts into a Company. Independent of Primary."
+   "description": "Workflow-derived (set by Go Live transition). NOT user-toggled. Read-only on the form; the FDE moves through the workflow instead."
   },
   {
    "fieldname": "is_wms_location",
@@ -80,7 +110,14 @@
    "label": "WMS Location",
    "default": "0",
    "reqd": 1,
-   "description": "Whether this location runs EasyEcom's full WMS plan (PO, GRN, cycle counting, putaway) versus OMS-only. The buying/GRN flow (§9) applies only to WMS locations."
+   "description": "Whether this location runs EasyEcom's full WMS plan (PO, GRN, cycle counting, putaway) versus OMS-only. Derived on discovery from EE stockHandle (1 → 1). FDE may override on the form. The buying/GRN flow (§9) applies only to WMS locations."
+  },
+  {
+   "fieldname": "is_store",
+   "fieldtype": "Check",
+   "label": "Is Store",
+   "default": "0",
+   "description": "EE store-vs-warehouse flag (payload: is_store). Recorded as supplied; no operational behaviour driven from it today."
   },
   {
    "fieldname": "serialization_enabled",
@@ -89,6 +126,13 @@
    "default": "0",
    "reqd": 1,
    "description": "Whether EE serialization is enabled for this seller-location. When set, GRN qty is pushed per individual serial rather than as an aggregate."
+  },
+  {
+   "fieldname": "copy_master_from_primary",
+   "fieldtype": "Check",
+   "label": "Copy Master From Primary",
+   "default": "0",
+   "description": "Whether this location inherits masters from primary (payload: copy_master_from_primary). Recorded as supplied; NOT a primary-detection signal."
   },
   {
    "fieldname": "resolution_section",
@@ -103,7 +147,7 @@
    "label": "Frappe Company",
    "options": "Company",
    "in_list_view": 1,
-   "description": "The Frappe Company this location resolves to. Set if and only if Operational. NOT unique — several locations may resolve to the same Company (many-to-one)."
+   "description": "The Frappe Company this location resolves to. Set by the FDE during mapping. The 'Map' workflow transition requires this to be set. NOT unique — several locations may resolve to the same Company (many-to-one)."
   },
   {
    "fieldname": "mapped_warehouse",
@@ -120,24 +164,108 @@
    "fieldname": "ee_company_id",
    "fieldtype": "Data",
    "label": "EE Company ID",
-   "description": "EasyEcom internal company ID (as reported by EE)."
-  },
-  {
-   "fieldname": "ee_company_value",
-   "fieldtype": "Data",
-   "label": "EE Company Value (reference)",
-   "description": "The company value EE records against this location. Reference only; never used operationally."
+   "description": "EasyEcom internal company ID (payload: company_id)."
   },
   {
    "fieldname": "gstin",
    "fieldtype": "Data",
    "label": "GSTIN",
-   "description": "Validated against India Compliance for operational locations."
+   "description": "Validated against India Compliance for operational locations. NOT supplied by /getAllLocation — FDE-set, never inferred."
+  },
+  {
+   "fieldname": "address_section",
+   "fieldtype": "Section Break",
+   "label": "Address (from EE)",
+   "collapsible": 1,
+   "description": "Address fields supplied by /getAllLocation. state is GST place-of-supply critical."
+  },
+  {
+   "fieldname": "city",
+   "fieldtype": "Data",
+   "label": "City"
+  },
+  {
+   "fieldname": "state",
+   "fieldtype": "Data",
+   "label": "State",
+   "description": "GST place-of-supply critical."
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Data",
+   "label": "Country"
   },
   {
    "fieldname": "pincode",
    "fieldtype": "Data",
-   "label": "Pincode"
+   "label": "Pincode",
+   "description": "Payload field is named 'zip'; stored as pincode."
+  },
+  {
+   "fieldname": "address_line",
+   "fieldtype": "Data",
+   "label": "Address Line",
+   "description": "Flat address string (payload: address)."
+  },
+  {
+   "fieldname": "billing_section",
+   "fieldtype": "Section Break",
+   "label": "Billing Address (from EE address type.billing_address)",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "billing_street",
+   "fieldtype": "Data",
+   "label": "Billing Street"
+  },
+  {
+   "fieldname": "billing_state",
+   "fieldtype": "Data",
+   "label": "Billing State"
+  },
+  {
+   "fieldname": "billing_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "billing_zipcode",
+   "fieldtype": "Data",
+   "label": "Billing Zipcode"
+  },
+  {
+   "fieldname": "billing_country",
+   "fieldtype": "Data",
+   "label": "Billing Country"
+  },
+  {
+   "fieldname": "pickup_section",
+   "fieldtype": "Section Break",
+   "label": "Pickup Address (from EE address type.pickup_address)",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "pickup_street",
+   "fieldtype": "Data",
+   "label": "Pickup Street"
+  },
+  {
+   "fieldname": "pickup_state",
+   "fieldtype": "Data",
+   "label": "Pickup State"
+  },
+  {
+   "fieldname": "pickup_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pickup_zipcode",
+   "fieldtype": "Data",
+   "label": "Pickup Zipcode"
+  },
+  {
+   "fieldname": "pickup_country",
+   "fieldtype": "Data",
+   "label": "Pickup Country"
   },
   {
    "fieldname": "jwt_section",
@@ -193,7 +321,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-05-24 00:00:00",
+ "modified": "2026-05-25 00:00:00",
  "modified_by": "Administrator",
  "module": "EasyEcom",
  "name": "EasyEcom Location",
@@ -206,7 +334,8 @@
    "read": 1,
    "write": 1,
    "report": 1,
-   "export": 1
+   "export": 1,
+   "submit": 0
   },
   {
    "role": "EasyEcom System Manager",

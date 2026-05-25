@@ -25,7 +25,7 @@ CUSTOMER_CREATE: str = "/Customer/createCustomer"  # POST
 CUSTOMER_GET: str = "/Customer/getCustomer"  # GET
 VENDOR_CREATE: str = "/Wms/Vendor/createVendor"  # POST
 VENDOR_GET: str = "/Wms/Vendor/getVendor"  # GET
-LOCATIONS_GET: str = "/Wms/Inventory/getLocations"  # GET — foundational (§7.7)
+LOCATIONS_GET: str = "/getAllLocation"  # GET — foundational (§7.7, §8.4.1)
 CHANNELS_GET: str = "/Wms/Channels/getChannels"  # GET
 
 

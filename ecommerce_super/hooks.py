@@ -81,6 +81,31 @@ fixtures = [
     # references require the child ruleset to already be in the DB at
     # save time (the compiler's compose-target-exists check fires).
     "EasyEcom Field Mapping",
+    # Workflow fixtures (§8.4.1 — first workflow in the app; pattern for
+    # 8b Channel and 8d Item to reuse). Order matters: Workflow State and
+    # Workflow Action Master must exist before Workflow tries to reference
+    # them. Filters scope each fixture to the names this app owns so we
+    # don't accidentally export every state/action Frappe core ships.
+    {
+        "dt": "Workflow State",
+        "filters": [
+            ["name", "in", ["To Map", "Mapped but not Live", "Live", "Skipped"]]
+        ],
+    },
+    {
+        "dt": "Workflow Action Master",
+        "filters": [
+            [
+                "name",
+                "in",
+                ["Map", "Go Live", "Mark Not Relevant", "Pause", "Reconsider"],
+            ]
+        ],
+    },
+    {
+        "dt": "Workflow",
+        "filters": [["name", "in", ["EasyEcom Location Workflow"]]],
+    },
     # Desktop Icon ships at ecommerce_super/desktop_icon/easyecom.json —
     # Frappe auto-syncs from the per-app desktop_icon/ directory. Fixture
     # entries get orphan-deleted on migrate; same pattern as Workspace.

@@ -142,7 +142,10 @@ class TestClientMocked(FrappeTestCase):
                 # can exercise both-headers-sent without needing a Company
                 # (this test environment doesn't have one provisioned).
                 client = EasyEcomClient(location_key="MOCK-LOC")
-                client.get("/Wms/Inventory/getLocations", params={"company_id": "x"})
+                # /getAllLocation is the foundational location-discovery
+                # endpoint (§7.7 + §8a correction); call it so the client
+                # runs without needing a Company.
+                client.get("/getAllLocation")
 
         called_headers = mock_req.call_args.kwargs["headers"]
         self.assertIn("x-api-key", called_headers)

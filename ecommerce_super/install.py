@@ -60,6 +60,13 @@ COMPOSITE_INDEXES: list[tuple[str, str, str, bool]] = [
         "status, attempted_at",
         False,
     ),
+    # Source-of-Truth Map — UNIQUE (company, warehouse) per §31.2.23
+    (
+        "tabSource-of-Truth Map",
+        "uq_sot_map_company_warehouse",
+        "company, warehouse",
+        True,
+    ),
 ]
 
 
