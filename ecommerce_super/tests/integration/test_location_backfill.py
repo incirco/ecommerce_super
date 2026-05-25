@@ -57,10 +57,12 @@ class TestBackfillLocationWorkflowState(FrappeTestCase):
         is_operational: int,
         frappe_company: str | None,
     ) -> str:
-        """Insert a Location with workflow_state explicitly EMPTY, so the
-        back-fill is the thing under test. Use db.sql directly to bypass
-        the field default and the workflow-state-derives-is_operational
-        logic in validate()."""
+        """Insert a Location with workflow_state explicitly EMPTY, simulating
+        a pre-workflow legacy row. The validate-time invariant (§8.4.1)
+        rejects To Map + frappe_company set, so we must NOT carry the
+        target combination through validate — insert clean (To Map, no
+        company), then SQL-update both fields directly to bypass validate
+        and arrive at the legacy state the back-fill is meant to fix."""
         docname = f"ECS-LOC-{key}"
         doc = frappe.new_doc("EasyEcom Location")
         doc.update(
@@ -68,17 +70,22 @@ class TestBackfillLocationWorkflowState(FrappeTestCase):
                 "location_key": key,
                 "location_name": f"Backfill {key}",
                 "enabled": 1,
-                "frappe_company": frappe_company,
-                "workflow_state": "To Map",  # need SOMETHING to pass insert
+                # Insert clean — frappe_company and workflow_state are
+                # SQL-stamped below in the legacy combination.
+                "workflow_state": "To Map",
             }
         )
         doc.insert(ignore_permissions=True)
-        # Now clear workflow_state to simulate pre-workflow legacy state.
-        frappe.db.set_value(
-            "EasyEcom Location",
-            docname,
-            {"workflow_state": None, "is_operational": is_operational},
-            update_modified=False,
+        # Stamp the legacy state directly: workflow_state empty,
+        # is_operational + frappe_company at the caller-specified
+        # combination. Bypasses validate() entirely.
+        frappe.db.sql(
+            """UPDATE `tabEasyEcom Location`
+               SET workflow_state=NULL,
+                   is_operational=%s,
+                   frappe_company=%s
+               WHERE name=%s""",
+            (is_operational, frappe_company, docname),
         )
         frappe.db.commit()
         return docname
