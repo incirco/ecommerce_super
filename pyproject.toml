@@ -25,7 +25,16 @@ packages = []
 
 [tool.ruff]
 line-length = 110
-target-version = "py314"
+# Formatter target pinned to py313 to prevent the except-tuple paren strip
+# both Black and Ruff perform when targeting py314 (Py 3.14's grammar accepts
+# `except A, B:` as a tuple expression, so the formatters treat the parens as
+# redundant and remove them — producing code visually indistinguishable from
+# the Py2 binding-syntax SyntaxError). Runtime stays 3.14 via
+# requires-python above; only formatter target moves down.
+target-version = "py313"
+
+[tool.black]
+target-version = ["py313"]
 
 [tool.ruff.lint]
 select = [

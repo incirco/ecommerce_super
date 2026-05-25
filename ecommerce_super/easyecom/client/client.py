@@ -498,6 +498,7 @@ def _exception_name_for_status(status_code: int) -> str:
 
 
 def _parse_retry_after(value: str | None) -> int | None:
+    """Return Retry-After header as integer seconds, or None on any parse failure."""
     if not value:
         return None
     try:
