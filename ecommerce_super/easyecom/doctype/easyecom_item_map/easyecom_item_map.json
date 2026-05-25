@@ -1,0 +1,141 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-ITM-{ee_sku}",
+ "creation": "2026-05-26 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ee_sku",
+  "status",
+  "link_section",
+  "erpnext_doctype",
+  "erpnext_name",
+  "ee_ids_section",
+  "ee_product_id",
+  "ee_cp_id",
+  "flag_section",
+  "flag_reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "ee_sku",
+   "fieldtype": "Data",
+   "label": "EE SKU",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "EasyEcom SKU — EE's unique product identifier per its FAQ; the join key for this row. Direction-agnostic: the row exists whether the product was born in EE (pulled in) or in ERPNext (pushed out). UNIQUE at the DB level (§8.1.2)."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Mapped\nCreated-Flagged\nFlagged-Not-Created\nDrift\nDisabled",
+   "default": "Mapped",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "§8.1.9 review/exception state. Mapped = clean; Created-Flagged = created but with a content problem (missing HSN, unmapped tax, dirty UOM); Flagged-Not-Created = unsupported type (variant_parent / child_product / kit_bom / unknown); Drift = (post-flip) unexpected EE-side change or EE-origin product; Disabled = lifecycle-deactivated. The status drives the FDE worklist filter."
+  },
+  {
+   "fieldname": "link_section",
+   "fieldtype": "Section Break",
+   "label": "Linked ERPNext Object"
+  },
+  {
+   "fieldname": "erpnext_doctype",
+   "fieldtype": "Link",
+   "label": "ERPNext DocType",
+   "options": "DocType",
+   "in_list_view": 1,
+   "description": "Either 'Item' (for a normal_product) or 'Product Bundle' (for a combo_product). Restricted to those two via the form-side query (see easyecom_item_map.js); the controller's validate refuses anything else. Dynamic-Link pattern: the doctype controls the options for erpnext_name."
+  },
+  {
+   "fieldname": "erpnext_name",
+   "fieldtype": "Dynamic Link",
+   "label": "ERPNext Name",
+   "options": "erpnext_doctype",
+   "in_list_view": 1,
+   "description": "The Item docname (for normal SKUs) OR the Product Bundle docname (for combo SKUs). Dynamic Link resolves the FK target from erpnext_doctype. The pull/push flows write here when they create the corresponding ERPNext-side row."
+  },
+  {
+   "fieldname": "ee_ids_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Internal IDs",
+   "collapsible": 1,
+   "description": "EE's internal product_id and cp_id. Stored because the push functions (UpdateMasterProduct, ActivateDeactivateProduct) key on product_id; NOT used as the join key (sku is). Populated when the push creates a new product (CreateMasterProduct returns product_id) or when the pull discovers an existing one."
+  },
+  {
+   "fieldname": "ee_product_id",
+   "fieldtype": "Data",
+   "label": "EE product_id",
+   "description": "EasyEcom internal product id (returned by CreateMasterProduct; used by Update/ActivateDeactivate). Read-only after creation in normal flow; FDE can edit if remapping."
+  },
+  {
+   "fieldname": "ee_cp_id",
+   "fieldtype": "Data",
+   "label": "EE cp_id",
+   "description": "EasyEcom internal cp_id (per-company product id; surfaced in some EE responses). Stored for completeness; not the join key."
+  },
+  {
+   "fieldname": "flag_section",
+   "fieldtype": "Section Break",
+   "label": "Flag Details",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "flag_reason",
+   "fieldtype": "Small Text",
+   "label": "Flag Reason",
+   "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: a plain-English explanation the FDE can act on (e.g. 'missing HSN', 'unsupported product_type=variant_parent', 'EE-side edit to product_name after onboarding flip')."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-26 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Item Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -209,6 +209,77 @@ frappe.ui.form.on("EasyEcom Account", {
         );
     },
 
+    flip_to_erpnext_mastered_action(frm) {
+        if (frm.is_new()) {
+            frappe.msgprint({
+                title: __("Save First"),
+                message: __(
+                    "Save the Account before flipping Item Master Mode."
+                ),
+                indicator: "orange",
+            });
+            return;
+        }
+        if (frm.doc.item_master_mode === "erpnext_mastered") {
+            frappe.msgprint({
+                title: __("Already Flipped"),
+                message: __(
+                    "Account is already in <b>erpnext_mastered</b> mode (flipped at {0}).",
+                    [frappe.datetime.str_to_user(frm.doc.item_master_flipped_at) || "—"]
+                ),
+                indicator: "grey",
+            });
+            return;
+        }
+
+        frappe.confirm(
+            __(
+                "<b>Flip to ERPNext-Mastered?</b><br><br>" +
+                    "After the flip:<br>" +
+                    "&bull; The §8d push (ERPNext → EasyEcom) becomes the authoritative item flow.<br>" +
+                    "&bull; The pull becomes <b>drift detection only</b> — EE-side new products and edits to mapped items will flag as <code>Drift</code> for the FDE, NOT auto-create or auto-overwrite.<br><br>" +
+                    "Reverse flips require manual intervention (set the field via Console). Make sure onboarding reconciliation is complete before confirming."
+            ),
+            () => {
+                frappe.call({
+                    method:
+                        "ecommerce_super.easyecom.api.item_master_mode.flip_to_erpnext_mastered",
+                    args: {account: frm.doc.name, confirm: true},
+                    freeze: true,
+                    freeze_message: __("Flipping…"),
+                    callback(r) {
+                        const result = r.message || {};
+                        if (result.ok) {
+                            frappe.show_alert(
+                                {
+                                    message: __("Flipped to erpnext_mastered."),
+                                    indicator: "green",
+                                },
+                                7
+                            );
+                            frm.reload_doc();
+                        } else {
+                            frappe.msgprint({
+                                title: __("Flip Failed"),
+                                message: result.message || __("Unknown error."),
+                                indicator: "red",
+                            });
+                        }
+                    },
+                    error() {
+                        frappe.msgprint({
+                            title: __("Flip Failed"),
+                            message: __(
+                                "The flip call itself failed (network or permission)."
+                            ),
+                            indicator: "red",
+                        });
+                    },
+                });
+            }
+        );
+    },
+
     test_connection_action(frm) {
         if (!_ensureSaved(frm, "Save the Account before testing the connection — credentials must be persisted (encrypted) before the test can read them back transiently.")) {
             return;
