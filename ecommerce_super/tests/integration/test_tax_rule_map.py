@@ -411,6 +411,72 @@ class TestCessPassThrough(FrappeTestCase):
         self.assertEqual(item.ecs_cess, 7.0)
 
 
+class TestTemplateCompanyMatch(FrappeTestCase):
+    """§8.5.3: rows hold ONLY the parent's company's templates. The
+    form's set_query filters the dropdown; this server-side check is
+    the gate against API writes / fixtures / typos.
+
+    Uses _Other Test Co's GST 18% template (created on demand) to
+    attempt a wrong-Company cross-reference."""
+
+    PREFIX = "tax-co-"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.company = _ensure_test_company()
+        # Ensure a second Company with its own GST templates exists.
+        if not frappe.db.exists("Company", "_Other Test Co"):
+            other = frappe.new_doc("Company")
+            other.update(
+                {
+                    "company_name": "_Other Test Co",
+                    "abbr": "OTC",
+                    "default_currency": "INR",
+                    "country": "India",
+                }
+            )
+            other.insert(ignore_permissions=True)
+        cls.other_company = "_Other Test Co"
+        cls.other_company_gst_18 = "GST 18% - OTC"
+
+    def setUp(self) -> None:
+        _wipe_tax_maps(self.PREFIX)
+
+    def tearDown(self) -> None:
+        _wipe_tax_maps(self.PREFIX)
+
+    def test_template_from_other_company_rejected(self) -> None:
+        """Save with a row pointing to OTC's GST template while the
+        parent's company is TC — must throw."""
+        # Sanity: OTC's GST 18% template was auto-created by India Compliance.
+        if not frappe.db.exists("Item Tax Template", self.other_company_gst_18):
+            self.skipTest(
+                f"India Compliance did not seed {self.other_company_gst_18} — "
+                "test environment doesn't carry GST templates for both Companies."
+            )
+        with self.assertRaises(frappe.ValidationError):
+            _make_map(
+                tax_rule_name=f"{self.PREFIX}cross",
+                company=self.company,  # TC
+                rows=[{"item_tax_template": self.other_company_gst_18}],  # OTC
+            )
+
+    def test_same_company_template_accepted(self) -> None:
+        # Sanity check the positive path under the same setup.
+        _make_map(
+            tax_rule_name=f"{self.PREFIX}ok",
+            company=self.company,
+            rows=[{"item_tax_template": GST_18_TEMPLATE}],
+        )
+        self.assertTrue(
+            frappe.db.exists(
+                "EasyEcom Tax Rule Map",
+                {"tax_rule_name": f"{self.PREFIX}ok", "company": self.company},
+            )
+        )
+
+
 class TestDbUnique(FrappeTestCase):
     """(tax_rule_name, company) UNIQUE at the DB level."""
 

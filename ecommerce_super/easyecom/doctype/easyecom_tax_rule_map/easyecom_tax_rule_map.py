@@ -36,6 +36,35 @@ class EasyEcomTaxRuleMap(Document):
         # Defensive — the DB UNIQUE (tax_rule_name, company) is the real
         # gate, but a clean Python check gives a nicer error before SQL.
         self._validate_unique_natural_key()
+        # §8.5.3 contract: rows hold ONLY this company's templates.
+        # The form's set_query filters the dropdown, but the server
+        # check is the gate (API writes, fixtures, FDE typing a wrong
+        # template name in the cell).
+        self._validate_template_companies_match()
+
+    def _validate_template_companies_match(self) -> None:
+        if not self.company:
+            return
+        for row in self.taxes or []:
+            if not row.item_tax_template:
+                continue
+            template_company = frappe.db.get_value(
+                "Item Tax Template", row.item_tax_template, "company"
+            )
+            if template_company and template_company != self.company:
+                frappe.throw(
+                    _(
+                        "Row #{0}: Item Tax Template {1} belongs to Company {2}, "
+                        "not {3}. EasyEcom Tax Rule Map rows must reference "
+                        "templates from the document's own Company (§8.5.3)."
+                    ).format(
+                        row.idx,
+                        row.item_tax_template,
+                        template_company,
+                        self.company,
+                    ),
+                    title=_("Wrong-Company Template"),
+                )
 
     def _validate_unique_natural_key(self) -> None:
         if not self.tax_rule_name or not self.company:
