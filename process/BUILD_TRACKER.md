@@ -4,7 +4,7 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 **Legend:** ☐ not started · 🔶 in progress · ✅ done · — n/a yet
 
-**Current focus:** _§5 engine built + locally tested (Test Mapping validated against real EE payload). §5 staging test script ready. §3+§4 and §5 both out for FDE staging test in parallel. Real-payload findings (sku vs item_code, no UOM field) captured as §8 open-item #4. Next buildable: §6 Idempotency/Replay or §7 Integration Contract._
+**Current focus:** _§5 + §6 built and locally tested (committed locally, awaiting push + staging redeploy — §6 carries 2 foundation fixes incl. the Redis-namespace bug). §3+§4 and §5 out for FDE staging test. §7 Integration Contract is a verify-and-carry contract (not a build): its enforceable infra is foundation-built; pending a contract-verification pass, then its per-flow rules (§7.1.1 unit-of-work = atomic doc; Sync Record Line child table; binary Success|Failed per-record outcome) fold into the §8 packet. Next buildable: §8 Master Sync (first real flow; applies the real-payload findings + the §7 per-flow obligations)._
 
 ---
 
@@ -23,8 +23,8 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 3+4. Foundation: Connection Model + Data Model | ✅ | ✅ | ✅ 24-May | ✅ 24-May | ✅ 24-May | 🔄 | 🔄 FDE | ☐ |
 | 5. Field Mapping engine | ✅ | ✅ | ✅ 24-May | ✅ 24-May | ✅ 24-May | 🔄 | 🔄 FDE | ☐ |
-| 6. Idempotency, Replay, Correlation, Queue | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
-| 7. The Integration Contract | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 6. Idempotency, Replay, Correlation, Queue (completion — most built in foundation) | ✅ | ✅ | ✅ | ✅ | ☐ | ☐ | ☐ | ☐ |
+| 7. The Integration Contract (verify-and-carry; not a build) | ✅ verified | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Integrations (each implements the Section 7 contract)
 

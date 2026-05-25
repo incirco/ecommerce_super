@@ -1311,6 +1311,22 @@ The only failures that stop a whole batch are **transport-level**: authenticatio
 
 Per-record isolation is mandatory: a handler processing a batch wraps each record in its own savepoint, so one record's exception can never abort its siblings or the surrounding transaction. A record that raises is caught, its Sync Record is marked Failed, and processing continues to the next record.
 
+### 7.1.1 What "one record" means — the atomic document, and per-line detail for nested documents
+
+"The record" is **one atomic ERPNext document** — the thing that succeeds or fails as a unit in ERPNext. This is *declared per flow* in its Section 7.6 declaration; it is never inferred at runtime. The granularity differs by flow because the target documents differ:
+
+- **Independent-entity pulls** (Item, Customer, Supplier — Section 8): each source entity becomes its own ERPNext document, so each is its own unit of work. Pulling 100 products → 100 Items → **100 Sync Records**; per-record isolation means 2 can fail while 98 succeed (the worked example above).
+- **Composite documents with nested lines** (GRN→Purchase Receipt in Section 9, Order→Sales Invoice in Section 12, Return→Credit Note/Return in Section 13): the *document* is the atomic unit, because ERPNext cannot half-create it — a Purchase Receipt with one bad line creates zero lines, not nine. So one GRN with 10 SKUs → one Purchase Receipt → **one Sync Record**, not ten. The 10 SKUs are lines of one unit, not ten units.
+
+**But a document-grained Sync Record for a nested document must still carry per-line detail.** "One Sync Record" must not mean "no line-level visibility." For any flow whose source payload has nested lines (GRN, Order, Return — anything with a child array), the Sync Record carries a **child table of line outcomes** (`EasyEcom Sync Record Line`), one row per source line, each recording: the source line identifier (EE SKU / line ref), the mapped ERPNext target (e.g. item_code), the line **status** (OK / Failed / Discrepancy), and a reason when not OK. The two failure kinds resolve as follows:
+
+- **A line problem that blocks document creation** (e.g. an unmapped SKU — ERPNext cannot create the Purchase Receipt at all): the whole Sync Record is **Failed**, no document is created, and the child table (or, where it cannot be persisted because the parent failed pre-insert, the `last_error`) names the offending line(s) — so the FDE sees it was line 7 of 10, not just "GRN failed."
+- **A line reconciliation variance** (e.g. the Purchase Receipt's line 7 received quantity or tax doesn't match what was expected, beyond tolerance): this is still a **Failed** Sync Record, not a partial success. The document creation is rolled back — a Failed unit of work must not leave a posted document in the books — the line-7 child row is marked **Discrepancy**, the offending line is named, and an Integration Discrepancy (Section 23) is raised for tracking to closure. The FDE investigates the variance, fixes the cause, and retries. The per-record outcome is binary (Section 7.3): a discrepancy on any line is a failure of the whole unit of work, never a "completed-but-flagged" state — this keeps the failure on the FDE's worklist rather than hiding behind a Success.
+
+This makes line-level outcomes **queryable and structural** ("show all GRN lines that failed / are in discrepancy across all GRNs"), not buried in error text. Single-entity flows (Item/Customer/Supplier) have no nested lines and therefore no line child table — their Sync Record is the whole story.
+
+Implementation note: the `EasyEcom Sync Record Line` child table is a schema addition to the existing EasyEcom Sync Record DocType (Section 31.2.3). It is built when the first line-heavy flow is built (Section 9, GRN — Master Sync in Section 8 is single-entity and does not need it), and populated only by flows whose Section 7.6 declaration specifies nested lines.
+
 ## 7.2 Mandatory logging and correlation on every interaction
 
 Every API call and every webhook obeys this logging contract without exception. A per-API integration does not get to skip it; the EasyEcomClient and the webhook receiver enforce it centrally so individual flows cannot forget.
@@ -1327,7 +1343,7 @@ If logging itself fails (e.g., the API Call row cannot be written), that is an a
 
 Two distinct state machines, deliberately not conflated:
 
-**Per-record (EasyEcom Sync Record):** Not Synced → Pending → In Progress → Success | Failed. A Failed record is terminal until an explicit Retry (manual or scheduled), which returns it to Pending with the attempts counter preserved. Conflict or divergence that is not an outright failure routes to an Integration Discrepancy rather than Failed.
+**Per-record (EasyEcom Sync Record):** Not Synced → Pending → In Progress → Success | Failed. The per-record outcome is binary: either the unit of work completed and reconciled cleanly (Success), or it did not (Failed). A Failed record is terminal until an explicit Retry (manual or scheduled), which returns it to Pending with the attempts counter preserved. A line-level problem of any kind — one that blocks document creation, OR a reconciliation variance on a line (e.g. a quantity or tax mismatch beyond tolerance) — makes the whole Sync Record **Failed**: the target document is not left standing (creation is rolled back so the books never hold a document the integration considers failed), the offending line is named, and an Integration Discrepancy is raised (Section 23) for tracking. There is no "partially done" per-record state; a discrepancy is a failure of that unit of work, fixed-and-retried like any other failure.
 
 **Per-job (EasyEcom Queue Job):** Queued → Running → Success | Partial | Failed | Retrying | Cancelled. The addition the contract requires is **Partial**: a job whose batch transport succeeded but where some per-record units failed. A Partial job records succeeded_count and failed_count and links to the Failed Sync Records it produced. Partial is not retried wholesale (that would re-process the 98 good records); instead its failed children are retried individually.
 
@@ -1371,7 +1387,7 @@ Because the contract above is fixed, adding a new API is reduced to declaring a 
 - Auth scope: which location_key's JWT the call uses, and the resolved Company
 - Pagination style (next-page-URL cursor for bulk reads) and the cursor field advanced
 - The Field Mapping ruleset (Section 5) that translates the payload
-- The unit of work (what one record is) and the idempotency key for it (Section 6.1)
+- The unit of work (what one record is) and the idempotency key for it (Section 6.1). Per Section 7.1.1, state whether the unit is a single entity or a **composite document with nested lines** (GRN, Order, Return); if nested, the flow populates the EasyEcom Sync Record Line child table with per-line outcomes
 - The target ERPNext DocType and the create/update semantics
 - Flow-specific failure modes beyond the standard ones, if any
 
@@ -4706,6 +4722,17 @@ ecs_replay_strategy      Data       N   per Section 19.2
 # (company, status) for list queries
 # (correlation_id) for trace queries
 # (idempotency_key) UNIQUE for retry detection
+```
+
+**Child table — EasyEcom Sync Record Line** (added with the first nested-document flow, Section 9 GRN; see Section 7.1.1). Populated only by flows whose unit of work is a composite document with nested lines (GRN, Order, Return); single-entity flows (Item/Customer/Supplier) leave it empty.
+
+```
+# child of EasyEcom Sync Record
+source_line_ref          Data       Y   EE-side line identifier (e.g. SKU / line id)
+target_field             Data       N   mapped ERPNext target (e.g. item_code)
+line_status              Select     Y   OK | Failed | Discrepancy
+reason                   Long Text  N   plain-English reason when not OK
+ecs_integration_discrepancy Link    N   EasyEcom Integration Discrepancy (set when line_status=Discrepancy; Section 23)
 ```
 
 ### 31.2.4 EasyEcom API Call
