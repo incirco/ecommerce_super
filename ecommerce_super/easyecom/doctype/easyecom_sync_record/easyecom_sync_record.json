@@ -35,7 +35,9 @@
   "last_response_payload",
   "replay_section",
   "ecs_replay_plan",
-  "ecs_replay_strategy"
+  "ecs_replay_strategy",
+  "lines_section",
+  "lines"
  ],
  "fields": [
   {
@@ -229,6 +231,19 @@
    "fieldname": "ecs_replay_strategy",
    "fieldtype": "Data",
    "label": "Replay Strategy"
+  },
+  {
+   "fieldname": "lines_section",
+   "fieldtype": "Section Break",
+   "label": "Sync Record Lines",
+   "collapsible": 1,
+   "description": "Per-line outcomes for nested-document flows (GRN, Order, Return — §7.1.1). Populated by §9+ flow handlers; single-entity flows (Item/Customer/Supplier, §8) leave this empty."
+  },
+  {
+   "fieldname": "lines",
+   "fieldtype": "Table",
+   "label": "Lines",
+   "options": "EasyEcom Sync Record Line"
   }
  ],
  "index_web_pages_for_search": 0,
