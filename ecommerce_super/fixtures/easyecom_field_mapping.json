@@ -415,48 +415,139 @@
   },
   {
     "doctype": "EasyEcom Field Mapping",
-    "name": "EasyEcom-Warehouse-Pull",
-    "mapping_name": "EasyEcom-Warehouse-Pull",
+    "name": "EasyEcom-Location-Pull",
+    "mapping_name": "EasyEcom-Location-Pull",
     "entity_type": "Warehouse",
     "direction": "Pull",
     "active": 1,
     "missing_field_policy": "Permissive",
-    "version": 1,
+    "version": 2,
     "last_modified_by": "Administrator",
-    "last_modified_at": "2026-05-24 00:00:00",
-    "change_reason": "Initial library fixture (§5.11) — pulls EE locations (handler in §7)",
+    "last_modified_at": "2026-05-25 00:00:00",
+    "change_reason": "§8a refactor — renamed from EasyEcom-Warehouse-Pull. Reconciled to real /getAllLocation payload (the assumed paths location_id/name/pincode/is_active were stale; real payload uses location_key/location_name/zip/stockHandle plus a nested 'address type' object). is_wms_location is derived from stockHandle as a ruleset transform (conditional_constant) so an EE rename can be fixed by an FDE in the desk, not a code deploy. api_token is deliberately NOT mapped — it is a credential-shaped string per §7.7 and is redacted at the API Call log layer via utils/redaction.REDACTED_FIELDS. userId and the literal-space-key 'phone number' are also not mapped.",
     "rules": [
       {
         "erpnext_path": "location_key",
-        "easyecom_path": "location_id",
+        "easyecom_path": "location_key",
         "transform_push": "identity",
         "transform_pull": "identity",
         "required": 1
       },
       {
         "erpnext_path": "location_name",
-        "easyecom_path": "name",
+        "easyecom_path": "location_name",
         "transform_push": "identity",
-        "transform_pull": "str_strip",
+        "transform_pull": "identity",
         "required": 1
       },
       {
-        "erpnext_path": "address",
-        "easyecom_path": "address",
+        "erpnext_path": "ee_company_id",
+        "easyecom_path": "company_id",
         "transform_push": "identity",
-        "transform_pull": "str_strip"
+        "transform_pull": "int_to_str"
       },
       {
-        "erpnext_path": "pincode",
-        "easyecom_path": "pincode",
+        "erpnext_path": "is_store",
+        "easyecom_path": "is_store",
         "transform_push": "identity",
         "transform_pull": "identity"
       },
       {
-        "erpnext_path": "is_active",
-        "easyecom_path": "is_active",
-        "transform_push": "bool_to_yn",
-        "transform_pull": "yn_to_bool"
+        "erpnext_path": "copy_master_from_primary",
+        "easyecom_path": "copy_master_from_primary",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "city",
+        "easyecom_path": "city",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "state",
+        "easyecom_path": "state",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "country",
+        "easyecom_path": "country",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "pincode",
+        "easyecom_path": "zip",
+        "transform_push": "identity",
+        "transform_pull": "int_to_str"
+      },
+      {
+        "erpnext_path": "address_line",
+        "easyecom_path": "address",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "billing_street",
+        "easyecom_path": "address type.billing_address.street",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "billing_state",
+        "easyecom_path": "address type.billing_address.state",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "billing_zipcode",
+        "easyecom_path": "address type.billing_address.zipcode",
+        "transform_push": "identity",
+        "transform_pull": "int_to_str"
+      },
+      {
+        "erpnext_path": "billing_country",
+        "easyecom_path": "address type.billing_address.country",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "pickup_street",
+        "easyecom_path": "address type.pickup_address.street",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "pickup_state",
+        "easyecom_path": "address type.pickup_address.state",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "pickup_zipcode",
+        "easyecom_path": "address type.pickup_address.zipcode",
+        "transform_push": "identity",
+        "transform_pull": "int_to_str"
+      },
+      {
+        "erpnext_path": "pickup_country",
+        "easyecom_path": "address type.pickup_address.country",
+        "transform_push": "identity",
+        "transform_pull": "identity"
+      },
+      {
+        "erpnext_path": "is_wms_location",
+        "easyecom_path": "stockHandle",
+        "transform_push": "identity",
+        "transform_pull": "conditional_constant",
+        "transform_args": {
+          "conditions": [
+            {"when": "source_payload.get('stockHandle') in (1, '1', True)", "then": 1}
+          ],
+          "default": 0
+        },
+        "notes": "is_wms_location is derived from EE's stockHandle (1 → WMS plan, 0 → OMS-only). Expressed as a ruleset transform — an FDE can adjust the condition (e.g. if EE renames the field or adds new truthy values) without a code deploy. The FDE may still override the resulting value on the form."
       }
     ]
   },

@@ -5,3 +5,4 @@
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 ecommerce_super.patches.v0_1.backfill_location_workflow_state
+ecommerce_super.patches.v0_1.drop_warehouse_pull_ruleset

@@ -5,21 +5,31 @@ ERPNext — there is no push. This flow drives one foundational API call,
 then upserts one EasyEcom Location row per element of the returned
 data[] array.
 
+Payload → field translation is delegated to the EasyEcom-Location-Pull
+**Field Mapping ruleset** (fixture, §5.11 library). Insurance against
+EasyEcom changing their API: a renamed or restructured field is fixed
+by an FDE editing the ruleset in the desk, not a code deploy. The
+stockHandle → is_wms_location derivation is itself a ruleset transform
+(conditional_constant). This flow's job is orchestration; the engine
+does the mapping.
+
 Foundational call (§7.7):
   - account-scoped: company=None, is_foundational=1 on the API Call row.
   - api_token in the response is credential-shaped — redacted in the
     logged payload (utils/redaction.py REDACTED_FIELDS includes
-    'api_token') and NEVER persisted onto the EasyEcom Location row.
+    'api_token') and NEVER mapped into the ruleset's output, so it
+    never lands on the EasyEcom Location row either.
 
 Upsert semantics (§8.4.1):
   - keyed on location_key (the natural EE identifier).
-  - NEW rows land in workflow state "To Map" with is_wms_location derived
-    from stockHandle (1 → 1). frappe_company / mapped_warehouse are left
-    blank for the FDE to fill via the Map workflow transition.
+  - NEW rows land in workflow state "To Map" with is_wms_location set
+    from the ruleset's derivation. frappe_company / mapped_warehouse are
+    left blank for the FDE to fill via the Map workflow transition.
   - EXISTING rows have their EE-supplied fields refreshed in place; the
     workflow state and the FDE-set fields (frappe_company,
-    mapped_warehouse, gstin, is_primary) are LEFT UNTOUCHED. Re-pull
-    never auto-advances or resets the workflow.
+    mapped_warehouse, gstin, is_primary) — AND is_wms_location, which
+    the FDE may have overridden — are LEFT UNTOUCHED. Re-pull never
+    auto-advances or resets the workflow.
 
 Per-record isolation (§7.1):
   - The inner loop runs through `for_each_record` so one bad location row
@@ -30,6 +40,8 @@ Per-record isolation (§7.1):
 What this module does NOT do:
   - It does not push locations to EE (no such API; locations are
     EE-born).
+  - It does not translate payload fields itself — the Field Mapping
+    engine does. The ruleset is the contract; this flow is its driver.
   - It does not infer is_primary (FDE-set per §8.4.1).
   - It does not set gstin (FDE-set per §8.4.1).
   - It does not advance workflow state on existing rows.
@@ -43,6 +55,7 @@ import frappe
 
 from ecommerce_super.easyecom.client.client import EasyEcomClient
 from ecommerce_super.easyecom.client.endpoints import LOCATIONS_GET
+from ecommerce_super.easyecom.field_mapping.executor import FieldMappingExecutor
 from ecommerce_super.easyecom.flows._isolation import BatchOutcome, for_each_record
 
 # Workflow state for newly-discovered locations (§8.4.1).
@@ -50,6 +63,21 @@ INITIAL_WORKFLOW_STATE: str = "To Map"
 
 # EE response envelope key carrying the location list.
 DATA_KEY: str = "data"
+
+# Field Mapping ruleset that translates the EE payload to EasyEcom
+# Location fields (§5.11 library, refactored in §8a). Edits to this
+# ruleset (e.g. EE rename of a payload field) are an FDE action in the
+# desk, not a code deploy.
+LOCATION_PULL_RULESET: str = "EasyEcom-Location-Pull"
+
+# Fields the FDE owns after first discovery — re-pull must not overwrite
+# them. Everything else from the ruleset output is EE-supplied and gets
+# refreshed in place.
+_FDE_OWNED_FIELDS: frozenset[str] = frozenset(
+    {
+        "is_wms_location",  # FDE may override the ruleset's stockHandle derivation
+    }
+)
 
 
 @frappe.whitelist()
@@ -152,12 +180,16 @@ def upsert_locations_from_payload(rows: list[dict]) -> BatchOutcome:
     """Drive the per-row upsert loop with savepoint isolation.
 
     Separated from `pull_locations` so tests can feed a fixture payload
-    directly without mocking the HTTP layer.
+    directly without mocking the HTTP layer. The Field Mapping executor
+    is instantiated ONCE for the whole batch — its compilation step
+    queries the DB for the ruleset; doing it per row would be wasted
+    work.
     """
+    executor = FieldMappingExecutor(LOCATION_PULL_RULESET)
     succeeded_names: list[str] = []
 
     def _handle(row: dict) -> None:
-        name = _upsert_one(row)
+        name = _upsert_one(row, executor)
         succeeded_names.append(name)
 
     def _on_failure(row: dict, exc: BaseException) -> None:
@@ -182,44 +214,85 @@ def upsert_locations_from_payload(rows: list[dict]) -> BatchOutcome:
     return outcome
 
 
-def _upsert_one(row: dict) -> str:
-    """Create or update a single EasyEcom Location from one /getAllLocation
-    row. Returns the docname of the resulting row."""
-    location_key = (row or {}).get("location_key")
+def _upsert_one(row: dict, executor: FieldMappingExecutor) -> str:
+    """Translate one /getAllLocation row through the Field Mapping
+    engine and upsert the EasyEcom Location row it describes.
+
+    The engine produces a flat dict of ERPNext fields per the
+    EasyEcom-Location-Pull ruleset. This function never inspects the raw
+    payload for field values — that would re-introduce the hardcoded-
+    mapper risk the refactor removed.
+    """
+    erpnext_fields = executor.pull(row)
+    location_key = erpnext_fields.get("location_key")
     if not location_key:
-        raise ValueError("Location row missing required 'location_key'.")
+        # The ruleset declares location_key as required, so the engine
+        # would have raised FieldMappingMissingRequiredError before us.
+        # Defensive belt-and-braces.
+        raise ValueError(
+            "Field Mapping engine returned no location_key for /getAllLocation row "
+            "(check EasyEcom-Location-Pull ruleset)."
+        )
 
     existing_name = frappe.db.get_value(
         "EasyEcom Location", {"location_key": location_key}, "name"
     )
 
     if existing_name:
-        return _update_existing(existing_name, row)
-    return _create_new(row)
+        return _update_existing(existing_name, erpnext_fields)
+    return _create_new(erpnext_fields)
 
 
-def _create_new(row: dict) -> str:
-    """Insert a brand-new EasyEcom Location in workflow state To Map."""
+def _create_new(erpnext_fields: dict[str, Any]) -> str:
+    """Insert a brand-new EasyEcom Location in workflow state To Map.
+
+    The ruleset already supplied is_wms_location (derived from
+    stockHandle). Workflow state and is_operational are flow-owned and
+    set explicitly here — the ruleset does not (and should not) touch
+    them.
+    """
     doc = frappe.new_doc("EasyEcom Location")
-    doc.update(_ee_supplied_fields(row))
+    doc.update(erpnext_fields)
     doc.workflow_state = INITIAL_WORKFLOW_STATE
-    # is_wms_location is derived ONLY on first create — re-pull doesn't
-    # override an FDE override. Pre-set is_operational=0 explicitly so the
-    # controller's derive step sees a fresh value.
-    doc.is_wms_location = 1 if _stock_handle_truthy(row) else 0
+    # is_operational is workflow-derived in the controller; pre-set 0 so
+    # the controller's derive step sees a fresh value on To Map insert.
     doc.is_operational = 0
     doc.insert(ignore_permissions=True)
     return doc.name
 
 
-def _update_existing(name: str, row: dict) -> str:
-    """Refresh EE-supplied fields in place; leave FDE-set fields and
-    workflow_state untouched."""
-    # db_set the EE-supplied fields directly — bypasses validate (we don't
-    # want the workflow-state-derivation logic to fire on a re-pull) and
-    # bypasses the Workflow constraint that normally guards workflow_state
-    # writes. We're not touching workflow_state.
-    updates = _ee_supplied_fields(row)
+def _update_existing(name: str, erpnext_fields: dict[str, Any]) -> str:
+    """Refresh EE-supplied fields in place; leave FDE-owned fields and
+    workflow_state untouched.
+
+    Two filters on the updates dict:
+
+    1. Drop _FDE_OWNED_FIELDS (e.g. is_wms_location) — the ruleset may
+       produce these (from the stockHandle derivation), but the FDE is
+       allowed to override them on the form; re-pull must not stomp.
+
+    2. Drop fields where the ruleset emitted None — meaning the source
+       payload didn't carry the field. Treating None as "absent" rather
+       than "explicitly NULL" achieves two things:
+         - NOT NULL columns (e.g. Check fields like is_store, default
+           '0') don't get a NULL write via raw set_value (which would
+           raise IntegrityError; Frappe's field defaults only fire on
+           insert, not on set_value).
+         - An EE payload that momentarily drops an address field does
+           not clobber the existing value with NULL. Additive refresh
+           is the right semantics for the §8a contract — we update
+           what EE supplies, leave alone what it doesn't.
+
+    db.set_value bypasses validate (we don't want the workflow-state-
+    derivation logic to fire on a re-pull) and bypasses the Workflow
+    constraint that normally guards workflow_state writes. We're not
+    touching workflow_state either way.
+    """
+    updates = {
+        k: v
+        for k, v in erpnext_fields.items()
+        if k not in _FDE_OWNED_FIELDS and v is not None
+    }
     if not updates:
         return name
     frappe.db.set_value(
@@ -229,68 +302,6 @@ def _update_existing(name: str, row: dict) -> str:
         update_modified=True,
     )
     return name
-
-
-def _ee_supplied_fields(row: dict) -> dict[str, Any]:
-    """Map one /getAllLocation row to the EasyEcom Location fields that
-    EE owns. Keys NOT present here (frappe_company, mapped_warehouse,
-    gstin, is_primary, is_operational, workflow_state) are FDE-set or
-    workflow-derived and must never be written by this flow.
-
-    `api_token` is intentionally NOT mapped. The redaction layer redacts
-    it from the logged API Call row; this layer's job is to ensure it
-    never lands on the EasyEcom Location row either.
-    """
-    address_type = row.get("address type") or {}
-    billing = (address_type.get("billing_address") or {}) if isinstance(
-        address_type, dict
-    ) else {}
-    pickup = (address_type.get("pickup_address") or {}) if isinstance(
-        address_type, dict
-    ) else {}
-
-    return {
-        "location_key": row.get("location_key"),
-        "location_name": row.get("location_name") or row.get("location_key"),
-        "ee_company_id": _as_str(row.get("company_id")),
-        "is_store": 1 if row.get("is_store") else 0,
-        "copy_master_from_primary": 1 if row.get("copy_master_from_primary") else 0,
-        "city": row.get("city"),
-        "state": row.get("state"),
-        "country": row.get("country"),
-        "pincode": _as_str(row.get("zip")),
-        "address_line": row.get("address"),
-        "billing_street": billing.get("street"),
-        "billing_state": billing.get("state"),
-        "billing_zipcode": _as_str(billing.get("zipcode")),
-        "billing_country": billing.get("country"),
-        "pickup_street": pickup.get("street"),
-        "pickup_state": pickup.get("state"),
-        "pickup_zipcode": _as_str(pickup.get("zipcode")),
-        "pickup_country": pickup.get("country"),
-    }
-
-
-def _stock_handle_truthy(row: dict) -> bool:
-    """EE sends stockHandle as an int (0 or 1). Be tolerant of strings/None."""
-    val = row.get("stockHandle")
-    if val is None:
-        return False
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, (int, float)):
-        return val != 0
-    if isinstance(val, str):
-        return val.strip() not in ("", "0", "false", "False", "no")
-    return bool(val)
-
-
-def _as_str(value: Any) -> str | None:
-    """EE sends numerics for some text-shaped fields (pincode, company_id).
-    Coerce to string so the Data fields don't trip Frappe's type coercion."""
-    if value is None:
-        return None
-    return str(value)
 
 
 # ----- Trigger surface: scheduler + notification -----

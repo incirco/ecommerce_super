@@ -49,7 +49,14 @@ _VALID_SEGMENT_RE = re.compile(
     r"\[\]|\[\*\]|"  # iteration / wildcard
     r"\[\d+\]|"  # index access
     r"\[\?[\w]+\s*=\s*'[^']*'\]|"  # filter predicate
-    r"[A-Za-z_][\w]*"  # plain key
+    # Plain key — allows internal spaces because EasyEcom payloads
+    # legitimately ship literal-space keys (e.g. 'address type',
+    # 'phone number'). §8a packet explicitly mandates the parser
+    # tolerate space-bearing source keys. Pattern: starts with a
+    # letter/underscore, ends with a word char (no trailing space,
+    # no whitespace-only segments), with word chars or single spaces
+    # in between.
+    r"[A-Za-z_](?:[\w ]*[\w])?"
     r")$"
 )
 
