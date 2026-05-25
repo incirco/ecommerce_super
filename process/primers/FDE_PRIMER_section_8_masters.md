@@ -118,4 +118,52 @@ While mapping locations you also configure the **Source-of-Truth Map** — one r
 
 ---
 
-*As each further master ships (Channel, Tax, Item, Customer, Supplier), a new Part is appended here, and a matching test script is added.*
+## Part G — 8b: Channel (Marketplace) discovery & classification
+
+### G.1 What it is, in one breath
+
+A "channel" is a marketplace or storefront the client sells through — Flipkart, meesho, Amazon, their own website, a B2B portal. EasyEcom knows which channels a client has integrated; 8b **pulls that list, dedupes it into one catalogue, and gives you a workflow to classify each channel** (is it B2C? B2B? an own storefront? a connector to ignore?). Like Location, channels are **pulled, never pushed** — they're born in EasyEcom.
+
+### G.2 The one surprising thing: it polls every location
+
+Here's the part that isn't obvious. EasyEcom's "which channels are live" answer is **per-location** — the API (`/current-channel-status`) tells you the channels for *one location*, authenticated with that location's token. So to build the complete channel catalogue, discovery **sweeps every location** you've discovered (8a) — not just the mapped/Live ones, *all* of them, including To Map and Skipped — because a channel might be live on a location you haven't mapped yet, and the catalogue must be complete.
+
+Two consequences for you:
+- **You must run Discover → Locations (8a) before Discover → Channels.** No locations, no channels to sweep. The system will tell you this if you try channels first (a friendly "discover locations first" guard).
+- The same channel (say Flipkart) shows up on many locations. Discovery **dedupes by the channel's EasyEcom id** — you get **one** Flipkart row in the catalogue, not one per location. A channel is marked **active** if it's active on *any* location.
+
+### G.3 The classification workflow — the four states
+
+Just like Location, a discovered channel sits in a visible workflow. This is your work:
+
+| State | What it means | Your action |
+| --- | --- | --- |
+| **Unclassified** | Just pulled; you haven't said what kind of channel it is | This is your worklist — filter the Marketplace list to this state |
+| **Classified** | You've set its `channel_type` (B2C / B2B / Quick-Commerce / Own Storefront / POS-Offline / Connector-Ignore); reviewed, not yet active | Review, then Activate |
+| **Active** | Classified and live — orders from this channel will run the right flow | — (steady state) |
+| **Ignored** | Not a real sales channel (e.g. an accounting/connector artifact like an API integration that isn't a marketplace) | Deliberate; not an error |
+
+Transitions: **Classify** (Unclassified → Classified; blocked until you set `channel_type` — the workflow won't let you advance an unclassified channel), **Activate** (Classified → Active), **Mark Not Relevant** (→ Ignored), plus reverse transitions. Role-gated to FDE, same as Location.
+
+### G.4 Two independent ideas: "active" vs "classified"
+
+Don't conflate these — they're separate axes:
+- **`is_active`** comes from EasyEcom — it's *EasyEcom's* integration status (is this channel switched on at EE, on any location). You don't set it; the pull does.
+- **The workflow state** is *your* classification lifecycle. You set it.
+
+So a channel can be EE-Active but still **Unclassified** on your side — EasyEcom has it live, but you haven't yet told the system what kind of channel it is. That's normal on first discovery; classifying it is your job.
+
+### G.5 Why classification matters downstream
+
+`channel_type` isn't busywork — it decides how orders from that channel are processed later. A **B2C Marketplace** channel's orders run the B2C sales flow; a **B2B** channel's orders run the B2B flow (different invoicing, tax, settlement). A **Connector-Ignore** channel produces no sales documents at all. So classifying a channel correctly is what makes its orders flow correctly when the order sections (§11/§12) are built. Get this right at onboarding.
+
+### G.6 How to trigger, and what's deferred
+
+- **Trigger:** the **Discover → Channels** action on the EasyEcom Account form (grouped with Discover → Locations). Also runs on a daily schedule.
+- **What's deferred:** the **Marketplace Account** (per-channel seller id, GSTIN, settlement template) is *not* part of 8b — it's a settlement/reconciliation concern, built when reconciliation is. And `reporting_parent` (an optional way to group, say, three Amazon channels under one "Amazon" rollup for reporting) is FDE-set and optional — leave it blank unless a client wants the grouping.
+
+**Tested by:** `../test_scripts/section_8b_channel.md`.
+
+---
+
+*As each further master ships (Tax, Item, Customer, Supplier), a new Part is appended here, and a matching test script is added.*
