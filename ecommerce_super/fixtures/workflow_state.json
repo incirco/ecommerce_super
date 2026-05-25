@@ -54,5 +54,19 @@
   "workflow_state_name": "Ignored",
   "style": "Inverse",
   "icon": "small-message"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "To Configure",
+  "workflow_state_name": "To Configure",
+  "style": "Warning",
+  "icon": "flag"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Configured",
+  "workflow_state_name": "Configured",
+  "style": "Success",
+  "icon": "tick"
  }
 ]

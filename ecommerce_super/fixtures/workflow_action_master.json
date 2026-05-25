@@ -43,5 +43,15 @@
   "doctype": "Workflow Action Master",
   "name": "Reclassify",
   "workflow_action_name": "Reclassify"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Configure",
+  "workflow_action_name": "Configure"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Reconfigure",
+  "workflow_action_name": "Reconfigure"
  }
 ]

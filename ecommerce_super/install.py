@@ -67,6 +67,14 @@ COMPOSITE_INDEXES: list[tuple[str, str, str, bool]] = [
         "company, warehouse",
         True,
     ),
+    # EasyEcom Tax Rule Map — UNIQUE (tax_rule_name, company) per §8.5.3.
+    # The natural key for the 8c FDE-config mapping.
+    (
+        "tabEasyEcom Tax Rule Map",
+        "uq_tax_rule_map_rule_company",
+        "tax_rule_name, company",
+        True,
+    ),
 ]
 
 

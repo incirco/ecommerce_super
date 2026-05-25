@@ -104,6 +104,9 @@ fixtures = [
                     "Classified",
                     "Active",
                     "Ignored",
+                    # 8c Tax Rule Map
+                    "To Configure",
+                    "Configured",
                 ],
             ]
         ],
@@ -126,6 +129,9 @@ fixtures = [
                     "Activate",
                     "Deactivate",
                     "Reclassify",
+                    # 8c Tax Rule Map
+                    "Configure",
+                    "Reconfigure",
                 ],
             ]
         ],
@@ -139,6 +145,7 @@ fixtures = [
                 [
                     "EasyEcom Location Workflow",
                     "Marketplace Classification Workflow",
+                    "Tax Rule Map Workflow",
                 ],
             ]
         ],
@@ -233,6 +240,8 @@ _COMPANY_SCOPED_DOCTYPES = [
     "Marketplace Account",
     "Marketplace Order Map",
     "Source-of-Truth Map",
+    # 8c — Tax Rule Map (per (tax_rule_name, company); FDE config)
+    "EasyEcom Tax Rule Map",
 ]
 
 permission_query_conditions = {

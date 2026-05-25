@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:{tax_rule_name}-{company}",
+ "creation": "2026-05-25 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "tax_rule_name",
+  "company",
+  "workflow_state",
+  "notes_section",
+  "taxes",
+  "fde_notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "tax_rule_name",
+   "fieldtype": "Data",
+   "label": "EasyEcom Tax Rule Name",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The opaque rule name EasyEcom carries on the product payload (e.g. 'GST', '5', 'tax_28%', 'TAx Rule5'). Never parsed — the FDE maps it to actual Item Tax Templates below."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The Frappe Company this mapping is for. The natural key is (tax_rule_name, company) — one document per EE rule per Company; UNIQUE at the DB level."
+  },
+  {
+   "fieldname": "workflow_state",
+   "fieldtype": "Link",
+   "label": "Workflow State",
+   "options": "Workflow State",
+   "default": "To Configure",
+   "in_list_view": 1,
+   "no_copy": 1,
+   "hidden": 1,
+   "read_only": 1,
+   "description": "Per §8.5.5: To Configure → Configured, branch Ignored. Owned by the Tax Rule Map Workflow fixture. New (rule, company) pairs auto-appear in To Configure when Item sync (8d) hits an unmapped one; the FDE may also pre-create them."
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break",
+   "label": "Mapping"
+  },
+  {
+   "fieldname": "taxes",
+   "fieldtype": "Table",
+   "label": "Item Tax Templates",
+   "options": "Item Tax",
+   "description": "ERPNext's native Item Tax child DocType — the same child used by the Item Taxes tab. One row for a flat rule; multiple banded rows for a slab rule (e.g. GST 5% [0–2500] + GST 18% [2500+]). The FDE selects real Item Tax Templates (e.g. 'GST 18% - {company_abbr}') and enters Min/Max Net Rate bands from EE's Tax Master UI. ERPNext resolves the band by net rate at invoice time — NO slab logic in our code (§8.5.2). The Configure workflow transition is gated on this table being non-empty."
+  },
+  {
+   "fieldname": "fde_notes",
+   "fieldtype": "Small Text",
+   "label": "FDE Notes",
+   "description": "Free-form notes from the FDE about this mapping (e.g. 'GST slab confirmed against EE Tax Master screenshot 2026-05-25')."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-25 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Tax Rule Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
