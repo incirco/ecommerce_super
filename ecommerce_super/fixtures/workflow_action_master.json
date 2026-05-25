@@ -23,5 +23,25 @@
   "doctype": "Workflow Action Master",
   "name": "Reconsider",
   "workflow_action_name": "Reconsider"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Classify",
+  "workflow_action_name": "Classify"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Activate",
+  "workflow_action_name": "Activate"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Deactivate",
+  "workflow_action_name": "Deactivate"
+ },
+ {
+  "doctype": "Workflow Action Master",
+  "name": "Reclassify",
+  "workflow_action_name": "Reclassify"
  }
 ]

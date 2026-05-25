@@ -26,5 +26,33 @@
   "workflow_state_name": "Skipped",
   "style": "Inverse",
   "icon": "small-message"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Unclassified",
+  "workflow_state_name": "Unclassified",
+  "style": "Warning",
+  "icon": "flag"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Classified",
+  "workflow_state_name": "Classified",
+  "style": "Primary",
+  "icon": "edit"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Active",
+  "workflow_state_name": "Active",
+  "style": "Success",
+  "icon": "tick"
+ },
+ {
+  "doctype": "Workflow State",
+  "name": "Ignored",
+  "workflow_state_name": "Ignored",
+  "style": "Inverse",
+  "icon": "small-message"
  }
 ]

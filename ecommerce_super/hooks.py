@@ -81,15 +81,31 @@ fixtures = [
     # references require the child ruleset to already be in the DB at
     # save time (the compiler's compose-target-exists check fires).
     "EasyEcom Field Mapping",
-    # Workflow fixtures (§8.4.1 — first workflow in the app; pattern for
-    # 8b Channel and 8d Item to reuse). Order matters: Workflow State and
-    # Workflow Action Master must exist before Workflow tries to reference
-    # them. Filters scope each fixture to the names this app owns so we
-    # don't accidentally export every state/action Frappe core ships.
+    # Workflow fixtures (§8.4.1 / §8.6.3 — 8a Location established the
+    # pattern; 8b Channel reuses it for the Marketplace classification
+    # workflow). Order matters: Workflow State and Workflow Action
+    # Master must exist before Workflow tries to reference them.
+    # Filters scope each fixture to the names this app owns so we don't
+    # accidentally export every state/action Frappe core ships.
     {
         "dt": "Workflow State",
         "filters": [
-            ["name", "in", ["To Map", "Mapped but not Live", "Live", "Skipped"]]
+            [
+                "name",
+                "in",
+                [
+                    # 8a Location
+                    "To Map",
+                    "Mapped but not Live",
+                    "Live",
+                    "Skipped",
+                    # 8b Marketplace
+                    "Unclassified",
+                    "Classified",
+                    "Active",
+                    "Ignored",
+                ],
+            ]
         ],
     },
     {
@@ -98,13 +114,34 @@ fixtures = [
             [
                 "name",
                 "in",
-                ["Map", "Go Live", "Mark Not Relevant", "Pause", "Reconsider"],
+                [
+                    # 8a Location
+                    "Map",
+                    "Go Live",
+                    "Mark Not Relevant",
+                    "Pause",
+                    "Reconsider",
+                    # 8b Marketplace
+                    "Classify",
+                    "Activate",
+                    "Deactivate",
+                    "Reclassify",
+                ],
             ]
         ],
     },
     {
         "dt": "Workflow",
-        "filters": [["name", "in", ["EasyEcom Location Workflow"]]],
+        "filters": [
+            [
+                "name",
+                "in",
+                [
+                    "EasyEcom Location Workflow",
+                    "Marketplace Classification Workflow",
+                ],
+            ]
+        ],
     },
     # Desktop Icon ships at ecommerce_super/desktop_icon/easyecom.json —
     # Frappe auto-syncs from the per-app desktop_icon/ directory. Fixture
@@ -147,6 +184,14 @@ scheduler_events = {
         # locations appear; quiet on no-change ticks.
         "30 3 * * *": [
             "ecommerce_super.easyecom.flows.location_discovery.scheduled_discover_locations",
+        ],
+        # Daily EasyEcom channel sweep (§8.6.3). Runs at 04:00 IST, AFTER
+        # location discovery (03:30) — a freshly-discovered location
+        # gets included in the same day's channel sweep. Wraps each
+        # per-location call in the 8a savepoint helper so one
+        # location's JWT failure doesn't abort the whole sweep.
+        "0 4 * * *": [
+            "ecommerce_super.easyecom.flows.channel_discovery.scheduled_discover_channels",
         ],
         # Connection health rollup — every 5 minutes.
         "*/5 * * * *": [

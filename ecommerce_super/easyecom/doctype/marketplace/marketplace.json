@@ -9,14 +9,14 @@
   "marketplace_id",
   "marketplace_name",
   "display_name",
+  "workflow_state",
   "channel_type",
   "is_active",
   "enabled",
   "col_break_1",
   "country",
   "reporting_parent",
-  "default_customer_pattern",
-  "default_settlement_template"
+  "default_customer_pattern"
  ],
  "fields": [
   {
@@ -26,7 +26,7 @@
    "reqd": 1,
    "unique": 1,
    "in_list_view": 1,
-   "description": "EasyEcom numeric id (stored as string for autoname). Synced from /marketplaces/list. The stable join key for Marketplace Account, Marketplace Order Map, and the Channel accounting dimension."
+   "description": "EasyEcom numeric id (stored as string for autoname). The stable join key for Marketplace Account, Marketplace Order Map, and the Channel accounting dimension. Per §31.2.18 this is semantically an Int; kept as Data so the §5-era starter seed (string keys like 'starter-amazon-in') continues to load."
   },
   {
    "fieldname": "marketplace_name",
@@ -42,21 +42,32 @@
    "label": "Display Name"
   },
   {
+   "fieldname": "workflow_state",
+   "fieldtype": "Link",
+   "label": "Workflow State",
+   "options": "Workflow State",
+   "default": "Unclassified",
+   "in_list_view": 1,
+   "no_copy": 1,
+   "hidden": 1,
+   "read_only": 1,
+   "description": "Per §8.6.3: Unclassified → Classified → Active, branch Ignored. Owned by the Marketplace Classification Workflow fixture. Hidden on the form because the title-bar badge already shows it and the Actions menu drives transitions — direct editing is not the path. Independent axis from is_active (which mirrors EE's per-account integration status)."
+  },
+  {
    "fieldname": "channel_type",
    "fieldtype": "Select",
    "label": "Channel Type",
-   "options": "B2C Marketplace\nB2B\nQuick-Commerce\nOwn Storefront\nPOS-Offline\nConnector-Ignore",
-   "reqd": 1,
+   "options": "\nB2C Marketplace\nB2B\nQuick-Commerce\nOwn Storefront\nPOS-Offline\nConnector-Ignore",
    "in_list_view": 1,
-   "description": "FDE-classified — drives downstream routing in flows."
+   "description": "FDE-classified — drives downstream routing in flows (§11 vs §12). Blank until the FDE classifies. The Classify workflow transition is gated on this field being set; the Classified → Active path requires it."
   },
   {
    "fieldname": "is_active",
    "fieldtype": "Check",
    "label": "Active on EE",
-   "default": "1",
+   "default": "0",
    "reqd": 1,
-   "description": "Mirrors EE /current-channel-status."
+   "description": "Catalogue-level mirror of EE /current-channel-status. Active if the channel is Active on ANY discovered EasyEcom Location (per §8.6.3 sweep + dedupe). SEPARATE axis from workflow_state — a channel can be EE-Active but still Unclassified on our side."
   },
   {
    "fieldname": "enabled",
@@ -83,24 +94,18 @@
    "fieldtype": "Link",
    "label": "Reporting Parent",
    "options": "Marketplace",
-   "description": "Optional rollup for reporting only (e.g., Amazon.in + Amazon_FBA → an 'Amazon' group). Not a claim about EE structure."
+   "description": "Optional rollup for reporting only (e.g., Amazon.in + Amazon_FBA → an 'Amazon' group). FDE-set; not supplied by EE; not a claim about EE structure."
   },
   {
    "fieldname": "default_customer_pattern",
    "fieldtype": "Data",
    "label": "Default Customer Pattern",
    "description": "e.g., 'Amazon FBA Buyer Pool' (for B2C marketplace channels)."
-  },
-  {
-   "fieldname": "default_settlement_template",
-   "fieldtype": "Data",
-   "label": "Default Settlement Template",
-   "description": "Settlement Template name (Link will be wired when Recon engine builds the Settlement Template DocType)."
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-05-24 00:00:00",
+ "modified": "2026-05-25 00:00:00",
  "modified_by": "Administrator",
  "module": "EasyEcom",
  "name": "Marketplace",

@@ -26,7 +26,7 @@ CUSTOMER_GET: str = "/Customer/getCustomer"  # GET
 VENDOR_CREATE: str = "/Wms/Vendor/createVendor"  # POST
 VENDOR_GET: str = "/Wms/Vendor/getVendor"  # GET
 LOCATIONS_GET: str = "/getAllLocation"  # GET — foundational (§7.7, §8.4.1)
-CHANNELS_GET: str = "/Wms/Channels/getChannels"  # GET
+CHANNELS_GET: str = "/current-channel-status"  # GET — per-location (§8.6.3, §8b)
 
 
 # ----- Buying flow endpoints (§31.3.3) -----

@@ -587,17 +587,18 @@
     "direction": "Pull",
     "active": 1,
     "missing_field_policy": "Permissive",
-    "version": 1,
+    "version": 2,
     "last_modified_by": "Administrator",
-    "last_modified_at": "2026-05-24 00:00:00",
-    "change_reason": "Initial library fixture (§5.11) — pulls EE marketplaces (flat model; handler in §8)",
+    "last_modified_at": "2026-05-25 00:00:00",
+    "change_reason": "§8b refactor — reconciled to real /current-channel-status payload. Removed the channel_type rule (no such field in real payload — FDE-classified via the Marketplace Classification Workflow, gated on the Classify transition). Replaced the stale is_active rule (was bool_to_yn against assumed 'is_active' field) with a conditional_constant transform that maps real payload field 'status' (string 'Active'/'Inactive') to Check (1/0). The per-location sweep (flows/channel_discovery.py) calls this ruleset's pull() per element of data[] and then unions/dedupes by marketplace_id.",
     "rules": [
       {
         "erpnext_path": "marketplace_id",
         "easyecom_path": "marketplace_id",
         "transform_push": "identity",
-        "transform_pull": "identity",
-        "required": 1
+        "transform_pull": "int_to_str",
+        "required": 1,
+        "notes": "EE sends marketplace_id as Int (2, 60, 122). Marketplace.marketplace_id is Data (autoname compatibility with the §5-era starter seed); int_to_str coerces."
       },
       {
         "erpnext_path": "marketplace_name",
@@ -607,16 +608,17 @@
         "required": 1
       },
       {
-        "erpnext_path": "channel_type",
-        "easyecom_path": "channel_type",
-        "transform_push": "identity",
-        "transform_pull": "identity"
-      },
-      {
         "erpnext_path": "is_active",
-        "easyecom_path": "is_active",
-        "transform_push": "bool_to_yn",
-        "transform_pull": "yn_to_bool"
+        "easyecom_path": "status",
+        "transform_push": "identity",
+        "transform_pull": "conditional_constant",
+        "transform_args": {
+          "conditions": [
+            {"when": "source_payload.get('status') == 'Active'", "then": 1}
+          ],
+          "default": 0
+        },
+        "notes": "Real EE payload field is 'status' (string 'Active' / 'Inactive'). Marketplace.is_active is a Check (1/0). The conditional_constant transform expresses 'Active → 1, else 0' AS A RULESET RULE — an FDE can adjust the condition (e.g. if EE renames the status field or adds new active-equivalent values) without a code deploy. This is the §8.0 engine-as-API-insurance contract."
       }
     ]
   },

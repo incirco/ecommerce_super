@@ -160,5 +160,183 @@
     "allow_self_approval": 1
    }
   ]
+ },
+ {
+  "doctype": "Workflow",
+  "name": "Marketplace Classification Workflow",
+  "workflow_name": "Marketplace Classification Workflow",
+  "document_type": "Marketplace",
+  "is_active": 1,
+  "send_email_alert": 0,
+  "override_status": 0,
+  "workflow_state_field": "workflow_state",
+  "states": [
+   {
+    "doctype": "Workflow Document State",
+    "state": "Unclassified",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Unclassified",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Classified",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Classified",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Active",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Active",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Ignored",
+    "doc_status": "0",
+    "allow_edit": "EasyEcom FDE"
+   },
+   {
+    "doctype": "Workflow Document State",
+    "state": "Ignored",
+    "doc_status": "0",
+    "allow_edit": "System Manager"
+   }
+  ],
+  "transitions": [
+   {
+    "doctype": "Workflow Transition",
+    "state": "Unclassified",
+    "action": "Classify",
+    "next_state": "Classified",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1,
+    "condition": "doc.channel_type"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Unclassified",
+    "action": "Classify",
+    "next_state": "Classified",
+    "allowed": "System Manager",
+    "allow_self_approval": 1,
+    "condition": "doc.channel_type"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Classified",
+    "action": "Activate",
+    "next_state": "Active",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1,
+    "condition": "doc.channel_type"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Classified",
+    "action": "Activate",
+    "next_state": "Active",
+    "allowed": "System Manager",
+    "allow_self_approval": 1,
+    "condition": "doc.channel_type"
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Unclassified",
+    "action": "Mark Not Relevant",
+    "next_state": "Ignored",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Unclassified",
+    "action": "Mark Not Relevant",
+    "next_state": "Ignored",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Classified",
+    "action": "Mark Not Relevant",
+    "next_state": "Ignored",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Classified",
+    "action": "Mark Not Relevant",
+    "next_state": "Ignored",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Active",
+    "action": "Deactivate",
+    "next_state": "Classified",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Active",
+    "action": "Deactivate",
+    "next_state": "Classified",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Classified",
+    "action": "Reclassify",
+    "next_state": "Unclassified",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Classified",
+    "action": "Reclassify",
+    "next_state": "Unclassified",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Ignored",
+    "action": "Reconsider",
+    "next_state": "Unclassified",
+    "allowed": "EasyEcom FDE",
+    "allow_self_approval": 1
+   },
+   {
+    "doctype": "Workflow Transition",
+    "state": "Ignored",
+    "action": "Reconsider",
+    "next_state": "Unclassified",
+    "allowed": "System Manager",
+    "allow_self_approval": 1
+   }
+  ]
  }
 ]

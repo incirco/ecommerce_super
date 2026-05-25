@@ -1,27 +1,218 @@
 // Client-side form behaviour for EasyEcom Account.
 //
-// The Test Connection button calls the whitelisted test_connection method
-// (ecommerce_super.easyecom.api.test_connection.test_connection) which
-// forces a fresh /access/token call via EasyEcomClient.refresh_jwt() and
-// reports inline. SPEC §3.11 bar 1.
+// Top-bar actions are organised into Frappe button GROUPS via
+// frm.add_custom_button(label, callback, group):
+//
+//   - "Discover" group  → Locations (8a), Channels (8b), … later: Items
+//                         (8d), Customers (8e), Suppliers (8f).
+//   - "Pull" group      → reserved for manual pulls (Orders, GRNs,
+//                         Returns) when those flows ship.
+//   - "Push" group      → reserved for manual pushes (POs, SOs, B2B
+//                         Invoices) when those flows ship.
+//
+// Test Connection stays as a standalone field-level button — it is a
+// connectivity check, not a Discover/Pull/Push action.
+//
+// Each Discover action checks its own preconditions (saved doc, default
+// location, dependency on Location rows for Channels) before firing, and
+// reports the summary inline via msgprint with a deep link to the
+// follow-up FDE worklist (To Map / Unclassified / etc.).
 
-frappe.ui.form.on("EasyEcom Account", {
-    refresh(frm) {
-        frm.trigger("update_connection_indicator");
-    },
+function _ensureSaved(frm, message) {
+    if (frm.is_new()) {
+        frappe.msgprint({
+            title: __("Save First"),
+            message: __(message),
+            indicator: "orange",
+        });
+        return false;
+    }
+    return true;
+}
 
-    test_connection_action(frm) {
-        if (frm.is_new()) {
+function _runLocationDiscovery(frm) {
+    if (!_ensureSaved(frm, "Save the Account before running discovery — the EasyEcom client reads credentials and the default location from the persisted record.")) {
+        return;
+    }
+    if (!frm.doc.default_location_key) {
+        frappe.msgprint({
+            title: __("Default Location Required"),
+            message: __(
+                "Set Default Location (typically the primary location) before discovering — the foundational /getAllLocation call needs its JWT to authenticate."
+            ),
+            indicator: "orange",
+        });
+        return;
+    }
+
+    frappe.show_alert({ message: __("Pulling /getAllLocation…"), indicator: "blue" });
+
+    frappe.call({
+        method: "ecommerce_super.easyecom.flows.location_discovery.discover_locations",
+        freeze: true,
+        freeze_message: __("Discovering EasyEcom locations…"),
+        callback(r) {
+            const result = r.message || {};
+            if (!result.ok) {
+                frappe.msgprint({
+                    title: __("Discovery Failed"),
+                    message: result.message || __("Unknown error."),
+                    indicator: "red",
+                });
+                return;
+            }
+            const lines = [
+                __("Total: {0} | New: {1} | Updated: {2} | Failed: {3}", [
+                    result.total,
+                    result.new_count,
+                    result.updated_count,
+                    result.failed_count,
+                ]),
+            ];
+            if (result.new_count > 0) {
+                const url = "/app/easyecom-location/view/list?workflow_state=To Map";
+                lines.push(
+                    `<br><a href="${url}">${__("Open {0} new location(s) waiting to map →", [result.new_count])}</a>`
+                );
+            }
+            if (result.failed_count > 0) {
+                lines.push(
+                    `<br><br><b>${__("Failed rows:")}</b><br>` +
+                        (result.failed_locations || [])
+                            .map(
+                                (f) =>
+                                    `<code>${frappe.utils.escape_html(f.location_key)}</code>: ${frappe.utils.escape_html(f.error)}`
+                            )
+                            .join("<br>")
+                );
+            }
             frappe.msgprint({
-                title: __("Save First"),
+                title: __("Discovery Complete"),
+                message: lines.join(""),
+                indicator: result.failed_count > 0 ? "orange" : "green",
+            });
+        },
+        error() {
+            frappe.msgprint({
+                title: __("Discovery Failed"),
+                message: __("The Discover Locations call itself failed (network, server, or permission)."),
+                indicator: "red",
+            });
+        },
+    });
+}
+
+function _runChannelDiscovery(frm) {
+    if (!_ensureSaved(frm, "Save the Account before running channel discovery — the sweep needs persisted EasyEcom Location rows to poll against.")) {
+        return;
+    }
+    // Channel discovery sweeps EVERY discovered EasyEcom Location — if
+    // there are none, surface the dependency clearly.
+    frappe.db.count("EasyEcom Location").then((n) => {
+        if (!n) {
+            frappe.msgprint({
+                title: __("No Locations Discovered Yet"),
                 message: __(
-                    "Save the Account before testing the connection — credentials must be persisted (encrypted) before the test can read them back transiently."
+                    "Channel discovery is a per-location sweep — it needs EasyEcom Location rows to poll. Run <b>Discover → Locations</b> first."
                 ),
                 indicator: "orange",
             });
             return;
         }
+        frappe.show_alert({
+            message: __("Sweeping /current-channel-status across all locations…"),
+            indicator: "blue",
+        });
+        frappe.call({
+            method: "ecommerce_super.easyecom.flows.channel_discovery.discover_channels",
+            freeze: true,
+            freeze_message: __("Discovering EasyEcom channels…"),
+            callback(r) {
+                const result = r.message || {};
+                if (!result.ok) {
+                    frappe.msgprint({
+                        title: __("Channel Discovery Failed"),
+                        message: result.message || __("Unknown error."),
+                        indicator: "red",
+                    });
+                    return;
+                }
+                const lines = [
+                    __(
+                        "Locations polled: {0} | Failed: {1} | Channels: {2} ({3} new, {4} existing)",
+                        [
+                            result.locations_polled,
+                            result.locations_failed,
+                            result.channels_total,
+                            result.channels_new,
+                            result.channels_existing,
+                        ]
+                    ),
+                ];
+                if (result.channels_new > 0) {
+                    const url = "/app/marketplace/view/list?workflow_state=Unclassified";
+                    lines.push(
+                        `<br><a href="${url}">${__("Open {0} new channel(s) waiting to classify →", [result.channels_new])}</a>`
+                    );
+                }
+                if (result.locations_failed > 0) {
+                    lines.push(
+                        `<br><br><b>${__("Failed locations:")}</b><br>` +
+                            (result.failed_locations || [])
+                                .map(
+                                    (f) =>
+                                        `<code>${frappe.utils.escape_html(f.location_key)}</code>: ${frappe.utils.escape_html(f.error)}`
+                                )
+                                .join("<br>")
+                    );
+                }
+                frappe.msgprint({
+                    title: __("Channel Discovery Complete"),
+                    message: lines.join(""),
+                    indicator: result.locations_failed > 0 ? "orange" : "green",
+                });
+            },
+            error() {
+                frappe.msgprint({
+                    title: __("Channel Discovery Failed"),
+                    message: __(
+                        "The Discover Channels call itself failed (network, server, or permission)."
+                    ),
+                    indicator: "red",
+                });
+            },
+        });
+    });
+}
 
+frappe.ui.form.on("EasyEcom Account", {
+    refresh(frm) {
+        frm.trigger("update_connection_indicator");
+
+        // Top-bar action groups. Skip on a new (unsaved) doc — the
+        // _ensureSaved guards in the handlers also catch this, but
+        // hiding the buttons before save keeps the UI honest.
+        if (frm.is_new()) {
+            return;
+        }
+
+        // Discover group — 8a Locations, 8b Channels, more later.
+        frm.add_custom_button(
+            __("Locations"),
+            () => _runLocationDiscovery(frm),
+            __("Discover")
+        );
+        frm.add_custom_button(
+            __("Channels"),
+            () => _runChannelDiscovery(frm),
+            __("Discover")
+        );
+    },
+
+    test_connection_action(frm) {
+        if (!_ensureSaved(frm, "Save the Account before testing the connection — credentials must be persisted (encrypted) before the test can read them back transiently.")) {
+            return;
+        }
         if (!frm.doc.default_location_key) {
             frappe.msgprint({
                 title: __("Default Location Required"),
@@ -52,21 +243,16 @@ frappe.ui.form.on("EasyEcom Account", {
                         },
                         7
                     );
-                    // Refresh the form so connection_status / last_successful_sync_at
-                    // pick up the values written server-side.
                     frm.reload_doc();
                 } else {
                     frappe.msgprint({
                         title: __("Connection Failed"),
-                        message: __(
-                            "{0}{1}",
-                            [
-                                result.message || __("Unknown error."),
-                                result.error_code
-                                    ? `<br><br><small>Code: <code>${result.error_code}</code></small>`
-                                    : "",
-                            ]
-                        ),
+                        message: __("{0}{1}", [
+                            result.message || __("Unknown error."),
+                            result.error_code
+                                ? `<br><br><small>Code: <code>${result.error_code}</code></small>`
+                                : "",
+                        ]),
                         indicator: "red",
                     });
                 }
@@ -76,102 +262,6 @@ frappe.ui.form.on("EasyEcom Account", {
                     title: __("Connection Failed"),
                     message: __(
                         "The Test Connection call itself failed (network, server, or permission)."
-                    ),
-                    indicator: "red",
-                });
-            },
-        });
-    },
-
-    discover_locations_action(frm) {
-        if (frm.is_new()) {
-            frappe.msgprint({
-                title: __("Save First"),
-                message: __(
-                    "Save the Account before running discovery — the EasyEcom client reads credentials and the default location from the persisted record."
-                ),
-                indicator: "orange",
-            });
-            return;
-        }
-
-        if (!frm.doc.default_location_key) {
-            frappe.msgprint({
-                title: __("Default Location Required"),
-                message: __(
-                    "Set Default Location (typically the primary location) before discovering — the foundational /getAllLocation call needs its JWT to authenticate."
-                ),
-                indicator: "orange",
-            });
-            return;
-        }
-
-        frappe.show_alert({
-            message: __("Pulling /getAllLocation…"),
-            indicator: "blue",
-        });
-
-        frappe.call({
-            method: "ecommerce_super.easyecom.flows.location_discovery.discover_locations",
-            freeze: true,
-            freeze_message: __("Discovering EasyEcom locations…"),
-            callback(r) {
-                const result = r.message || {};
-                if (!result.ok) {
-                    frappe.msgprint({
-                        title: __("Discovery Failed"),
-                        message: result.message || __("Unknown error."),
-                        indicator: "red",
-                    });
-                    return;
-                }
-                const lines = [
-                    __(
-                        "Total: {0} | New: {1} | Updated: {2} | Failed: {3}",
-                        [
-                            result.total,
-                            result.new_count,
-                            result.updated_count,
-                            result.failed_count,
-                        ]
-                    ),
-                ];
-                if (result.new_count > 0) {
-                    const tomap_url =
-                        "/app/easyecom-location/view/list?workflow_state=To Map";
-                    lines.push(
-                        `<br><a href="${tomap_url}">${__(
-                            "Open {0} new location(s) waiting to map →",
-                            [result.new_count]
-                        )}</a>`
-                    );
-                }
-                if (result.failed_count > 0) {
-                    lines.push(
-                        `<br><br><b>${__("Failed rows:")}</b><br>` +
-                            (result.failed_locations || [])
-                                .map(
-                                    (f) =>
-                                        `<code>${frappe.utils.escape_html(
-                                            f.location_key
-                                        )}</code>: ${frappe.utils.escape_html(
-                                            f.error
-                                        )}`
-                                )
-                                .join("<br>")
-                    );
-                }
-                frappe.msgprint({
-                    title: __("Discovery Complete"),
-                    message: lines.join(""),
-                    indicator: result.failed_count > 0 ? "orange" : "green",
-                });
-            },
-            error() {
-                frappe.msgprint({
-                    title: __("Discovery Failed"),
-                    message: __(
-                        "The Discover Locations call itself failed (network, server, or permission)."
                     ),
                     indicator: "red",
                 });

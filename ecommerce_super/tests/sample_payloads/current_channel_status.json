@@ -1,0 +1,16 @@
+{
+  "code": 200,
+  "message": "Successful",
+  "data": [
+    {"marketplace_name": "TaTa Cliq", "marketplace_id": 60, "status": "Inactive"},
+    {"marketplace_name": "meesho", "marketplace_id": 122, "status": "Active"},
+    {"marketplace_name": "Flipkart", "marketplace_id": 2, "status": "Active"},
+    {"marketplace_name": "Amazon.in", "marketplace_id": 8, "status": "Active"},
+    {"marketplace_name": "Amazon_FBA", "marketplace_id": 11, "status": "Active"},
+    {"marketplace_name": "Cloudtail B2B", "marketplace_id": 47, "status": "Active"},
+    {"marketplace_name": "AJIO JIT", "marketplace_id": 71, "status": "Inactive"},
+    {"marketplace_name": "Customer Cash Sales", "marketplace_id": 100, "status": "Active"},
+    {"marketplace_name": "Shopify1", "marketplace_id": 200, "status": "Active"},
+    {"marketplace_name": "Tally", "marketplace_id": 300, "status": "Active"}
+  ]
+}

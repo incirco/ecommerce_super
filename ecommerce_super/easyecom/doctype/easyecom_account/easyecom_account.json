@@ -19,7 +19,6 @@
   "rate_limit_tier",
   "default_location_key",
   "test_connection_action",
-  "discover_locations_action",
   "sync_window_section",
   "sync_window_enabled",
   "sync_window_start",
@@ -165,12 +164,6 @@
    "fieldtype": "Button",
    "label": "Test Connection",
    "description": "Triggers a /access/token call against the default_location_key and reports result inline."
-  },
-  {
-   "fieldname": "discover_locations_action",
-   "fieldtype": "Button",
-   "label": "Discover Locations",
-   "description": "Pulls /getAllLocation against this account and upserts EasyEcom Location rows. New rows land in workflow_state=To Map for FDE mapping. Same call the daily scheduler makes — manual trigger is for first-time onboarding and ad-hoc re-discovery (§8.4.1)."
   },
   {
    "fieldname": "sync_window_section",
