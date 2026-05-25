@@ -166,4 +166,43 @@ So a channel can be EE-Active but still **Unclassified** on your side — EasyEc
 
 ---
 
-*As each further master ships (Tax, Item, Customer, Supplier), a new Part is appended here, and a matching test script is added.*
+## Part H — 8c: Tax (EasyEcom tax rule → Item Tax Template mapping)
+
+### H.1 What it is, in one breath
+
+EasyEcom attaches a **tax rule** to every product (a name like "GST", "5", "tax_28%"). 8c is where you tell ERPNext what each of those EasyEcom tax rules **means** — by mapping it to the right ERPNext Item Tax Template(s). Once mapped, when products sync (the Item master, next), each item automatically gets the correct GST set up. This is **configuration you do**, not a pull — EasyEcom has no tax API, so you read the rule from EasyEcom's Tax Master screen and set up the matching mapping here.
+
+### H.2 The one thing to understand: EasyEcom tax rule names are meaningless labels
+
+A rule called "5" might be 5%. A rule called "GST" might be **5% under ₹2500 and 18% above** (a price slab). A rule called "tax_28%" might be 28% — or might not. **The name tells you nothing reliable.** So you never guess from the name. You open EasyEcom's Tax Master (Masters >> Tax Master), see what the rule actually does (its rate, or its price slabs), and reproduce that in the mapping here. The name is just a label that links a product to its rule.
+
+### H.3 The mapping: one document per (rule, company)
+
+You create an **EasyEcom Tax Rule Map** document for each EasyEcom tax rule, **per company** (because Item Tax Templates are company-specific — `GST 18% - OTC` belongs to company OTC). In that document's **Taxes table** you add the ERPNext Item Tax Template row(s):
+
+- **Flat rule** (e.g. "5" = always 5%): one row — pick the `GST 5%` template, leave Min/Max Net Rate blank.
+- **Slab rule** (e.g. "GST" = 0–2500 → 5%, 2500+ → 18%): two rows —
+  - `GST 5%` template, Min 0, Max 2500
+  - `GST 18%` template, Min 2500, Max blank
+
+You enter the bands exactly as EasyEcom's Tax Master shows them. ERPNext then applies the right band automatically at invoice time based on the sale price — **you don't compute anything; ERPNext does the slab math.**
+
+### H.4 Test Resolve — verify before it goes live
+
+This is the master where a typo (wrong template, wrong band) does the most damage, so there's a safety net. On any saved Tax Rule Map, click **Test Resolve** in the toolbar. Enter a sample tax rate (e.g. 0.18) and you'll see exactly what would happen: which template rows would be stamped onto an item, whether that rate reconciles (green) or mismatches your bands (red), and the cess that would apply. **Use it.** It runs the identical logic the real sync uses, so what you see is what products will get. Try a few rates against a slab map to confirm each lands in the right band before you trust it.
+
+### H.5 The workflow, and what happens to unmapped rules
+
+A Tax Rule Map sits in a simple workflow: **To Configure → Configured** (branch **Ignored**). You can't mark it Configured until its Taxes table has at least one row.
+
+Here's the safety behaviour: when products start syncing (the Item master), if a product carries an EasyEcom tax rule you **haven't mapped yet**, the system **auto-creates a To Configure entry for it and alerts you** — it does *not* silently guess a tax. So your worklist is "filter Tax Rule Maps to To Configure" — those are the rules waiting for you to open EasyEcom's Tax Master, see what they do, and fill in the templates. An unmapped tax rule is never a silent wrong-tax; it's a visible task.
+
+### H.6 CESS
+
+Cess (the extra duty on things like tobacco, aerated drinks, some cosmetics) rides on the **product**, not the tax rule — so it's handled per-product automatically, outside this mapping. You don't configure cess in the Tax Rule Map.
+
+**Tested by:** `../test_scripts/section_8c_tax.md`.
+
+---
+
+*As each further master ships (Item, Customer, Supplier), a new Part is appended here, and a matching test script is added.*
