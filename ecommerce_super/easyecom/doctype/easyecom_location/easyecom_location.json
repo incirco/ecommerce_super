@@ -203,9 +203,9 @@
   },
   {
    "fieldname": "address_line",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Address Line",
-   "description": "Flat address string (payload: address)."
+   "description": "Flat address string (payload: address). Small Text rather than Data because real EE addresses regularly exceed Frappe's 140-char Data cap (e.g. multi-survey-number industrial-park addresses, plot-list amazon FCs)."
   },
   {
    "fieldname": "billing_section",
@@ -215,8 +215,9 @@
   },
   {
    "fieldname": "billing_street",
-   "fieldtype": "Data",
-   "label": "Billing Street"
+   "fieldtype": "Small Text",
+   "label": "Billing Street",
+   "description": "Small Text — same rationale as address_line (real EE billing-address streets exceed 140 chars in practice)."
   },
   {
    "fieldname": "billing_state",
@@ -245,8 +246,9 @@
   },
   {
    "fieldname": "pickup_street",
-   "fieldtype": "Data",
-   "label": "Pickup Street"
+   "fieldtype": "Small Text",
+   "label": "Pickup Street",
+   "description": "Small Text — same rationale as address_line."
   },
   {
    "fieldname": "pickup_state",

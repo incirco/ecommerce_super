@@ -289,3 +289,55 @@ class TestRobustness(FrappeTestCase):
         # The two OK ones committed.
         self.assertTrue(frappe.db.exists("EasyEcom Location", "ECS-LOC-rob-ok"))
         self.assertTrue(frappe.db.exists("EasyEcom Location", "ECS-LOC-rob-ok-2"))
+
+    def test_long_address_round_trips_intact(self) -> None:
+        """Real EE addresses regularly blow past Frappe's 140-char Data
+        cap (multi-survey-number industrial-park addresses, plot-list
+        amazon FCs). address_line / billing_street / pickup_street are
+        Small Text, so the full string round-trips with no truncation.
+        Regression test for the live discovery run that surfaced this."""
+        long_address = (
+            "Amazon Seller Services Private Limited Building No. 5, "
+            "BGR Warehousing Complex Near Shiv Sagar Hotel, Village Vahuli "
+            "MAHARASHTRA (State/UT Code: 27) 421302"
+        )
+        # Sanity: this is well over Frappe's 140-char Data cap.
+        self.assertGreater(len(long_address), 140)
+        long_street = (
+            "Sy No. 524/1,2,3,4,6, 525/1,2,3,4,5,6, 526/3,4,5,6,527 of "
+            "madivala village and Sy no.51/1 of thatanahalli village, "
+            "kasaba hobli, anekal taluk, Bangalore urban district Karnataka"
+        )
+        self.assertGreater(len(long_street), 140)
+
+        rows = [
+            {
+                "location_key": "rob-long-addr",
+                "location_name": "Long Address Test",
+                "stockHandle": 1,
+                "address": long_address,
+                "address type": {
+                    "billing_address": {
+                        "street": long_street,
+                        "state": "Karnataka",
+                        "zipcode": "560102",
+                        "country": "India",
+                    },
+                    "pickup_address": {
+                        "street": long_street,
+                        "state": "Karnataka",
+                        "zipcode": "560102",
+                        "country": "India",
+                    },
+                },
+            }
+        ]
+        outcome = upsert_locations_from_payload(rows)
+        frappe.db.commit()
+        self.assertEqual(outcome.succeeded_count, 1)
+        self.assertEqual(outcome.failed_count, 0)
+
+        doc = frappe.get_doc("EasyEcom Location", "ECS-LOC-rob-long-addr")
+        self.assertEqual(doc.address_line, long_address)
+        self.assertEqual(doc.billing_street, long_street)
+        self.assertEqual(doc.pickup_street, long_street)
