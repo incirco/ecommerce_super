@@ -4,7 +4,7 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 
 **Legend:** ☐ not started · 🔶 in progress · ✅ done · — n/a yet
 
-**Current focus:** _§5/§6/§7 built + locally tested (commits 7123669, fd955e7, c0ad884 + except-sweep — all local, awaiting push + staging redeploy). §7 verified (contract has teeth) + built the empty EasyEcom Sync Record Line child table; per-record savepoint helper deferred to §8d-Item (the first real batch — §7/A3 obligation). Formatter ghost resolved (Black/Ruff py314 except-tuple strip; pinned to py313 + global hook now lint-only). §8 split into 6 dependency-ordered packets (8a Location → 8b Channel → 8c Tax → 8d Item → 8e Customer → 8f Supplier; lookups folded in). NEXT: scope 8a Location packet (pull + FDE map, pull-only no push; resolve endpoint vs sandbox)._
+**Current focus:** _8a Location DONE — discovery pull (/getAllLocation), 4-state Workflow fixture (To Map → Mapped but not Live → Live → Skipped), full Source-of-Truth Map, reusable per-record savepoint helper (easyecom/flows/_isolation.py), back-fill, + trigger surface (Discover Locations button, daily scheduler, new-location notification placeholder pending §18). State-aware company/workflow invariant. Built, 281 green, and SMOKE-TESTED LIVE against sandbox (3 real locations → To Map, is_wms from stockHandle, button-triggered, workflow walked, back-fill sane). Pending commit + push. NEXT: 8b Channel (flat Marketplace list pull) — packet MUST carry the workflow-fixture gotchas noted on the 8b row._
 
 ---
 
@@ -31,8 +31,10 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 | Section | Spec ready | Acceptance | Approved | Built | Local test | Deployed | Team test | Live |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 8. Master Sync (split into 6 dependency-ordered packets below) | — | — | — | — | — | — | — | — |
-| 8a. Location (pull + FDE map; resolution substrate) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 8a. Location (pull + FDE map; resolution substrate) | ✅ | ✅ | ✅ | ✅ smoke | ☐ | ☐ | ☐ | ☐ |
+| ↳ 8a refactored to use the Field Mapping engine (EasyEcom-Location-Pull ruleset) instead of a hardcoded mapper — engine = API-change insurance (§8.0 policy). stockHandle→is_wms_location transform now in the ruleset. §5 path validator relaxed to allow space-bearing keys. Re-pull now preserves existing values when EE omits a field. 309 green. | — | — | — | — | — | — | — | — |
 | 8b. Channel (flat Marketplace list pull) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ↳ 8b packet MUST include a "Workflow-fixture mechanics (learned in 8a)" block: (1) ship each transition twice, once per role — Workflow Transition.allowed is a single Role link, no inheritance; (2) active workflow auto-applies on insert (factories insert in first state + transition, or db.set_value to stamp); (3) test role-cache flush — clear_cache(user) + set_user after granting a custom role; (4) sanitise savepoint names to alphanumeric+underscore (MariaDB rejects dashes). | — | — | — | — | — | — | — | — |
 | 8c. Tax Category (mapping; precondition for Item) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 8d. Item / Product master (first hard master; builds savepoint helper) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 8e. Customer master (incl. anonymous pseudo-customers) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |

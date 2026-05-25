@@ -326,7 +326,7 @@ One record per location_key the account exposes. Carries the primary/operational
 Validation rules:
 
 - Exactly one location per account has `is_primary` set.
-- `frappe_company` is mandatory when `is_operational` is set, and must be empty when `is_operational` is unset.
+- `frappe_company` presence is governed by the location's workflow state (§8.4.1): it must be set in the mapped states (Mapped but not Live, Live) and empty in the unmapped states (To Map, Skipped). Because `is_operational` is itself workflow-derived (true only in Live), this subsumes the older "mandatory iff is_operational" phrasing.
 - `frappe_company` is deliberately non-unique; the integration relies on many-to-one location→Company resolution.
 - A location with neither `is_primary` nor `is_operational` set is inert — the integration neither syncs masters against it nor runs operational flows on it. It exists only to record that EasyEcom exposes the location.
 - A single EasyEcom user credential can mint JWTs across multiple locations only if that user was created in the primary account with multi-location access. The account's credentials must have this access for the integration to span locations.
@@ -539,7 +539,7 @@ This is the build-and-test contract for Section 3. Claude Code builds to it; the
 - **JWT is cached per location and reused.** A second call against the same location does not re-acquire a token; the cached JWT (90-day validity) is reused. jwt_acquired_at / jwt_expires_at are populated.
 - **Day-85 renewal is scheduled.** The renewal job (`renew_aging_jwts`) is registered in scheduler_events and, when a JWT's age crosses 85 days (simulated by back-dating jwt_acquired_at), renews it on the next run.
 - **On-401 re-auth works.** If a call returns 401 (simulated by invalidating the cached JWT), the client re-authenticates once and retries transparently; the caller does not see the 401.
-- **Locations are discovered and recorded.** A location pull (`/getAllLocation`) creates EasyEcom Location records. Exactly one can be flagged is_primary; is_operational is independent; frappe_company is required iff is_operational and may repeat across locations (many-to-one). A location with neither flag is inert.
+- **Locations are discovered and recorded.** A location pull (`/getAllLocation`) creates EasyEcom Location records in workflow state To Map. Exactly one can be flagged is_primary (FDE-set); is_operational is workflow-derived (true only in Live); frappe_company is set in the mapped states and empty in the unmapped states (§8.4.1). A location left in To Map / Skipped is inert.
 - **Foundational calls are logged account-scoped.** The token and location-discovery calls each write an EasyEcom API Call row with easyecom_account set, company blank, is_foundational = 1, credentials redacted in the stored payload.
 - **Rate-limit tier drives the throttle.** With tier = Default, outbound throughput is capped at 5 req/sec and the daily-quota counter increments; with tier = Diamond the cap is 30 req/sec. Changing the tier field changes the effective cap with no code change.
 - **429 and 5xx back off and surface.** A simulated 429 triggers back-off and requeue; sustained failure raises the configured alert and the Connection Health status reflects Degraded / Down.
@@ -699,7 +699,7 @@ The fixture file (`custom_field.json`, Section 31.6) is therefore assembled flow
 
 ## 4.3 Fixtures shipped with parent app
 
-- Marketplace (flat channel list) — the **authoritative** list is synced from EasyEcom `/marketplaces/list` and `/current-channel-status` at onboarding (Section 8.6), keyed by EasyEcom marketplace_id. A small **starter seed** (`marketplace.json`) of common channels with sensible default channel_type classifications ships as a fixture to speed first-time FDE setup; the onboarding sync then reconciles it against the client's actual EE channel list (adding, activating, and reclassifying as needed). The seed is a convenience, not the source of truth — EE is.
+- Marketplace (flat channel list) — the **authoritative** list is synced from EasyEcom `/current-channel-status` at onboarding (Section 8.6), keyed by EasyEcom marketplace_id. A small **starter seed** (`marketplace.json`) of common channels with sensible default channel_type classifications ships as a fixture to speed first-time FDE setup; the onboarding sync then reconciles it against the client's actual EE channel list (adding, activating, and reclassifying as needed). The seed is a convenience, not the source of truth — EE is.
 - Tax category mapping skeleton (FDE finalises during onboarding)
 - HSN-to-Item-Tax-Template fixture for common HSN codes
 - Custom field definitions for all DocTypes above
@@ -779,6 +779,7 @@ A subset of JSONPath chosen for readability and predictable behaviour:
 - Wildcards: items[*].item_code (synonym for items[].item_code)
 - Double-dot for recursive descent: ..hsn_code (rare; for deeply-nested or variable shapes)
 - Index access: items[0].item_code (specific element)
+- Keys with internal spaces are tolerated on the EasyEcom side (e.g. `address type.billing_address.street`, `phone number`) — EasyEcom payloads sometimes use space-bearing keys; both the runtime parser and the compile-time validator accept them.
 Not supported (deliberate scope limit): full JSONPath script expressions, regex matching in paths, recursive transformations. If needed, the rule's condition field is the escape hatch — it has the full sandboxed Python expression vocabulary.
 
 ## 5.5 Transformer vocabulary
@@ -909,7 +910,7 @@ Shipped as fixtures in the parent app. FDEs adjust per client; the shipped versi
 - EasyEcom-Customer-Sync (bidirectional) — B2B/D2C
 - EasyEcom-Customer-Anon-Pull (pull-only) — marketplace anonymous customer pattern
 - EasyEcom-Supplier-Sync (bidirectional)
-- EasyEcom-Warehouse-Pull (pull) — discovers new EE locations
+- EasyEcom-Location-Pull (pull) — maps the `/getAllLocation` payload to EasyEcom Location; used by the §8a discovery flow (renamed from the earlier "Warehouse-Pull"; reconciled to the real payload)
 - EasyEcom-Tax-Category-Sync (bidirectional)
 - EasyEcom-Channel-Pull (pull)
 - EasyEcom-PO-Push (push) + EasyEcom-PO-Line-Push
@@ -1452,6 +1453,8 @@ Before any individual master, Section 8.0 recaps the Field Mapping engine in the
 
 Every master sync flow translates between an ERPNext document shape and an EasyEcom payload shape, and it does so through the Field Mapping engine specified in Section 5 — declarative, FDE-editable rules shipped as fixtures, rather than translations hardcoded in Python (which would make every payload tweak a code deploy).
 
+> **Policy — every EasyEcom-payload mapping goes through the Field Mapping engine (no exceptions for "simple" flows).** The engine is not only for mappings that vary per client; it is the **insurance layer against EasyEcom changing their API**. EasyEcom is a third party and can rename or restructure a payload field on their own schedule. If that mapping lives in the engine, an FDE fixes the renamed path in the desk (Test Mapping → version → done) in minutes; if it lives in hardcoded Python, the same change is a developer code change + deploy + release cycle, with a flow broken in the meantime. Therefore **even flat, invariant, one-to-one pulls (Location, Channel, Tax Category) map through a ruleset**, not a hardcoded mapper — the flatness of today's payload is no guarantee of tomorrow's. The boundary is: **the engine owns the payload→field *translation* (including small derivations, expressed as ruleset transforms); the flow code owns *orchestration*** (the upsert, the workflow state a new row lands in, the Sync Record, foundational-call logging, re-pull behaviour). A flow calls the engine to translate the payload, then orchestrates around the result. Hardcoding a payload mapping in flow code is not permitted; if the engine genuinely cannot express something, flag it rather than working around it.
+
 ### 8.0.1 Why path-based, not flat
 
 EasyEcom payloads are nested. An order has line items. Line items have tax components. Tax components have CGST/SGST/IGST/cess shares. A flat (source_field → target_field) table cannot express:
@@ -1679,7 +1682,7 @@ This section covers two distinct things that were historically bundled and are n
 
 EasyEcom locations are **born in EasyEcom and only ever pulled into ERPNext** — ERPNext never creates or pushes a location. The flow is discovery (pull) + FDE mapping (done in ERPNext on the standard form), nothing more. The EasyEcom Location DocType (§31.2.2) already exists; this flow populates and maintains it.
 
-**Discovery pull.** The integration calls EasyEcom's location-list endpoint, **`/getAllLocation`** — confirmed live (returns HTTP 200 with the location array). Note: the foundation code currently carries a constant `/Wms/Inventory/getLocations` (from §31.3.2, an earlier guess); that constant must be corrected to `/getAllLocation` in the §8a build. The real payload shape (captured live) is the authoritative Location ruleset reference — see the field table below. It creates or updates one EasyEcom Location row per `location_key`, populating the EE-supplied fields and leaving the ERPNext-side mapping fields (`frappe_company`, `mapped_warehouse`) blank for the FDE.
+**Discovery pull.** The integration calls EasyEcom's location-list endpoint, **`/getAllLocation`** (confirmed live; returns HTTP 200 with the location array). The payload→field translation goes through the Field Mapping engine via the **`EasyEcom-Location-Pull`** ruleset (per the §8.0 engine-as-API-insurance policy — not a hardcoded mapper), reconciled to the real payload shape captured live (the field table below is that mapping, and the ruleset's authoritative reference + test fixture). The flow orchestrates around the engine's output: it creates or updates one EasyEcom Location row per `location_key`, lands new rows in workflow state To Map, and leaves the ERPNext-side mapping fields (`frappe_company`, `mapped_warehouse`) blank for the FDE. A temporarily-missing EE field on a re-pull does not overwrite an existing value (the engine emits no value for an absent field; the flow filters it rather than clobbering).
 
 **Real `/getAllLocation` payload → EasyEcom Location mapping** (from a live response; this is the §8a ruleset reference and test fixture). The response is `{code, message, data:[ ... ]}`; each element of `data[]` is one location:
 
@@ -1796,18 +1799,28 @@ One DocType, **Marketplace**, holds the flat channel list, one row per EasyEcom 
 | reporting_parent | Link → Marketplace | **Optional** rollup for reporting only. Lets several EE channels (Amazon.in + Amazon_FBA + Amazon.co.uk) roll up to a single reporting group (e.g., a "Amazon" row) for channel-wise P&L, *without* implying EE has a hierarchy. Blank for channels that stand alone |
 | enabled | Check | Per-channel kill-switch on our side |
 
-The `reporting_parent` is the deliberate, optional answer to "the flat list has 10 Amazon variants — can I group them for P&L?": yes, by pointing each variant's `reporting_parent` at a grouping row. This is a *reporting* convenience on our side, not a claim about EE's structure, and it is never required.
+The `reporting_parent` is the deliberate, optional answer to "the flat list has 10 Amazon variants — can I group them for P&L?": yes, by pointing each variant's `reporting_parent` at a grouping row. This is a *reporting* convenience on our side, not a claim about EE's structure, and it is never required. It is FDE-set (EasyEcom supplies no grouping), blank by default.
 
-### 8.6.2 Marketplace Account DocType
+A Frappe Workflow is attached to this DocType (shipped as a fixture, reusing the 8a Location pattern), adding the standard `workflow_state` field with states **Unclassified → Classified → Active**, branch **Ignored**. Discovery creates new rows in **Unclassified**; the Classify transition is gated on `channel_type` being set; `is_active` (EE's pulled integration status) is a separate axis from the workflow state (see §8.6.3).
+
+### 8.6.2 Marketplace Account DocType (deferred to reconciliation)
 
 Per (Company, Marketplace channel) — holds seller_id, GSTIN, default_warehouse, settlement_template, rate_card_subscriptions. Composite unique key (company, marketplace, marketplace_seller_id).
 
+> **Build timing: NOT part of the Channel packet (8b).** Every field here — seller_id, GSTIN, settlement_template, rate_card_subscriptions — is a *settlement/reconciliation* concern, not a channel-discovery concern. The Marketplace Account is therefore built when reconciliation/settlement is built (it is consumed by the settlement and B2B-invoicing flows, §11/§13, and the reco engine), not when the channel list is first pulled. 8b builds only the flat Marketplace channel list + the FDE classification workflow + the optional reporting_parent rollup. See the reconciliation/settlement sections (§11, §13) where this DocType is configured and consumed.
+
 ### 8.6.3 Sync
 
-- The flat channel list is pulled from EasyEcom via **`GET /marketplaces/list`** (the full catalogue of channel ids and names), reconciled into the Marketplace DocType keyed by `marketplace_id`.
-- Per-account integration status is pulled via **`GET /current-channel-status`**, which returns the subset of channels integrated for this account with an Active/Inactive `status`; this drives `is_active`.
-- Pulled during onboarding and on a daily refresh (poll_interval_locations_hours cadence).
-- A newly-appeared channel id in EE is created with `channel_type` unset and alerts the FDE to classify it (and, if relevant, configure a Marketplace Account and a reporting_parent). An unclassified channel is treated as not-yet-operational, not an error.
+- Channels are read from EasyEcom via **`GET /current-channel-status`** — confirmed live; returns, **for one location**, the channels integrated on that location, each with `marketplace_name`, `marketplace_id`, and a `status` of Active/Inactive. (Earlier drafts also assumed a `/marketplaces/list` "full catalogue" endpoint; it is **not used** — `/current-channel-status` is sufficient.)
+- **This is a per-location call, NOT account-scoped.** The JWT is per-location (§3), and `/current-channel-status` answers *for the location whose JWT is used*. So channel discovery is a **sweep over locations**, not a single foundational call:
+  - Poll `/current-channel-status` for **every discovered EasyEcom Location** — *all* of them, regardless of mapping state (To Map, Mapped but not Live, Live, Skipped). The channel catalogue must be complete, and a channel can be live on a location the FDE hasn't mapped yet, so polling only mapped/Live locations would miss channels. A JWT can be acquired for any discovered `location_key` (mapping to a Company is our bookkeeping; the JWT is EE-side auth for the location_key), so every location is pollable.
+  - Each location's call is an operational, per-location call (uses that location's JWT), **wrapped in the per-record savepoint helper** (§7.1, built in 8a) so one location's failure — e.g. a JWT problem — does not abort the whole sweep; that location is recorded Failed and the rest continue.
+- **Union and dedupe by `marketplace_id`.** The same channel (e.g. Flipkart, `marketplace_id` 2) appears across many locations' responses. The channel's identity is **account-level**: one Marketplace row per `marketplace_id`. **If a Marketplace row for that `marketplace_id` already exists, skip creating it** (dedupe) — do not create per-location duplicates. New `marketplace_id`s are created (in workflow state Unclassified).
+- **`is_active` is catalogue-level: a channel is Active if it is Active on *any* location.** Per-location channel status (Flipkart active on location A, inactive on B) is not tracked as distinct data in this packet; if a later flow needs per-location channel availability, it is added then. For the channel master, "exists and is live somewhere" is the granularity.
+- **The payload→Marketplace translation goes through the Field Mapping engine** (the `EasyEcom-Channel-Pull` ruleset), not a hardcoded mapper — per the engine-as-API-change-insurance policy (§8.0). Real-payload mapping: `marketplace_id` → `marketplace_id` (the join key), `marketplace_name` → `marketplace_name`, `status` (Active/Inactive) → `is_active`. The flow orchestrates the per-location sweep, the dedupe, and the workflow around the engine's output.
+- `reporting_parent` is **not** supplied by EasyEcom (EE has no channel grouping) — it is FDE-set, blank by default, an optional reporting rollup (§8.6.1).
+- Run during onboarding and on a daily refresh (the sweep re-runs across locations; existing channels are skipped, new ones land Unclassified and alert the FDE).
+- **FDE classification workflow.** A pulled channel carries an explicit workflow state (Frappe Workflow, shipped as a fixture — reusing the 8a Location pattern): **Unclassified → Classified → Active**, branch **Ignored**. A newly-discovered channel lands in **Unclassified** and is the FDE's worklist (filter to Unclassified). The FDE sets `channel_type` (B2C Marketplace / B2B / Quick-Commerce / Own Storefront / POS-Offline / Connector-Ignore) — the Classify transition is gated on `channel_type` being set — then Activates it; connector artifacts that are not sales channels are moved to **Ignored**. An unclassified channel is not-yet-operational, never an error. Note `is_active` (EE's pulled integration status, active-anywhere) and the workflow state (our classification lifecycle) are **independent axes**.
 - Channels drive the Sales Invoice `ecs_marketplace` field and the "Channel" accounting dimension; `channel_type` decides whether an order from that channel runs the B2C flow (§12) or the B2B flow (§11).
 
 > **Open item for §11/§12 build — channel resolution per flow.** Because the channel list is flat and spans both B2C and B2B, each sales flow must resolve the channel for the document it creates: §12 (B2C) resolves it from the EE order's marketplace_id; §11 (B2B) resolves it from a mapping on the B2B Customer (e.g., orders to the "Zepto"/"Cloudtail B2B" customer carry that channel). The customer→channel mapping mechanism for B2B is to be designed at the §11 build. Both flows then stamp the resolved channel as the "Channel" accounting-dimension value (Section 4.4) on the Sales Invoice.
@@ -4767,7 +4780,13 @@ last_pull_grn            Datetime   N   Cursor (read-only)
 
 # Validation:
 #  - exactly one location per account has is_primary = 1 (FDE-set)
-#  - frappe_company required iff is_operational = 1; must be empty otherwise
+#  - frappe_company presence is governed by workflow state (state-aware invariant):
+#      To Map / Skipped (unmapped states)        → frappe_company MUST be empty
+#      Mapped but not Live / Live (mapped states) → frappe_company MUST be set
+#    Moving to an unmapped state auto-clears frappe_company and mapped_warehouse.
+#    The invariant short-circuits when workflow_state is empty (back-fill exemption).
+#    (This supersedes the older "required iff is_operational" rule: is_operational=1
+#     only occurs in state Live, which already requires a Company.)
 #  - frappe_company is non-unique by design (many locations may resolve to one Company)
 #  - a location with neither flag set is inert (recorded but not synced or transacted)
 #
@@ -5011,19 +5030,27 @@ See Section 24.2.
 
 ### 31.2.18 Marketplace (the flat channel list)
 
-One row per EasyEcom channel, keyed by EE marketplace_id. Synced from `/marketplaces/list` + `/current-channel-status` (Section 8.6). No parent/child channel hierarchy — EasyEcom is flat.
+One row per EasyEcom channel, keyed by EE marketplace_id (account-level identity — deduped across locations). Read from `/current-channel-status` (Section 8.6) — a **per-location** call (per-location JWT), swept across **all** discovered locations and deduped by `marketplace_id` (skip if the row already exists). The payload→field mapping goes through the `EasyEcom-Channel-Pull` ruleset (§8.0 policy), not a hardcoded mapper. No parent/child channel hierarchy — EasyEcom is flat.
 
 ```
 marketplace_id           Int        Y   EasyEcom numeric id; unique; autoname on this; the stable join key
 marketplace_name         Data       Y   EE's name (e.g., 'Amazon.in', 'Cloudtail B2B', 'Customer Cash Sales')
 display_name             Data       N
-channel_type             Select     Y   B2C Marketplace | B2B | Quick-Commerce | Own Storefront | POS-Offline | Connector-Ignore (FDE-classified)
+channel_type             Select     N   B2C Marketplace | B2B | Quick-Commerce | Own Storefront | POS-Offline | Connector-Ignore. FDE-classified via the workflow (blank until classified); the Classify transition is gated on this being set
 country                  Link       N   Country (default India)
-reporting_parent         Link       N   Marketplace — optional rollup for reporting only (e.g., Amazon.in + Amazon_FBA → an 'Amazon' group). Not a claim about EE structure
+reporting_parent         Link       N   Marketplace — optional rollup for reporting only (e.g., Amazon.in + Amazon_FBA → an 'Amazon' group). FDE-set; not supplied by EE; not a claim about EE structure
 default_customer_pattern Data       N   e.g., 'Amazon FBA Buyer Pool' (for B2C marketplace channels)
-default_settlement_template Link    N   Settlement Template
-is_active                Check      Y   Mirrors /current-channel-status (Active/Inactive)
+is_active                Check      Y   Active if the channel is Active on ANY location (catalogue-level, deduped across the per-location sweep). EE's integration status — a SEPARATE axis from workflow_state
 enabled                  Check      Y   Default 1 (our-side per-channel kill-switch)
+
+# Workflow (per §8.6.3): a Frappe Workflow is attached (shipped as a fixture, reusing the 8a
+# Location pattern), adding workflow_state with states Unclassified → Classified → Active,
+# branch Ignored. Discovery creates new rows in Unclassified. is_active (pulled) and
+# workflow_state (our classification lifecycle) are independent.
+#
+# Deferred to reconciliation (NOT built in the Channel packet 8b):
+#  - default_settlement_template — a settlement concern; lives with Marketplace Account (§8.6.2),
+#    built when reconciliation is built.
 ```
 
 ### 31.2.19 (removed)
@@ -5151,8 +5178,8 @@ GET  /Wms/Vendor/getVendor?location_key=<key>&vendorId=<id>
 GET  /getAllLocation                          # confirmed live; returns the account's location array (see §8.4.1 for the real payload + field mapping)
 
 # Channels
-GET  /marketplaces/list                       # full flat channel catalogue (id + name)
-GET  /current-channel-status                  # channels integrated for this account, with Active/Inactive status
+GET  /current-channel-status                  # confirmed live; channels integrated ON ONE LOCATION (per-location JWT), with Active/Inactive status. Channel sync sweeps this across ALL locations + dedupes by marketplace_id (§8.6.3)
+# GET /marketplaces/list  — NOT used (earlier-draft "full catalogue" assumption; /current-channel-status is sufficient)
 ```
 
 ### 31.3.3 Buying flow endpoints
