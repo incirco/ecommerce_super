@@ -476,23 +476,29 @@ def _iter_pages(
 ) -> Iterator[dict]:
     """Yield GetProductMaster page responses.
 
-    First call either uses the resume cursor (absolute URL — EE returns
-    full path in nextUrl, the client treats it as absolute) or starts
-    with the includeLocations=1 query. Each subsequent call follows
-    `nextUrl`. Stops when nextUrl is missing/null or max_pages reached.
+    First call either uses the resume cursor or starts with the
+    includeLocations=1 query. Each subsequent call follows `nextUrl`.
+    Stops when nextUrl is missing/null or max_pages reached.
+
+    Cursor shape: EE Product Master returns `nextUrl` as a RELATIVE
+    path ("/Products/GetProductMaster?cursor=..."). The 8a/8b bulk
+    endpoints return absolute URLs in `next_page_url`. Detect by
+    scheme — if the cursor starts with http(s), treat as absolute;
+    otherwise prepend the Account's api_endpoint by passing through
+    as a normal endpoint path.
     """
     pages_seen = 0
     current_cursor: str | None = starting_cursor
     while True:
         if current_cursor:
-            # Resume / continuation: follow nextUrl as an absolute path.
-            page = client._request(  # noqa: SLF001 — there's no public absolute-url GET
+            is_absolute = current_cursor.startswith(("http://", "https://"))
+            page = client._request(  # noqa: SLF001 — there's no public cursor-follow API
                 "GET",
                 endpoint=current_cursor,
                 params=None,
                 payload=None,
                 timeout=60,
-                _is_absolute_url=True,
+                _is_absolute_url=is_absolute,
             )
         else:
             params: dict[str, Any] = {

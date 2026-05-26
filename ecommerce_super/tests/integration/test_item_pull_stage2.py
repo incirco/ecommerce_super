@@ -192,6 +192,12 @@ class MockClient:
         self._raise_on_page = raise_on_page
         self._pages_served = 0
         self.calls: list[tuple[str, str, dict | None]] = []  # (method, endpoint, params)
+        # Capture the _is_absolute_url flag the flow passes per cursor
+        # follow call. Lets tests assert relative-cursor handling
+        # (the production bug fix: EE returns nextUrl as a relative
+        # path, so the flow MUST pass _is_absolute_url=False or
+        # requests.MissingSchema fires).
+        self.absolute_flags: list[bool] = []
 
     def get(self, endpoint: str, params: dict | None = None, **_kwargs) -> dict:
         self.calls.append(("GET", endpoint, params))
@@ -204,6 +210,7 @@ class MockClient:
     def _request(
         self, method: str, endpoint: str, *, params=None, payload=None, **kwargs
     ) -> dict:
+        self.absolute_flags.append(bool(kwargs.get("_is_absolute_url")))
         """Absolute-URL continuation. Behave like get() — pop next page."""
         self.calls.append((method, endpoint, params))
         return self._serve_next_page()
@@ -1108,6 +1115,67 @@ class TestCursorAndIsolation(FrappeTestCase):
         abs_calls = [c for c in client.calls if "RESUME_HERE" in c[1]]
         self.assertGreaterEqual(len(abs_calls), 1)
         self.assertEqual(result.products_processed, 1)
+
+    def test_relative_cursor_is_followed_with_absolute_false(self) -> None:
+        """Regression: EE Product Master returns nextUrl as a RELATIVE
+        path ("/Products/GetProductMaster?cursor=..."). Production bug
+        had the flow always passing _is_absolute_url=True, which made
+        requests fire MissingSchema for relative URLs. Flow now
+        detects the scheme — relative cursors must be followed with
+        _is_absolute_url=False so the client prepends api_endpoint."""
+        relative_cursor = "/Products/GetProductMaster?cursor=ABC123"
+        frappe.db.set_value(
+            "EasyEcom Account",
+            self.account_name,
+            "item_pull_cursor",
+            relative_cursor,
+            update_modified=False,
+        )
+        frappe.db.commit()
+        client = MockClient(
+            count=1,
+            pages=[{"data": [self._clean_payload(f"{PREFIX}rel-1")],
+                    "nextUrl": None}],
+        )
+        pull_products(
+            account_name=self.account_name, client=client, start_fresh=False
+        )
+        # The flow must have called _request with _is_absolute_url=False
+        # for the relative cursor (otherwise requests fires MissingSchema
+        # in production — the bug fix pin).
+        self.assertEqual(
+            client.absolute_flags, [False],
+            "Relative cursor must be followed with _is_absolute_url=False; "
+            f"got {client.absolute_flags}",
+        )
+
+    def test_absolute_cursor_is_followed_with_absolute_true(self) -> None:
+        """Defensive: if EE ever returns an absolute URL in nextUrl
+        (other bulk endpoints do; Product Master doesn't today), the
+        flow should still handle it cleanly via _is_absolute_url=True
+        so the client doesn't re-prepend api_endpoint."""
+        absolute_cursor = "https://api.easyecom.io/Products/GetProductMaster?cursor=XYZ"
+        frappe.db.set_value(
+            "EasyEcom Account",
+            self.account_name,
+            "item_pull_cursor",
+            absolute_cursor,
+            update_modified=False,
+        )
+        frappe.db.commit()
+        client = MockClient(
+            count=1,
+            pages=[{"data": [self._clean_payload(f"{PREFIX}abs-1")],
+                    "nextUrl": None}],
+        )
+        pull_products(
+            account_name=self.account_name, client=client, start_fresh=False
+        )
+        self.assertEqual(
+            client.absolute_flags, [True],
+            f"Absolute cursor must be followed with _is_absolute_url=True; "
+            f"got {client.absolute_flags}",
+        )
 
     def test_savepoint_isolation_one_bad_product(self) -> None:
         """A product whose payload makes the executor raise should not
