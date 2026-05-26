@@ -92,8 +92,15 @@ fixtures = [
     },
     "Marketplace",
     "Accounting Dimension",
-    # §8d audit fix #5 — workspace number cards for FDE item worklist
-    # counts (Drift / Created-Flagged / Flagged-Not-Created).
+    # §17 operational layer — workspace Number Cards. Three Item-worklist
+    # cards seeded by the §8d audit fix #5; three sibling worklist cards
+    # (Locations / Channels / Tax Rules) added by the §17 packet so the
+    # FDE Worklist row covers every master uniformly; three LIVE KPI tiles
+    # (Sync Records Failed / API Calls 1h / Queue Job Depth) for the
+    # operational KPI strip. Pending tiles (Webhook Events / Order-GRN
+    # Cursor Lag / Open Integration Discrepancies / Partial Jobs) ship as
+    # workspace paragraph blocks — deliberately NOT number cards — so
+    # their "no feeder yet" state can't be misread as a live zero (§2.7).
     {
         "dt": "Number Card",
         "filters": [
@@ -101,7 +108,31 @@ fixtures = [
                 "Items in Drift",
                 "Items Created-Flagged",
                 "Items Flagged-Not-Created",
+                "Locations — To Map",
+                "Channels — Unclassified",
+                "Tax Rules — To Configure",
+                "Open Sync Records (Failed)",
+                "API Calls (last hour)",
+                "Queue Job Depth",
             ]],
+        ],
+    },
+    # §17 — Dashboard Charts.
+    {
+        "dt": "Dashboard Chart",
+        "filters": [
+            ["name", "in", [
+                "EasyEcom API Call Volume (7d)",
+                "Sync Record Status (Item-only currently)",
+            ]],
+        ],
+    },
+    # §17.2.1 Top Strip — Custom HTML Block (env badge / connection
+    # status / pause-all toggle).
+    {
+        "dt": "Custom HTML Block",
+        "filters": [
+            ["name", "=", "EasyEcom Top Strip"],
         ],
     },
     # Field Mapping library (§5.11) — child rulesets first, then parents.
