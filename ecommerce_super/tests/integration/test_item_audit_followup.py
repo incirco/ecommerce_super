@@ -241,6 +241,33 @@ class TestSyncRecordWrites(FrappeTestCase):
         self.assertEqual(sr.entity_type, "Item")
         self.assertEqual(sr.direction, "Pull")
 
+    def test_pull_fnc_does_not_write_sync_record(self) -> None:
+        """FNC outcomes (missing HSN / unsupported type) don't create
+        an ERPNext doc. Sync Record's entity_name is a Dynamic Link →
+        writing one for a non-existent entity would trip Frappe's
+        link validation and bubble up "Could not find {Doctype}:
+        {sku}" errors via msgprint. The Item Map row carries the FNC
+        state for the FDE worklist; Sync Record is per-entity and
+        skipped when no entity exists."""
+        account = _account(MODE_ONBOARDING)
+        # variant_parent → unsupported type → FNC (no Item created)
+        payload = dict(_payload(f"{PREFIX}sr-fnc-var"))
+        payload["product_type"] = "variant_parent"
+        process_one_product(
+            payload, account=account, executor=self.executor,
+            enabled_companies=[],
+        )
+        # No Item was created.
+        self.assertFalse(frappe.db.exists("Item", f"{PREFIX}sr-fnc-var"))
+        # No Sync Record either — would have failed link validation.
+        sr = _last_sync_record(f"{PREFIX}sr-fnc-var", "Pull")
+        self.assertIsNone(
+            sr,
+            "FNC outcomes must not write a Sync Record (the entity "
+            "doesn't exist → Frappe Dynamic Link validation would "
+            "trip). Item Map row carries the FNC state instead.",
+        )
+
     def test_push_success_writes_success_sync_record(self) -> None:
         account = _account()
         item = _seed_mapped_item(f"{PREFIX}sr-push-1")

@@ -157,7 +157,24 @@ def _upsert_with_status(
     sku: str,
     status: str,
     last_error: str | None,
-) -> str:
+) -> str | None:
+    # Sync Record's entity_name is a Dynamic Link — Frappe validates
+    # the target exists on insert. For Flagged-Not-Created outcomes
+    # (missing HSN, unsupported product_type, etc.) and for failures
+    # raised before the ERPNext doc was created, there's no entity
+    # to link to. Writing the SR would hit "Could not find {Doctype}:
+    # {sku}" and bubble up via msgprint — the user sees a wall of
+    # errors even though the pull itself succeeded.
+    #
+    # The right semantic (per CLAUDE.md / §10.1.2): Sync Records are
+    # entity-centric, one per (ERPNext doc × direction). No entity,
+    # no record. The Item Map row already carries the FNC / failure
+    # state for the FDE worklist — that's the visible record.
+    if not entity_doctype or not entity_name:
+        return None
+    if not frappe.db.exists(entity_doctype, entity_name):
+        return None
+
     company = _company_for_item_sync()
     correlation_id = new_correlation_id()
     idem_key = _idempotency_key_for_op(
