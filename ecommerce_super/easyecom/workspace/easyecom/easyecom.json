@@ -1,7 +1,7 @@
 {
  "app": "ecommerce_super",
  "charts": [],
- "content": "[{\"id\":\"hdr-config\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Configuration</b></span>\",\"col\":12}},{\"id\":\"sc-account\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Account\",\"col\":4}},{\"id\":\"sc-locations\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Locations\",\"col\":4}},{\"id\":\"sc-companies\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Company Settings\",\"col\":4}},{\"id\":\"spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr-ops\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Operations</b></span>\",\"col\":12}},{\"id\":\"sc-queue\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Queue Jobs\",\"col\":4}},{\"id\":\"sc-sync\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Sync Records\",\"col\":4}},{\"id\":\"sc-webhook\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Webhook Events\",\"col\":4}},{\"id\":\"sc-api\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"API Calls\",\"col\":4}},{\"id\":\"sc-cursor\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Cursors\",\"col\":4}},{\"id\":\"sc-marketplace\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Marketplaces\",\"col\":4}}]",
+ "content": "[{\"id\":\"hdr-setup\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Setup</b></span>\",\"col\":12}},{\"id\":\"sc-account\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Account\",\"col\":3}},{\"id\":\"sc-companies\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Company Settings\",\"col\":3}},{\"id\":\"sc-fieldmap\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Field Mapping\",\"col\":3}},{\"id\":\"sc-sot\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Source-of-Truth Map\",\"col\":3}},{\"id\":\"spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr-masters\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Masters</b></span>\",\"col\":12}},{\"id\":\"sc-locations\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Locations\",\"col\":3}},{\"id\":\"sc-marketplace\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Marketplaces\",\"col\":3}},{\"id\":\"sc-taxrules\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Tax Rule Map\",\"col\":3}},{\"id\":\"sc-itemmap\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Item Map\",\"col\":3}},{\"id\":\"spacer-2\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr-worklists\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>FDE Worklists</b></span>\",\"col\":12}},{\"id\":\"sc-wl-tomap\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Locations — To Map\",\"col\":4}},{\"id\":\"sc-wl-unclass\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Channels — Unclassified\",\"col\":4}},{\"id\":\"sc-wl-toconf\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Tax Rules — To Configure\",\"col\":4}},{\"id\":\"spacer-3\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr-ops\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Operations</b></span>\",\"col\":12}},{\"id\":\"sc-queue\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Queue Jobs\",\"col\":4}},{\"id\":\"sc-sync\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Sync Records\",\"col\":4}},{\"id\":\"sc-cursor\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Cursors\",\"col\":4}},{\"id\":\"sc-api\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"API Calls\",\"col\":6}},{\"id\":\"sc-webhook\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Webhook Events\",\"col\":6}}]",
  "creation": "2026-05-24 17:30:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -13,8 +13,27 @@
  "indicator_color": "blue",
  "is_hidden": 0,
  "label": "EasyEcom",
- "links": [],
- "modified": "2026-05-24 17:30:00",
+ "links": [
+  {"hidden": 0, "is_query_report": 0, "label": "Setup", "link_count": 0, "onboard": 0, "type": "Card Break"},
+  {"hidden": 0, "is_query_report": 0, "label": "EasyEcom Account", "link_count": 0, "link_to": "EasyEcom Account", "link_type": "DocType", "onboard": 1, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Company Settings", "link_count": 0, "link_to": "EasyEcom Company Settings", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Field Mapping", "link_count": 0, "link_to": "EasyEcom Field Mapping", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Source-of-Truth Map", "link_count": 0, "link_to": "Source-of-Truth Map", "link_type": "DocType", "onboard": 0, "type": "Link"},
+
+  {"hidden": 0, "is_query_report": 0, "label": "Masters", "link_count": 0, "onboard": 0, "type": "Card Break"},
+  {"dependencies": "EasyEcom Account", "hidden": 0, "is_query_report": 0, "label": "Locations", "link_count": 0, "link_to": "EasyEcom Location", "link_type": "DocType", "onboard": 1, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Marketplaces (Channels)", "link_count": 0, "link_to": "Marketplace", "link_type": "DocType", "onboard": 1, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Tax Rule Map", "link_count": 0, "link_to": "EasyEcom Tax Rule Map", "link_type": "DocType", "onboard": 1, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Item Map", "link_count": 0, "link_to": "EasyEcom Item Map", "link_type": "DocType", "onboard": 1, "type": "Link"},
+
+  {"hidden": 0, "is_query_report": 0, "label": "Operations", "link_count": 0, "onboard": 0, "type": "Card Break"},
+  {"hidden": 0, "is_query_report": 0, "label": "Queue Jobs", "link_count": 0, "link_to": "EasyEcom Queue Job", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Sync Records", "link_count": 0, "link_to": "EasyEcom Sync Record", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Sync Cursors", "link_count": 0, "link_to": "EasyEcom Sync Cursor", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "API Calls", "link_count": 0, "link_to": "EasyEcom API Call", "link_type": "DocType", "onboard": 0, "type": "Link"},
+  {"hidden": 0, "is_query_report": 0, "label": "Webhook Events", "link_count": 0, "link_to": "EasyEcom Webhook Event", "link_type": "DocType", "onboard": 0, "type": "Link"}
+ ],
+ "modified": "2026-05-26 12:00:00",
  "modified_by": "Administrator",
  "module": "EasyEcom",
  "name": "EasyEcom",
@@ -31,69 +50,25 @@
  ],
  "sequence_id": 50.0,
  "shortcuts": [
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Account",
-   "link_to": "EasyEcom Account",
-   "type": "DocType"
-  },
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Locations",
-   "link_to": "EasyEcom Location",
-   "type": "DocType"
-  },
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Company Settings",
-   "link_to": "EasyEcom Company Settings",
-   "type": "DocType"
-  },
-  {
-   "color": "Blue",
-   "doc_view": "List",
-   "label": "Queue Jobs",
-   "link_to": "EasyEcom Queue Job",
-   "type": "DocType"
-  },
-  {
-   "color": "Blue",
-   "doc_view": "List",
-   "label": "Sync Records",
-   "link_to": "EasyEcom Sync Record",
-   "type": "DocType"
-  },
-  {
-   "color": "Blue",
-   "doc_view": "List",
-   "label": "Webhook Events",
-   "link_to": "EasyEcom Webhook Event",
-   "type": "DocType"
-  },
-  {
-   "color": "Blue",
-   "doc_view": "List",
-   "label": "API Calls",
-   "link_to": "EasyEcom API Call",
-   "type": "DocType"
-  },
-  {
-   "color": "Grey",
-   "doc_view": "List",
-   "label": "Cursors",
-   "link_to": "EasyEcom Sync Cursor",
-   "type": "DocType"
-  },
-  {
-   "color": "Green",
-   "doc_view": "List",
-   "label": "Marketplaces",
-   "link_to": "Marketplace",
-   "type": "DocType"
-  }
+  {"color": "Grey", "doc_view": "List", "label": "Account", "link_to": "EasyEcom Account", "type": "DocType"},
+  {"color": "Grey", "doc_view": "List", "label": "Company Settings", "link_to": "EasyEcom Company Settings", "type": "DocType"},
+  {"color": "Grey", "doc_view": "List", "label": "Field Mapping", "link_to": "EasyEcom Field Mapping", "type": "DocType"},
+  {"color": "Grey", "doc_view": "List", "label": "Source-of-Truth Map", "link_to": "Source-of-Truth Map", "type": "DocType"},
+
+  {"color": "Yellow", "doc_view": "List", "label": "Locations", "link_to": "EasyEcom Location", "type": "DocType"},
+  {"color": "Yellow", "doc_view": "List", "label": "Marketplaces", "link_to": "Marketplace", "type": "DocType"},
+  {"color": "Yellow", "doc_view": "List", "label": "Tax Rule Map", "link_to": "EasyEcom Tax Rule Map", "type": "DocType"},
+  {"color": "Yellow", "doc_view": "List", "label": "Item Map", "link_to": "EasyEcom Item Map", "type": "DocType"},
+
+  {"color": "Orange", "doc_view": "", "label": "Locations — To Map", "link_to": "/app/easyecom-location/view/list?workflow_state=To%20Map", "type": "URL"},
+  {"color": "Orange", "doc_view": "", "label": "Channels — Unclassified", "link_to": "/app/marketplace/view/list?workflow_state=Unclassified", "type": "URL"},
+  {"color": "Orange", "doc_view": "", "label": "Tax Rules — To Configure", "link_to": "/app/easyecom-tax-rule-map/view/list?workflow_state=To%20Configure", "type": "URL"},
+
+  {"color": "Blue", "doc_view": "List", "label": "Queue Jobs", "link_to": "EasyEcom Queue Job", "type": "DocType"},
+  {"color": "Blue", "doc_view": "List", "label": "Sync Records", "link_to": "EasyEcom Sync Record", "type": "DocType"},
+  {"color": "Blue", "doc_view": "List", "label": "Cursors", "link_to": "EasyEcom Sync Cursor", "type": "DocType"},
+  {"color": "Blue", "doc_view": "List", "label": "API Calls", "link_to": "EasyEcom API Call", "type": "DocType"},
+  {"color": "Blue", "doc_view": "List", "label": "Webhook Events", "link_to": "EasyEcom Webhook Event", "type": "DocType"}
  ],
  "title": "EasyEcom",
  "type": "Workspace"
