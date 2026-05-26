@@ -38,7 +38,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Transform (Push)",
-   "options": "identity\nnoop\nbool_to_yn\nyn_to_bool\nstr_lower\nstr_upper\nstr_strip\ndate_format\ndatetime_to_iso\niso_to_datetime\nint_to_str\nstr_to_int\nfloat_to_str\nstr_to_float\ncurrency_to_paise\npaise_to_currency\nlookup_id\nreverse_lookup_id\nenum_map\nconditional_constant\ncomputed\ncustom_python\ncompose",
+   "options": "identity\nnoop\nbool_to_yn\nyn_to_bool\nstr_lower\nstr_upper\nstr_strip\ndate_format\ndatetime_to_iso\niso_to_datetime\nint_to_str\nstr_to_int\nfloat_to_str\nstr_to_float\nfloat_to_int\ncurrency_to_paise\npaise_to_currency\nlookup_id\nreverse_lookup_id\nenum_map\nconditional_constant\ncomputed\ncustom_python\ncompose",
    "default": "identity",
    "reqd": 1
   },
@@ -47,7 +47,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Transform (Pull)",
-   "options": "identity\nnoop\nbool_to_yn\nyn_to_bool\nstr_lower\nstr_upper\nstr_strip\ndate_format\ndatetime_to_iso\niso_to_datetime\nint_to_str\nstr_to_int\nfloat_to_str\nstr_to_float\ncurrency_to_paise\npaise_to_currency\nlookup_id\nreverse_lookup_id\nenum_map\nconditional_constant\ncomputed\ncustom_python\ncompose",
+   "options": "identity\nnoop\nbool_to_yn\nyn_to_bool\nstr_lower\nstr_upper\nstr_strip\ndate_format\ndatetime_to_iso\niso_to_datetime\nint_to_str\nstr_to_int\nfloat_to_str\nstr_to_float\nfloat_to_int\ncurrency_to_paise\npaise_to_currency\nlookup_id\nreverse_lookup_id\nenum_map\nconditional_constant\ncomputed\ncustom_python\ncompose",
    "default": "identity",
    "reqd": 1
   },

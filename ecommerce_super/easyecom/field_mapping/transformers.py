@@ -277,6 +277,28 @@ def _t_float_to_str(
     return str(float(value))
 
 
+def _t_float_to_int(
+    value: Any, *, args: dict | None, context: TransformContext
+) -> int | None:
+    """Round a float-ish value to Integer for EE write contracts that
+    type-strict dimensions / weights (per EE's CreateMasterProduct
+    table: Weight grams as Integer; Length / Height / Width cm as
+    Integer; TaxRate as Integer). Returns None for None input (the
+    engine drops None outputs). Truncation: standard `int()` cast
+    truncates toward zero - 10.5cm becomes 10. The FDE can pre-round
+    in ERPNext if half-up is desired."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError) as e:
+        raise FieldMappingRuleError(
+            f"float_to_int: cannot convert {value!r}",
+            transform="float_to_int",
+            source_value=value,
+        ) from e
+
+
 def _t_str_to_float(
     value: Any, *, args: dict | None, context: TransformContext
 ) -> float | None:
@@ -617,6 +639,7 @@ TRANSFORMERS: dict[str, tuple[Callable, Callable[[str, dict | None], None]]] = {
     "int_to_str": (_t_int_to_str, _validate_no_args),
     "str_to_int": (_t_str_to_int, _validate_no_args),
     "float_to_str": (_t_float_to_str, _validate_no_args),
+    "float_to_int": (_t_float_to_int, _validate_no_args),
     "str_to_float": (_t_str_to_float, _validate_no_args),
     "currency_to_paise": (_t_currency_to_paise, _validate_no_args),
     "paise_to_currency": (_t_paise_to_currency, _validate_no_args),

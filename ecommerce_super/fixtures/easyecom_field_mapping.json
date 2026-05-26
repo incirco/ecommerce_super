@@ -410,37 +410,47 @@
    {
     "erpnext_path": "weight_per_unit",
     "easyecom_path": "Weight",
-    "transform_push": "float_to_str",
+    "transform_push": "float_to_int",
     "transform_pull": "str_to_float",
-    "notes": "Grams. Flow flags item Not-Pushed if missing."
+    "notes": "Grams. EE contract: Weight is Integer (per CreateMasterProduct table). Flow flags item Not-Pushed if missing. Push casts to int (truncates fractional grams - FDE: pre-round in ERPNext if half-up is needed)."
    },
    {
     "erpnext_path": "ecs_length_cm",
     "easyecom_path": "Length",
-    "transform_push": "float_to_str",
-    "transform_pull": "str_to_float"
+    "transform_push": "float_to_int",
+    "transform_pull": "str_to_float",
+    "notes": "EE contract: Integer (cm). Float-to-int truncates; pre-round in ERPNext for half-up."
    },
    {
     "erpnext_path": "ecs_height_cm",
     "easyecom_path": "Height",
-    "transform_push": "float_to_str",
-    "transform_pull": "str_to_float"
+    "transform_push": "float_to_int",
+    "transform_pull": "str_to_float",
+    "notes": "EE contract: Integer (cm). Float-to-int truncates; pre-round in ERPNext for half-up."
    },
    {
     "erpnext_path": "ecs_width_cm",
     "easyecom_path": "Width",
-    "transform_push": "float_to_str",
-    "transform_pull": "str_to_float"
+    "transform_push": "float_to_int",
+    "transform_pull": "str_to_float",
+    "notes": "EE contract: Integer (cm). Float-to-int truncates; pre-round in ERPNext for half-up."
    },
    {
     "erpnext_path": "ecs_ee_cost",
     "easyecom_path": "Cost",
     "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "Prefer the EE-origin cost captured at pull time (ecs_ee_cost). Fall back to Item.valuation_rate when the item was ERPNext-originated (never pulled). Final fallback: 0 (EE accepts). FDE: edit transform_args.expression to change the fallback chain \u2014 e.g. add 'last_purchase_rate' if your sourcing prefers the most recent PO.",
+    "notes": "EE contract: Double (mandatory on Create). Prefer EE-origin cost captured at pull (ecs_ee_cost). Fall back to Item.valuation_rate when the item was ERPNext-originated (never pulled). Final fallback to Item.standard_rate (the FDE-entered selling rate, a reasonable approximation when no costing has happened yet). Last fallback: 0 (EE accepts). FDE: edit transform_args.expression to change the chain - e.g. add 'last_purchase_rate' or reorder.",
     "transform_args": {
-     "expression": "value if value else (source_doc.valuation_rate or 0)"
+     "expression": "value if value else (source_doc.valuation_rate or source_doc.standard_rate or 0)"
     }
+   },
+   {
+    "erpnext_path": "standard_rate",
+    "easyecom_path": "Mrp",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "EE contract: Mrp is Double (optional). ERPNext's Item.standard_rate is the FDE-entered selling-rate-list price - a reasonable MRP source if no separate MRP field is maintained. Push direction: identity (float to Double). Pull direction: noop - EE's Mrp doesn't overwrite ERPNext's standard_rate (FDE may have ERPNext-side pricing logic that's authoritative). FDE: change erpnext_path to a different field (e.g. a custom 'ecs_mrp' Float field) if MRP is tracked separately from selling rate."
    },
    {
     "erpnext_path": "ecs_ee_product_id",

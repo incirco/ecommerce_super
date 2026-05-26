@@ -1335,7 +1335,12 @@ def build_push_payload(
             "Map (FDE: §8c desk) and re-push."
         )
     else:
-        payload["TaxRate"] = tax_rate
+        # EE contract: TaxRate is Integer in the allowed set
+        # {0,3,5,12,18,28}. Resolver returns a float (5.0) because
+        # Item Tax Templates carry rates as Float; cast to int at
+        # the boundary so EE's type-strict validation accepts it
+        # (per the live-verified pattern with productId).
+        payload["TaxRate"] = int(tax_rate)
 
     # 3) Hard-mandatory presence check for physical attributes.
     # Treat 0 / "0" / 0.0 / "0.0" / None / "" all as "not sourced".
