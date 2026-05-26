@@ -702,6 +702,115 @@
  },
  {
   "doctype": "EasyEcom Field Mapping",
+  "name": "EasyEcom-Customer-Push",
+  "mapping_name": "EasyEcom-Customer-Push",
+  "entity_type": "Customer",
+  "direction": "Push",
+  "active": 1,
+  "missing_field_policy": "Permissive",
+  "version": 1,
+  "last_modified_by": "Administrator",
+  "last_modified_at": "2026-05-27 00:00:00",
+  "change_reason": "§8e Stage 4 — ERPNext Customer + linked Addresses → EE /Wholesale/CreateCustomer & /Wholesale/UpdateCustomer payload. SEPARATE from EasyEcom-Customer-Pull per §8.0 engine policy (one ruleset per direction). The engine produces a flat dict with EE keys; the FLOW (customer_push.py) injects the manufactured/per-op fields: random password on Create, state name→id resolution for Create's billingStateId/dispatchStateId (Update uses name; the flow handles the create-vs-update split at the wire boundary). The customerId field is keyed by the Customer Map's ee_customer_id on Update; on Create it's returned by EE and written back to the map row.",
+  "rules": [
+   {
+    "erpnext_path": "customer_name",
+    "easyecom_path": "companyName",
+    "transform_push": "str_strip",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory `companyName`. ERPNext Customer.customer_name is required so this always has a value. Note the camelCase — EE Create uses `companyName` while Read returns `companyname` (lowercase). This direction-specific difference is why we use a SEPARATE push ruleset rather than reusing pull's `companyname` rule. Not marked required: at the ruleset level — the FLOW does the required-presence check so missing input produces a clean Flagged-Not-Created Map row instead of an engine exception."
+   },
+   {
+    "erpnext_path": "email_id",
+    "easyecom_path": "email",
+    "transform_push": "str_lower",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory `email`. The flow checks presence before building the payload; missing email → flag-not-pushed (Customer Map row, no EE call). Update uses the same field name + same value. Same flow-vs-ruleset division as companyName above."
+   },
+   {
+    "erpnext_path": "mobile_no",
+    "easyecom_path": "contactNumber",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "Optional on both Create and Update."
+   },
+   {
+    "erpnext_path": "gstin",
+    "easyecom_path": "taxIdentificationNumber",
+    "transform_push": "str_upper",
+    "transform_pull": "noop",
+    "notes": "EE's `taxIdentificationNumber` field. When ERPNext gstin is empty AND gst_category='Unregistered', the FLOW substitutes 'URP' (EE's sentinel for unregistered parties) rather than sending empty. Required on Create; optional on Update (we still send it on update so EE keeps GST current)."
+   },
+   {
+    "erpnext_path": "default_currency",
+    "easyecom_path": "currency",
+    "transform_push": "str_upper",
+    "transform_pull": "noop",
+    "notes": "Required on Create; ERPNext Customer.default_currency. Fallback to 'INR' handled by the flow if empty (Indian wholesale onboarding default)."
+   },
+   {
+    "erpnext_path": "billing_street",
+    "easyecom_path": "billingStreet",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "Address fields are FLOW-sourced from the Customer's Address records (Frappe Dynamic Link). The flow reads Billing/Shipping Address.address_line1 and writes here; the ruleset just declares the EE field name + types it as identity-pass-through."
+   },
+   {
+    "erpnext_path": "billing_city",
+    "easyecom_path": "billingCity",
+    "transform_push": "identity",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "billing_postal_code",
+    "easyecom_path": "billingPostalCode",
+    "transform_push": "str_to_int",
+    "transform_pull": "noop",
+    "notes": "EE wants billingPostalCode as Integer on Create. ERPNext Address.pincode is Data — str_to_int casts at the boundary. Missing/non-numeric → flow flags."
+   },
+   {
+    "erpnext_path": "billing_state_name",
+    "easyecom_path": "billingState",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "**Update path uses this NAME.** Create path needs `billingStateId` (int) instead — the FLOW (customer_push.py) does the create-vs-update split at the wire boundary, resolving name→id via Stage 2 state_resolver when building the Create payload, leaving the name in place for Update."
+   },
+   {
+    "erpnext_path": "billing_country_name",
+    "easyecom_path": "country",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "EE's Create field name is `country` (just the name string, no id). Fallback to 'India' handled by the flow."
+   },
+   {
+    "erpnext_path": "dispatch_street",
+    "easyecom_path": "dispatchStreet",
+    "transform_push": "identity",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "dispatch_city",
+    "easyecom_path": "dispatchCity",
+    "transform_push": "identity",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "dispatch_postal_code",
+    "easyecom_path": "dispatchPostalCode",
+    "transform_push": "str_to_int",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "dispatch_state_name",
+    "easyecom_path": "dispatchState",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "Update path uses NAME; Create path uses `dispatchStateId` (int) — same flow-level split as billingState."
+   }
+  ]
+ },
+ {
+  "doctype": "EasyEcom Field Mapping",
   "name": "EasyEcom-Customer-Anon-Pull",
   "mapping_name": "EasyEcom-Customer-Anon-Pull",
   "entity_type": "Customer Anon",

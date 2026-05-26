@@ -515,12 +515,18 @@ class TestGstinGating(FrappeTestCase):
         self.assertIsNotNone(m)
         self.assertEqual(m.status, "Flagged-Not-Created")
         self.assertFalse(m.erpnext_name)
-        self.assertIn("validate failed", m.flag_reason.lower())
+        # Validator tag — invalid 14-char GSTIN trips IC's length check
+        # ("must have 15 characters") which the validator-tagger maps to
+        # ic_validate_failed (no more specific tag in our match table).
+        self.assertIn("ic_", m.flag_reason.lower())
 
 
 class TestPincodeStateMismatch(FrappeTestCase):
-    """The dirty-data soft-flag case: state name doesn't match pincode
-    range → Customer is created with Created-Flagged status."""
+    """Stage 3 correction (2026-05-27): pincode-prefix ≠ state is
+    tax-relevant (GST place-of-supply), so India Compliance's throw
+    drives the WHOLE Customer to Flagged-Not-Created. NO degraded
+    address persists. NO Customer is created.
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -534,14 +540,14 @@ class TestPincodeStateMismatch(FrappeTestCase):
     def tearDown(self) -> None:
         _wipe_all()
 
-    def test_arunachal_pradesh_with_bangalore_pincode_is_created_flagged(self) -> None:
+    def test_arunachal_pradesh_with_bangalore_pincode_is_flagged_not_created(self) -> None:
         """The packet's exact scenario: billingState='Arunachal Pradesh'
-        + billingZipcode='560035' (a Bangalore code). Soft flag — the
-        Customer IS created; status='Created-Flagged'. URP-empty gstNum
-        so India Compliance doesn't intercept with a check-digit FNC."""
+        + billingZipcode='560035'. India Compliance Address validator
+        throws → entire Customer FNC'd (held). NO Customer row created.
+        URP-empty gstNum so we isolate the pincode-state validator."""
         row = copy.deepcopy(self.fixture["data"][0])
         row["c_id"] = 88888001
-        row["gstNum"] = ""  # URP — bypass GSTIN check so we exercise the pincode-state path
+        row["gstNum"] = ""  # URP — isolate the pincode-state validator
         row["billingState"] = "Arunachal Pradesh"
         row["billingZipcode"] = "560035"
         row["dispatchState"] = "Arunachal Pradesh"
@@ -549,8 +555,8 @@ class TestPincodeStateMismatch(FrappeTestCase):
 
         outcome = process_customer_rows([row])
         self.assertEqual(outcome.failed, 0)
-        self.assertEqual(outcome.flagged_not_created, 0)
-        self.assertEqual(outcome.created_flagged, 1)
+        self.assertEqual(outcome.created_flagged, 0, "tax-dirt must NOT be soft-flagged")
+        self.assertEqual(outcome.flagged_not_created, 1)
 
         m = frappe.db.get_value(
             "EasyEcom Customer Map",
@@ -558,10 +564,59 @@ class TestPincodeStateMismatch(FrappeTestCase):
             ["status", "flag_reason", "erpnext_name"],
             as_dict=True,
         )
-        self.assertEqual(m.status, "Created-Flagged")
-        self.assertIsNotNone(m.erpnext_name)
-        self.assertIn("560035", m.flag_reason)
-        self.assertIn("Arunachal Pradesh", m.flag_reason)
+        self.assertEqual(m.status, "Flagged-Not-Created")
+        # No Customer row created (cleanup rolled back the partial insert).
+        self.assertFalse(m.erpnext_name)
+        # The flag_reason names the IC validator that fired.
+        self.assertIn("ic_pincode_state_mismatch", m.flag_reason.lower())
+
+    def test_gstin_state_code_mismatch_is_flagged_not_created(self) -> None:
+        """Another tax-relevant validator: gstin's leading 2-digit state
+        code MUST match Address.state. Mismatch → FNC."""
+        row = copy.deepcopy(self.fixture["data"][0])
+        row["c_id"] = 88888002
+        row["gstNum"] = VALID_GSTIN_DELHI  # state code 07 = Delhi
+        row["billingState"] = "Karnataka"  # state code 29
+        row["billingZipcode"] = "560001"
+        row["dispatchState"] = "Karnataka"
+        row["dispatchZipcode"] = "560001"
+
+        outcome = process_customer_rows([row])
+        self.assertEqual(outcome.failed, 0)
+        self.assertEqual(outcome.flagged_not_created, 1)
+
+        m = frappe.db.get_value(
+            "EasyEcom Customer Map",
+            {"ee_c_id": str(row["c_id"])},
+            ["status", "flag_reason", "erpnext_name"],
+            as_dict=True,
+        )
+        self.assertEqual(m.status, "Flagged-Not-Created")
+        self.assertFalse(m.erpnext_name)
+        # The validator-tag names what failed.
+        self.assertIn("ic_gstin_state_code_mismatch", m.flag_reason.lower())
+
+    def test_partial_customer_is_cleaned_up_on_address_throw(self) -> None:
+        """When the Customer insert succeeds but Address.insert throws,
+        the partial Customer doc must be deleted — no orphan row."""
+        row = copy.deepcopy(self.fixture["data"][0])
+        row["c_id"] = 88888003
+        row["gstNum"] = ""  # URP — Customer.validate passes
+        row["companyname"] = "ARNCHL_PINCODE_TEST_CUST"
+        row["billingState"] = "Arunachal Pradesh"
+        row["billingZipcode"] = "560035"
+
+        count_before = frappe.db.count(
+            "Customer", filters={"customer_name": "ARNCHL_PINCODE_TEST_CUST"}
+        )
+
+        process_customer_rows([row])
+
+        # Zero Customer rows by that name — the partial insert was rolled back.
+        count_after = frappe.db.count(
+            "Customer", filters={"customer_name": "ARNCHL_PINCODE_TEST_CUST"}
+        )
+        self.assertEqual(count_after, count_before)
 
 
 class TestSyncRecordWrites(FrappeTestCase):

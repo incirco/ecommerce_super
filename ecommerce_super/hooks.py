@@ -59,6 +59,9 @@ doctype_js = {
     # the Item form. Auto-dispatches to bundle path when the Item is
     # a Product Bundle wrapper.
     "Item": "public/js/item_push_button.js",
+    # §8e Stage 4: "Push to EasyEcom" button on the Customer form.
+    # Only visible for customer_type=Company (§8e wholesale scope).
+    "Customer": "public/js/customer_push_button.js",
 }
 
 
@@ -241,6 +244,16 @@ doc_events: dict[str, dict[str, str]] = {
     "Product Bundle": {
         "after_insert": "ecommerce_super.easyecom.flows.item_push.enqueue_on_bundle_change",
         "on_update": "ecommerce_super.easyecom.flows.item_push.enqueue_on_bundle_change",
+    },
+    # §8e Stage 4: Customer auto-push hook. Gated by:
+    #   - auto_push_customers_on_save=1 on the enabled EasyEcom Account
+    #     (default 0 — safe by default; opt-in once onboarding stabilises)
+    #   - customer_type=Company (§8e is wholesale only)
+    #   - not currently in the customer_pull flow (ping-pong guard via
+    #     frappe.flags.easyecom_customer_pull_in_flight)
+    "Customer": {
+        "after_insert": "ecommerce_super.easyecom.flows.customer_push.enqueue_on_customer_change",
+        "on_update": "ecommerce_super.easyecom.flows.customer_push.enqueue_on_customer_change",
     },
     # "Sales Order": {
     #     "validate": "ecommerce_super.easyecom.flows.b2b_sales.validate_pre_push",

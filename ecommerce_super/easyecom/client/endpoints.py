@@ -42,6 +42,14 @@ STATES_GET: str = "/getStates"  # GET ?countryId=N — foundational
 # split.
 WHOLESALE_USER_MANAGEMENT: str = "/Wholesale/v2/UserManagement"  # GET — foundational
 
+# §8e Stage 4 — Wholesale Customer push.
+# /Wholesale/CreateCustomer → returns data.customerId (the write-side id).
+# /Wholesale/UpdateCustomer → keys customerId; all-other-fields-optional;
+#   state as NAME (not id, differs from create).
+# Both account-wide writes → foundational at the API Call layer.
+WHOLESALE_CUSTOMER_CREATE: str = "/Wholesale/CreateCustomer"  # POST — foundational
+WHOLESALE_CUSTOMER_UPDATE: str = "/Wholesale/UpdateCustomer"  # POST — foundational
+
 # §8d Item Master (Pull). Cursor-paginated via `nextUrl` (≤200/page);
 # count-aware via PRODUCT_MASTER_COUNT_GET. Both are account-wide
 # (includeLocations=1 → one catalogue keyed by globally-unique SKU,
@@ -114,6 +122,9 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
         STATES_GET,
         # §8e Stage 3 — wholesale customer master (account-wide).
         WHOLESALE_USER_MANAGEMENT,
+        # §8e Stage 4 — wholesale customer push (account-wide).
+        WHOLESALE_CUSTOMER_CREATE,
+        WHOLESALE_CUSTOMER_UPDATE,
     }
 )
 

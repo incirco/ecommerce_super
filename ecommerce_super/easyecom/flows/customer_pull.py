@@ -43,10 +43,9 @@ from ecommerce_super.easyecom.client.client import EasyEcomClient
 from ecommerce_super.easyecom.client.endpoints import (
     WHOLESALE_USER_MANAGEMENT,
 )
-from ecommerce_super.easyecom.customer.state_resolver import (
-    validate_pincode_state,
-    resolve_state,
-)
+# Stage 2 resolvers are unused in Stage 3 pull (India Compliance is
+# authoritative for tax-relevant validation during pull). Stage 4 push
+# imports them directly from the state_resolver module.
 from ecommerce_super.easyecom.field_mapping.executor import (
     FieldMappingExecutor,
 )
@@ -140,9 +139,16 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
     directly without mocking the HTTP layer. The Field Mapping executor
     is instantiated ONCE for the whole batch — compilation queries the
     DB, doing it per row would be wasted work.
+
+    Sets `frappe.flags.easyecom_customer_pull_in_flight=True` while
+    processing — the Stage 4 push hook checks this flag to avoid
+    re-pushing a customer that was just pulled (ping-pong guard).
     """
+    from ecommerce_super.easyecom.flows.customer_push import PING_PONG_FLAG
+
     executor = FieldMappingExecutor(CUSTOMER_PULL_RULESET)
     aggregate = PullOutcome(total=len(rows))
+    frappe.flags.__setattr__(PING_PONG_FLAG, True)
 
     def _handle(row: dict) -> None:
         outcome = process_one_customer(row, executor=executor)
@@ -178,12 +184,18 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
             ),
         )
 
-    for_each_record(
-        rows,
-        handler=_handle,
-        on_failure=_on_failure,
-        flow_name="customer_pull",
-    )
+    try:
+        for_each_record(
+            rows,
+            handler=_handle,
+            on_failure=_on_failure,
+            flow_name="customer_pull",
+        )
+    finally:
+        # Reset the ping-pong guard even on exception. frappe.flags is
+        # request-local but a stale True would suppress legitimate
+        # auto-pushes within the same request.
+        frappe.flags.__setattr__(PING_PONG_FLAG, False)
     return aggregate
 
 
@@ -196,22 +208,34 @@ def process_one_customer(
     """Translate one /Wholesale/v2/UserManagement row through the engine
     and create the ERPNext Customer + Billing/Shipping Address + Map.
 
-    Branch decisions per the packet:
+    Contract (Stage 3 corrected 2026-05-27):
       - Map row exists for this c_id → reuse (no-op). Stage 5 will add
         refresh-on-re-pull and drift detection.
-      - Else → create Customer + 2 Address docs + Map row.
+      - Else → attempt to create Customer + 2 Address docs + Map row.
       - GSTIN gating:
-          empty / "URP" → gst_category='Unregistered', empty gstin
-          present → set gstin; India Compliance derives gst_category
-          present but invalid → catch India Compliance's throw → FNC
-      - Pincode/state mismatch (billing OR dispatch) → Created-Flagged
-        (Customer is created; FDE reviews the soft flag).
+          empty / "URP"        → gst_category='Unregistered', empty gstin
+          present + valid      → set gstin; India Compliance derives
+                                 gst_category
+          present + invalid    → India Compliance throws → catch → FNC
+      - **India Compliance is the authority on tax-relevant validation.**
+        Any IC ValidationError on Customer.validate OR Address.insert
+        (invalid gstin, gstin-state-code ≠ address-state, pincode-prefix
+        ≠ state, etc.) → the WHOLE Customer goes Flagged-Not-Created.
+        Partial inserts are rolled back (delete Customer + any inserted
+        Address). NO degraded data lands.
+      - Only NON-tax-relevant dirt (empty optional fields handled by
+        the ruleset's Permissive missing_field_policy) survives to
+        Mapped status.
+
+    Removed (Stage 3 correction): the prior 3-level address fallback
+    ladder + Stage 2 pre-check soft-flag for pincode-state. Both
+    contradicted the packet's "tax dirt is held, not soft-degraded"
+    rule. The Stage 2 state_resolver remains — Stage 4 push uses it
+    for name→id resolution.
     """
     erpnext_fields = executor.pull(row)
     ee_c_id = (erpnext_fields.get("ee_c_id") or "").strip()
     if not ee_c_id:
-        # The ruleset declares ee_c_id required; engine would have
-        # raised. Defensive.
         raise ValueError(
             "Field Mapping engine returned no ee_c_id for /Wholesale row "
             "(check EasyEcom-Customer-Pull ruleset)."
@@ -225,8 +249,6 @@ def process_one_customer(
         as_dict=True,
     )
     if existing_map:
-        # Stage 3: re-pull of a pre-mapped customer is a no-op.
-        # Stage 5 will add drift detection here.
         _write_pull_sync_record(
             entity_name=existing_map.erpnext_name,
             ee_c_id=ee_c_id,
@@ -243,11 +265,12 @@ def process_one_customer(
     # === 2) GSTIN gating ===
     gstin_raw = (erpnext_fields.get("gstin") or "").strip().upper()
     is_urp = gstin_raw in ("", "URP")
-    gst_category = "Unregistered" if is_urp else None  # let India Compliance derive when present
+    gst_category = "Unregistered" if is_urp else None
     gstin = "" if is_urp else gstin_raw
 
-    # === 3) Try to create Customer ===
-    flag_reasons: list[str] = []
+    # === 3-4) Atomic insert: Customer + both Addresses. Any India
+    #         Compliance throw aborts the whole transaction and FNCs. ===
+    inserted_for_cleanup: list[tuple[str, str]] = []  # [(doctype, name)]
     try:
         customer = _create_customer(
             ee_c_id=ee_c_id,
@@ -255,88 +278,104 @@ def process_one_customer(
             gstin=gstin,
             gst_category=gst_category,
         )
+        inserted_for_cleanup.append(("Customer", customer.name))
+
+        billing_name = _create_address_strict(
+            customer_docname=customer.name,
+            address_type="Billing",
+            street=erpnext_fields.get("billing_street") or "",
+            city=erpnext_fields.get("billing_city") or "",
+            zipcode=erpnext_fields.get("billing_zipcode") or "",
+            state_name=erpnext_fields.get("billing_state_name") or "",
+            country_name=erpnext_fields.get("billing_country_name") or "",
+            gstin=gstin or None,
+        )
+        if billing_name:
+            inserted_for_cleanup.append(("Address", billing_name))
+
+        dispatch_name = _create_address_strict(
+            customer_docname=customer.name,
+            address_type="Shipping",
+            street=erpnext_fields.get("dispatch_street") or "",
+            city=erpnext_fields.get("dispatch_city") or "",
+            zipcode=erpnext_fields.get("dispatch_zipcode") or "",
+            state_name=erpnext_fields.get("dispatch_state_name") or "",
+            country_name=erpnext_fields.get("dispatch_country_name") or "",
+            gstin=gstin or None,
+        )
+        if dispatch_name:
+            inserted_for_cleanup.append(("Address", dispatch_name))
+
     except frappe.ValidationError as exc:
-        # India Compliance throws frappe.ValidationError on bad GSTIN
-        # (or any other Customer.validate failure). Land the row as
-        # Flagged-Not-Created; the FDE fixes the source.
+        # Tax-relevant India Compliance throw → roll back partial
+        # inserts (no degraded data lands). Identify WHICH validator
+        # in the FNC flag_reason so the FDE can fix the source.
+        for doctype, name in reversed(inserted_for_cleanup):
+            try:
+                frappe.delete_doc(
+                    doctype, name, force=True, ignore_permissions=True
+                )
+            except Exception:  # noqa: BLE001
+                # Best-effort cleanup; log but don't compound the failure.
+                frappe.log_error(
+                    title=f"EasyEcom customer_pull: cleanup failed for {doctype} {name}",
+                    message=f"{type(exc).__name__}: {exc}",
+                )
+
+        validator = _identify_validator(str(exc))
+        reason = f"{validator}: {exc}"
         _create_fnc_map_row(
             ee_c_id=ee_c_id,
             companyname=erpnext_fields.get("customer_name"),
-            reason=f"Customer.validate failed: {exc}",
+            reason=reason,
         )
         return CustomerOutcome(
             ee_c_id=ee_c_id,
             customer_docname=None,
             status="Flagged-Not-Created",
             operation="flagged",
-            flag_reasons=[f"Customer.validate failed: {exc}"],
+            flag_reasons=[reason],
         )
 
-    # === 4) Create Billing + Shipping Address rows ===
-    _, billing_flags = _create_address(
-        customer_docname=customer.name,
-        address_type="Billing",
-        street=erpnext_fields.get("billing_street") or "",
-        city=erpnext_fields.get("billing_city") or "",
-        zipcode=erpnext_fields.get("billing_zipcode") or "",
-        state_name=erpnext_fields.get("billing_state_name") or "",
-        country_name=erpnext_fields.get("billing_country_name") or "",
-        gstin=gstin or None,
-    )
-    flag_reasons.extend(billing_flags)
-    _, dispatch_flags = _create_address(
-        customer_docname=customer.name,
-        address_type="Shipping",
-        street=erpnext_fields.get("dispatch_street") or "",
-        city=erpnext_fields.get("dispatch_city") or "",
-        zipcode=erpnext_fields.get("dispatch_zipcode") or "",
-        state_name=erpnext_fields.get("dispatch_state_name") or "",
-        country_name=erpnext_fields.get("dispatch_country_name") or "",
-        gstin=gstin or None,
-    )
-    flag_reasons.extend(dispatch_flags)
-
-    # === 5) Pincode/state validation (soft — Created-Flagged on mismatch) ===
-    flag_reasons.extend(
-        _validate_address_pincode_state(
-            label="billing",
-            state_name=erpnext_fields.get("billing_state_name") or "",
-            country_id=int(row.get("customer_country_id") or 1),
-            zipcode=erpnext_fields.get("billing_zipcode") or "",
-        )
-    )
-    flag_reasons.extend(
-        _validate_address_pincode_state(
-            label="dispatch",
-            state_name=erpnext_fields.get("dispatch_state_name") or "",
-            country_id=int(row.get("customer_country_id") or 1),
-            zipcode=erpnext_fields.get("dispatch_zipcode") or "",
-        )
-    )
-
-    # === 6) Create the Customer Map row ===
-    status: CustomerStatus = "Created-Flagged" if flag_reasons else "Mapped"
+    # === 5) All inserts clean — Mapped status. (No Created-Flagged in
+    #         Stage 3 today; Stage 5 may surface drift / staleness
+    #         that uses Created-Flagged.) ===
     _create_mapped_row(
         ee_c_id=ee_c_id,
         customer_docname=customer.name,
-        status=status,
-        flag_reasons=flag_reasons,
+        status="Mapped",
+        flag_reasons=[],
     )
-
     _write_pull_sync_record(
         entity_name=customer.name,
         ee_c_id=ee_c_id,
         status=STATUS_SUCCESS,
-        last_error=" || ".join(flag_reasons) if flag_reasons else None,
+        last_error=None,
     )
-
     return CustomerOutcome(
         ee_c_id=ee_c_id,
         customer_docname=customer.name,
-        status=status,
+        status="Mapped",
         operation="created",
-        flag_reasons=flag_reasons,
+        flag_reasons=[],
     )
+
+
+def _identify_validator(error_message: str) -> str:
+    """Best-effort tag for the FNC flag_reason so the FDE knows which
+    India Compliance check failed (invalid GSTIN format vs state-code
+    mismatch vs pincode-prefix mismatch). Lookup is a substring match
+    against the message strings IC actually emits."""
+    msg = error_message.lower()
+    if "check digit" in msg or "invalid gstin" in msg:
+        return "ic_gstin_check_digit"
+    if "first 2 digits of gstin" in msg or "state number" in msg:
+        return "ic_gstin_state_code_mismatch"
+    if "postal code" in msg and "not associated" in msg:
+        return "ic_pincode_state_mismatch"
+    if "gstin format" in msg or "invalid format" in msg:
+        return "ic_gstin_format"
+    return "ic_validate_failed"
 
 
 # ----- Helpers (split for testability + readability) -----
@@ -379,7 +418,7 @@ def _create_customer(
     return customer
 
 
-def _create_address(
+def _create_address_strict(
     *,
     customer_docname: str,
     address_type: Literal["Billing", "Shipping"],
@@ -389,115 +428,43 @@ def _create_address(
     state_name: str,
     country_name: str,
     gstin: str | None,
-) -> tuple[str | None, list[str]]:
+) -> str | None:
     """Insert an Address linked to the Customer via the standard
     Address.links Dynamic Link child table.
 
-    Returns (address_docname, soft_flag_reasons). Address is None when
-    there's no content to write OR India Compliance rejects even our
-    fallback. soft_flag_reasons carries any soft-flag context that
-    should bubble up to the Customer Map row's flag_reason.
+    Strict: NO fallback ladder. India Compliance ValidationError
+    propagates up so the caller can roll back the Customer + FNC the
+    whole row. (Stage 3 correction 2026-05-27: tax-relevant dirt is
+    held, not soft-degraded.)
 
-    India Compliance enforces its own pincode-state alignment on
-    Address (stricter than our Stage 2 zip-range resolver). When it
-    throws, we retry without the state field (preserving street + city
-    + pincode + country), surface a soft flag, and let the FDE clean
-    up the address later. This honors the packet's 'soft, not held'
-    contract for pincode-state mismatches.
+    Returns the Address docname, or None when there's no content to
+    write at all (EE sometimes returns customers with empty dispatch
+    fields). Missing-address is a downstream concern for the FDE; it
+    isn't a tax-validator failure and doesn't trigger FNC.
     """
-    flag_reasons: list[str] = []
     if not (street or city or zipcode or state_name):
-        # No address content at all — skip silently rather than insert
-        # an empty Address. ERPNext doesn't require both billing+shipping;
-        # missing-address is a downstream concern for the FDE.
-        return None, flag_reasons
+        return None
 
-    def _build(*, with_state: bool, with_gstin: bool) -> Any:
-        address = frappe.new_doc("Address")
-        address.append(
-            "links",
-            {"link_doctype": "Customer", "link_name": customer_docname},
-        )
-        address.update(
-            {
-                "address_title": customer_docname,
-                "address_type": address_type,
-                "address_line1": street or "Address Line 1",
-                "city": city or "Unknown",
-                "pincode": zipcode or "",
-                "state": (state_name or "") if with_state else "",
-                "country": country_name or "India",
-            }
-        )
-        if with_gstin and gstin:
-            address.gstin = gstin
-        return address
-
-    # Try once with the full content.
-    try:
-        address = _build(with_state=True, with_gstin=True)
-        address.insert(ignore_permissions=True)
-        return address.name, flag_reasons
-    except frappe.ValidationError as exc:
-        flag_reasons.append(
-            f"{address_type.lower()} address: India Compliance rejected the "
-            f"full address ({exc!s}); retrying without state."
-        )
-
-    # Retry without state. Covers the pincode-state mismatch case (the
-    # packet's Arunachal+560035 scenario) AND the gstin-state-code
-    # mismatch case.
-    try:
-        address = _build(with_state=False, with_gstin=True)
-        address.insert(ignore_permissions=True)
-        return address.name, flag_reasons
-    except frappe.ValidationError as exc:
-        flag_reasons.append(
-            f"{address_type.lower()} address: still rejected without state "
-            f"({exc!s}); retrying without gstin."
-        )
-
-    # Retry without gstin either. The Address still carries the street
-    # + city + pincode for the FDE to clean up.
-    try:
-        address = _build(with_state=False, with_gstin=False)
-        address.insert(ignore_permissions=True)
-        return address.name, flag_reasons
-    except frappe.ValidationError as exc:
-        flag_reasons.append(
-            f"{address_type.lower()} address: could not insert at all "
-            f"({exc!s}); address skipped."
-        )
-        return None, flag_reasons
-
-
-def _validate_address_pincode_state(
-    *, label: str, state_name: str, country_id: int, zipcode: str
-) -> list[str]:
-    """Soft-validate one address's pincode against the cached state's
-    range. Returns a list of flag reasons (empty when ok or when there
-    isn't enough data to validate). Stage 5 will use this same logic
-    on drift detection."""
-    if not state_name or not zipcode:
-        return []
-    state_id = resolve_state(state_name, country_id=country_id)
-    if state_id is None:
-        return [
-            f"{label}: state {state_name!r} not in cached EasyEcom State "
-            f"table (run Refresh States/Countries)"
-        ]
-    result = validate_pincode_state(zipcode, state_id=state_id)
-    if result.status == "mismatch":
-        return [
-            f"{label}: pincode {zipcode} does not fall in {result.state_name}'s "
-            f"range {result.expected_prefix_range}"
-        ]
-    if result.status == "unknown_state":
-        return [
-            f"{label}: state_id {state_id} has no pincode range "
-            "(EasyEcom State cache may be stale)"
-        ]
-    return []
+    address = frappe.new_doc("Address")
+    address.append(
+        "links",
+        {"link_doctype": "Customer", "link_name": customer_docname},
+    )
+    address.update(
+        {
+            "address_title": customer_docname,
+            "address_type": address_type,
+            "address_line1": street or "Address Line 1",
+            "city": city or "Unknown",
+            "pincode": zipcode or "",
+            "state": state_name or "",
+            "country": country_name or "India",
+        }
+    )
+    if gstin:
+        address.gstin = gstin
+    address.insert(ignore_permissions=True)
+    return address.name
 
 
 def _create_mapped_row(

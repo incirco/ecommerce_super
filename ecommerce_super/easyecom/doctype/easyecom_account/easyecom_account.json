@@ -77,6 +77,8 @@
   "flip_to_erpnext_mastered_customers_action",
   "refresh_states_countries_action",
   "discover_customers_action",
+  "auto_push_customers_on_save",
+  "push_all_pending_customers_action",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -573,7 +575,20 @@
    "fieldname": "discover_customers_action",
    "fieldtype": "Button",
    "label": "Discover Customers",
-   "description": "§8e Stage 3 — pull wholesale customers from /Wholesale/v2/UserManagement?type=b2b. Creates one Customer + Billing Address + Shipping Address + Customer Map row per EE c_id. Matching: map row exists → reuse; else create new (no natural-key auto-match — gstNum and companyname are dirty/duplicated in real EE data). GSTIN gating via India Compliance; pincode/state mismatch → Created-Flagged (soft). Run Refresh States/Countries first if the cache is empty."
+   "description": "§8e Stage 3 — pull wholesale customers from /Wholesale/v2/UserManagement?type=b2b. Creates one Customer + Billing Address + Shipping Address + Customer Map row per EE c_id. Matching: map row exists → reuse; else create new (no natural-key auto-match — gstNum and companyname are dirty/duplicated in real EE data). India Compliance is authoritative on tax-relevant validation: any GST place-of-supply throw (invalid gstin, gstin-state mismatch, pincode-state mismatch) → whole Customer Flagged-Not-Created (held). Run Refresh States/Countries first if the cache is empty."
+  },
+  {
+   "fieldname": "auto_push_customers_on_save",
+   "fieldtype": "Check",
+   "label": "Auto-push Customers to EasyEcom on save",
+   "default": "0",
+   "description": "§8e Stage 4 — when ON: every ERPNext Customer create/edit enqueues a /Wholesale/CreateCustomer or /UpdateCustomer push. Defaults OFF for safety — accidental enable on a fresh deployment would push every existing Customer with customer_type=Company. Turn ON only when you've configured credentials and want steady-state push automation. The push is queued (non-blocking on save) and obeys the same flagging logic as the batch sweep — unresolvable state / missing email / missing mandatory → flag-not-pushed (map row), not a broken EE payload. The pull-vs-push ping-pong guard prevents loops (a Customer that was just pulled by Discover Customers doesn't immediately re-push)."
+  },
+  {
+   "fieldname": "push_all_pending_customers_action",
+   "fieldtype": "Button",
+   "label": "Push All Pending Customers",
+   "description": "§8e Stage 4 — batch sweep: enqueue a /Wholesale/CreateCustomer push for every candidate Customer (customer_type=Company; no EasyEcom Customer Map row yet; has email_id; is enabled). Returns immediately with the count enqueued; per-Customer progress lands in Sync Records / Queue Job rows. Non-candidates (already on EE, missing email, individual-type) are skipped at the candidate-query level."
   },
   {
    "fieldname": "item_pull_section",

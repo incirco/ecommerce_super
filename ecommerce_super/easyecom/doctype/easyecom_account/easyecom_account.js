@@ -594,6 +594,54 @@ frappe.ui.form.on("EasyEcom Account", {
         });
     },
 
+    push_all_pending_customers_action(frm) {
+        if (!_ensureSaved(frm, "Save the Account before pushing customers.")) {
+            return;
+        }
+        frappe.confirm(
+            __(
+                "<b>Push all pending Customers to EasyEcom?</b><br><br>" +
+                    "Enqueues one /Wholesale/CreateCustomer call per candidate. " +
+                    "Candidates: Customer.customer_type=Company, enabled, has email_id, " +
+                    "no existing EasyEcom Customer Map row. Returns immediately; " +
+                    "per-Customer progress lands in Queue Jobs / Sync Records."
+            ),
+            () => {
+                frappe.call({
+                    method:
+                        "ecommerce_super.easyecom.api.customer_push.push_all_pending_customers",
+                    args: {account: frm.doc.name},
+                    freeze: true,
+                    freeze_message: __("Enqueuing customer pushes…"),
+                    callback(r) {
+                        const result = r.message || {};
+                        if (!result.ok) {
+                            frappe.msgprint({
+                                title: __("Push Failed"),
+                                message: result.message || __("Unknown error."),
+                                indicator: "red",
+                            });
+                            return;
+                        }
+                        frappe.msgprint({
+                            title: __("Customer Push Enqueued"),
+                            message: __(
+                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
+                                    "Sample Queue Jobs: {2}",
+                                [
+                                    result.total_considered,
+                                    result.enqueued_count,
+                                    (result.queue_job_names_sample || []).join(", ") || "—",
+                                ]
+                            ),
+                            indicator: "green",
+                        });
+                    },
+                });
+            }
+        );
+    },
+
     discover_customers_action(frm) {
         if (!_ensureSaved(frm, "Save the Account before discovering customers.")) {
             return;
