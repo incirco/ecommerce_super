@@ -372,9 +372,10 @@
    },
    {
     "erpnext_path": "item_name",
-    "easyecom_path": "ItemName",
+    "easyecom_path": "ModelName",
     "transform_push": "str_strip",
-    "transform_pull": "str_strip"
+    "transform_pull": "str_strip",
+    "notes": "EE's Create/UpdateMasterProduct field for the product display name is `ModelName` per their API contract (table column 'ModelName: String, Enter the Model Name of the Product'). Pre-fix this rule sent `ItemName` which is NOT in EE's contract - EE silently ignored it and returned 200 'Updated Successfully' without applying the change. Confirmed against the Harmony sandbox 2026-05-26 - name updates only propagated after switching to ModelName."
    },
    {
     "erpnext_path": "description",
