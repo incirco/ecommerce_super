@@ -102,6 +102,39 @@ SUPPORTED_TYPES: frozenset[str] = frozenset({"normal_product", "combo_product"})
 STATUS_MAPPED: str = "Mapped"
 STATUS_CREATED_FLAGGED: str = "Created-Flagged"
 STATUS_FLAGGED_NOT_CREATED: str = "Flagged-Not-Created"
+# Stage 5: post-flip pull state — EE-origin change in steady-state
+# (erpnext_mastered) mode. NOT accepted, NOT auto-overwritten — FDE
+# resolves per row.
+STATUS_DRIFT: str = "Drift"
+
+# Stage 5: item_master_mode values (§8.1.1) — the per-Account flag
+# that decides whether the pull is a normal accept-and-create flow
+# (onboarding) or a drift detector (erpnext_mastered).
+MODE_ONBOARDING: str = "onboarding"
+MODE_ERPNEXT_MASTERED: str = "erpnext_mastered"
+
+# Stage 5: fields the drift detector compares between the freshly-
+# translated EE payload and the existing ERPNext Item. The list is
+# deliberately the user-visible content fields (what the FDE would
+# care about an EE edit to); internal IDs (ecs_ee_product_id /
+# ecs_ee_cp_id) are NOT in here — they're identity-management state,
+# not content. A change to those is a separate concern (remap), not
+# drift in the §8.1.8 sense.
+DRIFT_COMPARABLE_FIELDS: tuple[str, ...] = (
+    "item_name",
+    "description",
+    "gst_hsn_code",
+    "stock_uom",
+    "weight_per_unit",
+    "ecs_height_cm",
+    "ecs_length_cm",
+    "ecs_width_cm",
+    "ecs_ee_cost",
+    "ecs_ee_mrp",
+    "standard_rate",
+    "ecs_size",
+    "ecs_colour",
+)
 
 
 @dataclass
@@ -451,7 +484,21 @@ def process_one_product(
         raise ValueError("product payload has no sku — cannot proceed")
     product_type = (product or {}).get("product_type") or "<missing>"
 
-    # === Step 1: product_type branching ===
+    # === Stage 5 gate: phase-governed routing (§8.1.1 / §8.1.8) ===
+    # In erpnext_mastered mode, the pull is a DRIFT DETECTOR — it
+    # never creates new ERPNext rows and never overwrites mapped
+    # rows. Any EE-origin novelty or edit lands as a Drift map row
+    # for the FDE to decide on. We branch BEFORE product_type
+    # branching so unsupported types (variant/child/kit) ALSO go
+    # through drift detection in steady state — an EE-origin
+    # unsupported type is still a flag-worthy change ERPNext should
+    # see, not silently FNC'd as if it were fresh.
+    if account.get("item_master_mode") == MODE_ERPNEXT_MASTERED:
+        return _detect_drift_one_product(
+            product, account=account, executor=executor
+        )
+
+    # === Step 1: product_type branching (onboarding mode) ===
     if product_type not in SUPPORTED_TYPES:
         # variant_parent / child_product / kit_bom / unknown → FNC.
         return _flag_not_created(
@@ -588,6 +635,291 @@ def process_one_product(
         created=created,
         flag_reasons=flag_reasons,
         tax_results=tax_results,
+    )
+
+
+# ============================================================
+# §8d Stage 5 — drift detection (post-flip pull behaviour, §8.1.8)
+# ============================================================
+
+
+def _detect_drift_one_product(
+    product: dict, *, account: Any, executor: FieldMappingExecutor
+) -> ProductOutcome:
+    """Post-flip pull — DETECTS drift, never accepts or overwrites
+    (§8.1.8).
+
+    Three outcomes:
+      1. NEW EE-origin product (no Item Map row for the sku): drift.
+         Map row is created in Drift status so the SKU is FDE-visible;
+         no Item / Product Bundle is created. (This is the case where
+         EE has invented a new product post-flip; in steady state
+         ERPNext is the source of truth, so new EE-side products are
+         not auto-adopted.)
+      2. EE-side EDIT to a mapped item (existing map → existing
+         ERPNext doc; the translated EE payload differs from current
+         ERPNext doc values on one or more comparable fields): drift.
+         Map row's status is set to Drift; flag_reason lists each
+         differing field as `field: ERPNext=<x> EE→<y>`. Nothing is
+         overwritten on the ERPNext side.
+      3. NO drift (EE payload matches ERPNext or differs only on
+         identity-management fields): map row left as-is, returns
+         the unchanged status. A noisy re-pull on a quiet day does
+         not flap rows in and out of Drift.
+
+    Bundles are handled with the same comparison applied to the
+    wrapper Item (the bundle's content fields live on the wrapper);
+    structural component drift (sub_products list changed) is also
+    surfaced.
+
+    Pull-side disable in onboarding (active:0 → ERPNext disabled) is
+    NOT applied here — an EE-side deactivation in steady state is
+    explicitly NOT accepted as truth per §8.1.7. It surfaces as a
+    "disabled" drift entry for the FDE.
+    """
+    sku = product["sku"]
+    map_row = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"ee_sku": sku},
+        ["name", "erpnext_doctype", "erpnext_name", "status"],
+        as_dict=True,
+    )
+
+    # === Case 1: EE-origin new product post-flip ===
+    if not map_row:
+        reason = (
+            f"EE-origin new product {sku!r} appeared post-flip "
+            f"(item_master_mode=erpnext_mastered); not created on the "
+            "ERPNext side because ERPNext is the source of truth in "
+            "steady state. FDE: either (a) create the item in ERPNext "
+            "and push it (which will reconcile this map row via the "
+            "Stage-2 auto-map sku==item_code path), or (b) ignore EE-"
+            "side novelty by marking this row Disabled."
+        )
+        _upsert_drift_map_row(
+            sku=sku,
+            erpnext_doctype=None,
+            erpnext_name=None,
+            ee_product_id=str(product.get("product_id") or ""),
+            ee_cp_id=str(product.get("cp_id") or ""),
+            reason=reason,
+        )
+        return ProductOutcome(
+            ee_sku=sku,
+            status=STATUS_DRIFT,
+            erpnext_doctype=None,
+            erpnext_name=None,
+            created=False,
+            flag_reasons=[reason],
+        )
+
+    # === Case 2 / 3: existing mapping — diff the translated payload
+    # against the current ERPNext doc. ===
+    erpnext_fields = executor.pull(product)
+    # Apply the same dirty-UOM substitution the normal pull would, so
+    # we compare apples-to-apples (a re-pull with the same dirty
+    # accounting_unit produces the same substituted stock_uom →
+    # compared to the existing substituted stock_uom → no spurious
+    # drift).
+    raw_uom = erpnext_fields.get("stock_uom")
+    if not raw_uom or not frappe.db.exists("UOM", raw_uom):
+        erpnext_fields["stock_uom"] = account.get("default_uom") or "Nos"
+
+    # Locate the wrapper Item (for bundles, the comparable content
+    # lives on the wrapper, not the Product Bundle's own fields).
+    if map_row.erpnext_doctype == "Item":
+        existing_doc = frappe.get_doc("Item", map_row.erpnext_name)
+        compare_target = "Item"
+    elif map_row.erpnext_doctype == "Product Bundle":
+        bundle = frappe.get_doc("Product Bundle", map_row.erpnext_name)
+        existing_doc = frappe.get_doc("Item", bundle.new_item_code)
+        compare_target = "Product Bundle wrapper Item"
+    else:
+        # Unknown target type — surface as drift rather than mutate.
+        reason = (
+            f"Map row {map_row.name} has unknown erpnext_doctype "
+            f"{map_row.erpnext_doctype!r}; cannot compare for drift. "
+            "FDE: investigate the map row's link target."
+        )
+        _mark_existing_map_drift(map_row.name, reasons=[reason])
+        return ProductOutcome(
+            ee_sku=sku, status=STATUS_DRIFT,
+            erpnext_doctype=map_row.erpnext_doctype,
+            erpnext_name=map_row.erpnext_name,
+            created=False, flag_reasons=[reason],
+        )
+
+    differences = _diff_payload_vs_doc(
+        erpnext_fields, existing_doc, compare_target=compare_target
+    )
+
+    # Lifecycle drift — EE active:0 vs ERPNext disabled. In onboarding
+    # the pull would have flipped Item.disabled; in steady state we
+    # flag it.
+    ee_disabled = 1 if product.get("active") in (0, "0", False) else 0
+    if ee_disabled != (existing_doc.disabled or 0):
+        differences.append(
+            f"disabled: ERPNext={existing_doc.disabled or 0} "
+            f"EE→{ee_disabled}"
+        )
+
+    # Bundle-specific: component-set drift.
+    if map_row.erpnext_doctype == "Product Bundle":
+        differences.extend(
+            _bundle_component_drift(product, bundle)
+        )
+
+    if not differences:
+        # Clean re-pull — map row left untouched (don't flap status).
+        return ProductOutcome(
+            ee_sku=sku,
+            status=map_row.status or STATUS_MAPPED,
+            erpnext_doctype=map_row.erpnext_doctype,
+            erpnext_name=map_row.erpnext_name,
+            created=False,
+            flag_reasons=[],
+        )
+
+    _mark_existing_map_drift(map_row.name, reasons=differences)
+    return ProductOutcome(
+        ee_sku=sku,
+        status=STATUS_DRIFT,
+        erpnext_doctype=map_row.erpnext_doctype,
+        erpnext_name=map_row.erpnext_name,
+        created=False,
+        flag_reasons=differences,
+    )
+
+
+def _diff_payload_vs_doc(
+    erpnext_fields: dict, existing_doc: Any, *, compare_target: str
+) -> list[str]:
+    """Compare the translated EE payload against the current ERPNext
+    doc on DRIFT_COMPARABLE_FIELDS. Returns a list of human-readable
+    diff strings."""
+    diffs: list[str] = []
+    for field in DRIFT_COMPARABLE_FIELDS:
+        if field not in erpnext_fields:
+            continue
+        ee_value = erpnext_fields.get(field)
+        en_value = existing_doc.get(field)
+        if _values_differ(ee_value, en_value):
+            diffs.append(
+                f"{field} on {compare_target}: "
+                f"ERPNext={en_value!r} EE→{ee_value!r}"
+            )
+    return diffs
+
+
+def _values_differ(a: Any, b: Any) -> bool:
+    """Drift comparison with None / "" / 0 leniency.
+
+    - None / "" / missing all treat as 'absent' — absent vs absent is
+      not drift. Absent vs a real value IS drift.
+    - Numerics compared with a small float tolerance (dimensions and
+      rates can wobble in the last decimal across float_to_str /
+      str_to_float round-trips).
+    - Strings compared byte-for-byte after stripping (an extra space
+      from EE isn't drift).
+    """
+    def _norm(v: Any) -> Any:
+        if v in (None, ""):
+            return None
+        if isinstance(v, str):
+            return v.strip() or None
+        return v
+
+    na, nb = _norm(a), _norm(b)
+    if na is None and nb is None:
+        return False
+    if na is None or nb is None:
+        return True
+    try:
+        return abs(float(na) - float(nb)) > 0.0001
+    except (TypeError, ValueError):
+        return na != nb
+
+
+def _bundle_component_drift(product: dict, bundle: Any) -> list[str]:
+    """Surface drift on the combo's sub-products set vs the Bundle's
+    items child table. Compares as sorted (ee_sku, qty) tuples."""
+    ee_components = sorted(
+        ((sp.get("sku") or "", sp.get("quantity") or 0)
+         for sp in (product.get("sub_products") or [])),
+        key=lambda x: x[0],
+    )
+    # Build the ERPNext side by resolving each component's ee_sku.
+    en_components: list[tuple[str, Any]] = []
+    for row in bundle.items or []:
+        ee_sku = frappe.db.get_value(
+            "EasyEcom Item Map",
+            {"erpnext_doctype": "Item", "erpnext_name": row.item_code},
+            "ee_sku",
+        )
+        en_components.append((ee_sku or "", row.qty or 0))
+    en_components.sort(key=lambda x: x[0])
+
+    if ee_components == en_components:
+        return []
+    return [
+        f"combo sub_products on Product Bundle: "
+        f"ERPNext={en_components!r} EE→{ee_components!r}"
+    ]
+
+
+def _upsert_drift_map_row(
+    *,
+    sku: str,
+    erpnext_doctype: str | None,
+    erpnext_name: str | None,
+    ee_product_id: str,
+    ee_cp_id: str,
+    reason: str,
+) -> str:
+    """Create or update a map row in Drift status (the §8.1.8 review
+    state). Used for the EE-origin-new-product case where no map row
+    existed before."""
+    existing = frappe.db.get_value(
+        "EasyEcom Item Map", {"ee_sku": sku}, "name"
+    )
+    if existing:
+        frappe.db.set_value(
+            "EasyEcom Item Map",
+            existing,
+            {
+                "status": STATUS_DRIFT,
+                "flag_reason": reason,
+                "ee_product_id": ee_product_id or None,
+                "ee_cp_id": ee_cp_id or None,
+            },
+            update_modified=True,
+        )
+        return existing
+    doc = frappe.new_doc("EasyEcom Item Map")
+    doc.update(
+        {
+            "ee_sku": sku,
+            "erpnext_doctype": erpnext_doctype,
+            "erpnext_name": erpnext_name,
+            "ee_product_id": ee_product_id or None,
+            "ee_cp_id": ee_cp_id or None,
+            "status": STATUS_DRIFT,
+            "flag_reason": reason,
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return doc.name
+
+
+def _mark_existing_map_drift(map_name: str, *, reasons: list[str]) -> None:
+    """Flip an existing map row to Drift status with the diff list as
+    the reason. NEVER mutates the linked Item / Product Bundle —
+    drift is read-only on the ERPNext side."""
+    frappe.db.set_value(
+        "EasyEcom Item Map",
+        map_name,
+        {"status": STATUS_DRIFT, "flag_reason": _join_reasons(reasons)},
+        update_modified=True,
     )
 
 
