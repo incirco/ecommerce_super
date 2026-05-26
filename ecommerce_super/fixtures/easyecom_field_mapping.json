@@ -357,10 +357,10 @@
   "direction": "Push",
   "active": 1,
   "missing_field_policy": "Permissive",
-  "version": 2,
+  "version": 3,
   "last_modified_by": "Administrator",
-  "last_modified_at": "2026-05-26 12:00:00",
-  "change_reason": "\u00a78d Stage 3 \u2014 ERPNext Item \u2192 EasyEcom CreateMasterProduct / UpdateMasterProduct payload. Holds the REAL-DATA-FROM-ITEM mappings only (Sku, ItemName, ProductTaxCode, dimensions, Cost, productId for updates). The MANUFACTURED EE-mandatory fields ERPNext doesn't carry (materialType=1 Finished Good, itemType=0 normal in Stage 3, Brand/Category/ModelNumber fallbacks, TaxRate snapped to EE's allowed {0,3,5,12,18,28} set) are injected by the FLOW (item_push.py) after the engine produces this payload \u2014 they're flow decisions, not translations, and don't belong in the ruleset per the \u00a78.0 engine-as-translator policy. Stage 3 covers normal products only; bundles (combo_product) are Stage 4's job and use itemType=1 + subProducts. | v2 (FDE-configurability refactor per user direction): the manufactured constants (materialType=1, itemType=0, Brand fallback, Cost fallback chain, ModelNumber=item_code) are now ruleset rules instead of flow-code constants. FDE edits them via the desk EasyEcom Field Mapping > EasyEcom-Item-Push > Rules child table \u2014 no code deploy needed to change defaults or add company-conditional logic. TaxRate stays in the flow (it's a DB lookup + snap-to-set, not a constant or simple derivation).",
+  "last_modified_at": "2026-05-26 14:00:00",
+  "change_reason": "\u00a78d Stage 3 \u2014 ERPNext Item \u2192 EasyEcom CreateMasterProduct / UpdateMasterProduct payload. Holds the REAL-DATA-FROM-ITEM mappings only (Sku, ItemName, ProductTaxCode, dimensions, Cost, productId for updates). The MANUFACTURED EE-mandatory fields ERPNext doesn't carry (materialType=1 Finished Good, itemType=0 normal in Stage 3, Brand/Category/ModelNumber fallbacks, TaxRate snapped to EE's allowed {0,3,5,12,18,28} set) are injected by the FLOW (item_push.py) after the engine produces this payload \u2014 they're flow decisions, not translations, and don't belong in the ruleset per the \u00a78.0 engine-as-translator policy. Stage 3 covers normal products only; bundles (combo_product) are Stage 4's job and use itemType=1 + subProducts. | v2 (FDE-configurability refactor per user direction): the manufactured constants (materialType=1, itemType=0, Brand fallback, Cost fallback chain, ModelNumber=item_code) are now ruleset rules instead of flow-code constants. FDE edits them via the desk EasyEcom Field Mapping > EasyEcom-Item-Push > Rules child table \u2014 no code deploy needed to change defaults or add company-conditional logic. TaxRate stays in the flow (it's a DB lookup + snap-to-set, not a constant or simple derivation). | v3 (\u00a78d Stage 4 \u2014 bundles): itemType becomes per-record conditional (Product Bundle wrapper \u2192 1, normal \u2192 0) by reading source_doc.flags.is_bundle_wrapper which the FLOW sets before push. Wrapper-Item push (combo path) and normal-item push share the same ruleset; the flow's pre-push flag-set decides which itemType the ruleset emits.",
   "rules": [
    {
     "erpnext_path": "item_code",
@@ -485,13 +485,13 @@
     "transform_args": {
      "conditions": [
       {
-       "when": "True",
-       "then": 0
+       "when": "source_doc.flags.is_bundle_wrapper",
+       "then": 1
       }
      ],
      "default": 0
     },
-    "notes": "EE itemType: Child=0 (normal), Combo=1, Kit=2. Stage 3 ships 0 for normal products; Stage 4 (bundles) will swap this rule to a conditional that returns 1 when source_doc is a Product Bundle wrapper. FDE: only change manually if your data has non-standard semantics \u2014 Stage 4 will land the proper Bundle-aware condition."
+    "notes": "EE itemType: Child=0 (normal), Combo=1, Kit=2.\nPer-record conditional: the FLOW sets source_doc.flags.is_bundle_wrapper = True before calling executor.push() when the source item is a Product Bundle wrapper (frappe.db.exists('Product Bundle', {'new_item_code': item_code})). The sandbox forbids direct frappe.db lookups in expressions, so the lookup happens in the flow; the ruleset reads the pre-set flag via source_doc.flags (a frappe._dict \u2014 returns None for missing keys, no AttributeError when the flow hasn't set it \u2014 Stage 3 normal path therefore defaults cleanly to 0).\nFDE: if you ship a Kit type later, add a second condition {when: source_doc.flags.is_kit, then: 2} above the bundle one \u2014 flow code would similarly set the flag."
    }
   ]
  },

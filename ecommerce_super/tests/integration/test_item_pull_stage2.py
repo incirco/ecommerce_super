@@ -306,17 +306,35 @@ class TestProductTypeBranching(FrappeTestCase):
             enabled_companies=self.companies,
         )
 
-    def test_combo_product_flagged_for_stage4(self) -> None:
-        payload = {"sku": f"{PREFIX}combo-1", "product_type": "combo_product",
-                   "product_id": 1, "cp_id": 2}
+    def test_combo_product_with_no_subproducts_flagged(self) -> None:
+        """Stage 4 now actively builds bundles from combos. A combo
+        with no sub_products (or fewer than 2) still flags — EE
+        requires ≥2 sub-products to be a valid combo. The map row
+        captures the EE identifiers so a Stage-4 reconciliation can
+        find the SKU later."""
+        _ensure_hsn("85171000")
+        _ensure_uom("Nos")
+        payload = {
+            "sku": f"{PREFIX}combo-1",
+            "product_type": "combo_product",
+            "product_name": "no-subs-combo",
+            "hsn_code": "85171000",
+            "accounting_unit": "Nos",
+            "active": 1,
+            "product_id": 1, "cp_id": 2,
+            "sub_products": [],
+        }
         out = self._process(payload)
         self.assertEqual(out.status, STATUS_FLAGGED_NOT_CREATED)
-        self.assertIn("Stage 4", out.flag_reasons[0])
-        # Map row exists; no Item.
+        joined = " ".join(out.flag_reasons)
+        self.assertIn("sub-products", joined)
+        # Map row exists; no Bundle was created (degenerate combo).
         self.assertTrue(
             frappe.db.exists("EasyEcom Item Map", {"ee_sku": payload["sku"]})
         )
-        self.assertFalse(frappe.db.exists("Item", payload["sku"]))
+        self.assertFalse(
+            frappe.db.exists("Product Bundle", {"new_item_code": payload["sku"]})
+        )
 
     def test_variant_parent_flagged_not_created(self) -> None:
         payload = {"sku": f"{PREFIX}var-1", "product_type": "variant_parent"}

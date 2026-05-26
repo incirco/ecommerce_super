@@ -721,9 +721,14 @@ class TestBatchSweep(FrappeTestCase):
         # bad_no_tax never reached EE.
         self.assertNotIn(bad_no_tax.item_code, skus_called)
 
-    def test_sweep_skips_bundle_wrapper_at_item_level(self) -> None:
-        """Defence in depth: even if the SQL didn't exclude the
-        wrapper, push_one_item refuses it."""
+    def test_bundle_wrapper_dispatches_to_combo_push(self) -> None:
+        """Stage 4 lit up the combo-push path. Calling push_one_item on
+        a bundle wrapper now DISPATCHES to push_one_bundle. Components
+        without ee_product_id → bundle FNC'd (dependency-ordering),
+        so this test (whose components have no map rows) sees a
+        flagged outcome rather than the Stage-3 'skipped'. The
+        important Stage-3 invariant — bundles never reach the
+        normal-item push path — still holds."""
         wrapper = _make_item(
             f"{PREFIX}sw-bw-wrapper",
             tax_template=self.tax_template,
@@ -747,8 +752,11 @@ class TestBatchSweep(FrappeTestCase):
             wrapper.item_code, client=client, account=self.account,
             enabled_companies=[self.company],
         )
-        self.assertEqual(outcome.operation, "skipped")
-        self.assertEqual(client.calls, [])  # no EE call for bundles
+        # Components have no map rows → bundle FNC'd, no EE call.
+        self.assertEqual(outcome.operation, "flagged")
+        self.assertEqual(client.calls, [])
+        joined = " ".join(outcome.flag_reasons)
+        self.assertIn("EasyEcom Item Map", joined)
 
 
 # ============================================================

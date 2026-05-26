@@ -460,13 +460,12 @@ def process_one_product(
             product=product,
         )
     if product_type == COMBO_TYPE:
-        # Stage 4 builds bundles; for now flag the SKU as held with a
-        # reason that points an FDE at Stage 4. The map row gets the
-        # cp_id / product_id so a Stage 4 backfill can find it later.
-        return _flag_not_created(
-            sku,
-            reason="combo_product (Stage 4 will build the Product Bundle)",
-            product=product,
+        # Stage 4: build/refresh the Product Bundle.
+        return _process_combo_product(
+            product,
+            account=account,
+            executor=executor,
+            enabled_companies=enabled_companies,
         )
 
     # === Step 2: translate via the engine ===
@@ -590,6 +589,289 @@ def process_one_product(
         flag_reasons=flag_reasons,
         tax_results=tax_results,
     )
+
+
+# ============================================================
+# §8d Stage 4 — combo_product pull (Product Bundle)
+# ============================================================
+
+
+# EE rejects a combo with fewer than 2 sub-products (per §8.1.6). The
+# same constant lives in item_push.py (cross-reference) — we re-state
+# here rather than import to avoid creating an implicit module-graph
+# dependency (Stage-2 pull → Stage-3 push), and because the number is
+# an EE-protocol fact rather than a flow choice.
+MIN_COMBO_SUB_PRODUCTS: int = 2
+
+
+def _process_combo_product(
+    product: dict,
+    *,
+    account: Any,
+    executor: FieldMappingExecutor,
+    enabled_companies: list[str],
+) -> ProductOutcome:
+    """Build (or refresh) a Product Bundle from an EE combo_product
+    payload. §8.1.6.
+
+    Shape: an EE combo carries the same top-level fields as a normal
+    product (sku, product_name, hsn_code, etc.) PLUS a `sub_products`
+    list. The pull:
+      1. Translates the wrapper-Item-shaped fields via the same
+         EasyEcom-Item-Pull ruleset (no separate combo ruleset — the
+         engine output is identical, only the flow does different
+         things with it).
+      2. Runs the same content gates as a normal product (HSN held;
+         dirty UOM → Created-Flagged).
+      3. Resolves each sub_product's ee_sku to an existing
+         EasyEcom Item Map → ERPNext Item. UNRESOLVED component →
+         FLAG the whole bundle (don't create a broken Bundle), per
+         §8.1.6 component-identity-resolver model.
+      4. Enforces ≥2 sub-products (EE constraint).
+      5. Creates/refreshes the wrapper Item (`is_stock_item=0` — a
+         Product Bundle's new_item_code must point to a non-stock
+         item; Stage 1 verified this constraint) and the
+         Product Bundle doc.
+      6. Stamps multi-Company tax on the WRAPPER Item (the same
+         entity that ERPNext invoices for the bundle's sale).
+      7. Writes the bundle's OWN map row keyed on the bundle SKU,
+         pointing to "Product Bundle" (not the wrapper Item) per
+         §8.1.2 dual-object-link contract.
+    """
+    sku = product["sku"]
+
+    # === Step 1: translate via the ruleset (wrapper Item fields) ===
+    erpnext_fields = executor.pull(product)
+
+    # === Step 2: HSN gate (HOLD, do not create) ===
+    hsn = erpnext_fields.get("gst_hsn_code")
+    if not hsn or not frappe.db.exists("GST HSN Code", hsn):
+        return _flag_not_created(
+            sku,
+            reason=(
+                f"combo: missing or unknown HSN ({hsn!r}); India "
+                "Compliance enforces gst_hsn_code as mandatory on Item "
+                "(and the bundle's wrapper Item is still an Item)."
+            ),
+            product=product,
+        )
+
+    # === Step 3: UOM dirt (CREATE + FLAG) ===
+    flag_reasons: list[str] = []
+    raw_uom = erpnext_fields.get("stock_uom")
+    if not raw_uom or not frappe.db.exists("UOM", raw_uom):
+        substituted = account.get("default_uom") or "Nos"
+        flag_reasons.append(
+            f"dirty/unknown accounting_unit {raw_uom!r}; substituted "
+            f"default UOM {substituted!r}."
+        )
+        erpnext_fields["stock_uom"] = substituted
+
+    # === Step 4: resolve sub_products via component map rows ===
+    sub_products = (product or {}).get("sub_products") or []
+    components, resolution_errors = _resolve_pull_sub_products(sub_products)
+
+    if resolution_errors:
+        # Don't create a broken Bundle (§8.1.6 dependency contract).
+        return _flag_not_created(
+            sku,
+            reason=" || ".join(resolution_errors),
+            product=product,
+        )
+
+    if len(components) < MIN_COMBO_SUB_PRODUCTS:
+        return _flag_not_created(
+            sku,
+            reason=(
+                f"combo arrived with {len(components)} resolvable "
+                f"sub-products; EE requires ≥{MIN_COMBO_SUB_PRODUCTS} "
+                "to be a valid combo. FDE: check the EE combo's "
+                "sub-product list."
+            ),
+            product=product,
+        )
+
+    # === Step 5: upsert wrapper Item + Product Bundle ===
+    # Map lookup is keyed on ee_sku (the natural key). If the existing
+    # map points to a "Product Bundle", this is a re-pull — refresh
+    # the wrapper Item + Bundle in place. If it points to "Item", it's
+    # a type collision (EE renamed a normal product into a combo, or
+    # the FDE manually re-mapped) — surface as an error rather than
+    # silently mutate the link.
+    map_name = frappe.db.get_value(
+        "EasyEcom Item Map", {"ee_sku": sku}, "name"
+    )
+    bundle_existed = False
+    if map_name:
+        map_doc = frappe.get_doc("EasyEcom Item Map", map_name)
+        if map_doc.erpnext_doctype == "Product Bundle":
+            wrapper_item, bundle = _load_or_refresh_bundle_from_map(
+                map_doc, erpnext_fields, components
+            )
+            bundle_existed = True
+        elif map_doc.erpnext_doctype == "Item":
+            # EE-side type change (normal → combo). Don't silently
+            # mutate; surface for the FDE.
+            return _flag_not_created(
+                sku,
+                reason=(
+                    f"combo {sku!r} maps to an existing ERPNext Item "
+                    f"({map_doc.erpnext_name!r}), not a Product Bundle. "
+                    "The EE product changed type from normal to combo. "
+                    "FDE: decide whether to convert the ERPNext side "
+                    "(delete the Item + this map row; the next pull "
+                    "will create a Product Bundle)."
+                ),
+                product=product,
+            )
+        else:
+            return _flag_not_created(
+                sku,
+                reason=(
+                    f"Item Map for combo {sku!r} has unknown "
+                    f"erpnext_doctype={map_doc.erpnext_doctype!r}"
+                ),
+                product=product,
+            )
+    else:
+        # Fresh combo: create the wrapper Item, then the Product
+        # Bundle, then the map row.
+        wrapper_item = _create_item(erpnext_fields, is_stock_item=0)
+        bundle = _create_product_bundle(
+            wrapper_item.item_code, components=components
+        )
+        map_doc = _create_map_row(
+            sku=sku,
+            erpnext_doctype="Product Bundle",
+            erpnext_name=bundle.name,
+            ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
+            ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
+            status=STATUS_MAPPED,
+        )
+
+    # === Step 6: lifecycle (active:0 → disable wrapper) ===
+    if product.get("active") in (0, "0", False) and not wrapper_item.disabled:
+        wrapper_item.disabled = 1
+        wrapper_item.save(ignore_permissions=True)
+
+    # === Step 7: multi-Company tax stamping on the wrapper Item ===
+    # The bundle's sales transactions reference the wrapper Item, which
+    # is what carries Item Tax rows. Components carry their own taxes
+    # (set when they were pulled / pushed as normal items).
+    tax_results: list[dict] = []
+    if enabled_companies:
+        wrapper_item = frappe.get_doc("Item", wrapper_item.name)
+        for company in enabled_companies:
+            tax_result = resolve_and_stamp_tax(wrapper_item, product, company)
+            tax_results.append(
+                {
+                    "company": company,
+                    "mapped": tax_result.mapped,
+                    "auto_created": tax_result.auto_created,
+                    "stamped_count": tax_result.stamped_count,
+                    "reconciled": tax_result.reconciled,
+                    "discrepancies": tax_result.discrepancies,
+                }
+            )
+            if not tax_result.mapped or not tax_result.reconciled:
+                flag_reasons.append(
+                    f"tax for company {company!r}: "
+                    + ("; ".join(tax_result.discrepancies) or "unreconciled")
+                )
+        wrapper_item.save(ignore_permissions=True)
+
+    # === Step 8: finalise the bundle's map row ===
+    final_status = STATUS_CREATED_FLAGGED if flag_reasons else STATUS_MAPPED
+    if map_doc.status != final_status or map_doc.flag_reason != _join_reasons(flag_reasons):
+        map_doc.status = final_status
+        map_doc.flag_reason = _join_reasons(flag_reasons)
+        map_doc.save(ignore_permissions=True)
+
+    return ProductOutcome(
+        ee_sku=sku,
+        status=final_status,
+        erpnext_doctype="Product Bundle",
+        erpnext_name=bundle.name,
+        created=not bundle_existed,
+        flag_reasons=flag_reasons,
+        tax_results=tax_results,
+    )
+
+
+def _resolve_pull_sub_products(
+    sub_products: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """For each EE sub_product, find the existing Item Map row by
+    sub_product['sku'] → return the resolved ERPNext Item.item_code
+    + the qty.
+
+    Returns (components, errors).
+      components: list of {item_code (ERPNext), qty}
+      errors: list of human-readable reasons for unresolved components.
+    A component without a map row OR mapped to a non-Item target
+    (e.g. mapped to a Product Bundle — nested combos aren't supported)
+    counts as unresolved and contributes a reason."""
+    components: list[dict] = []
+    errors: list[str] = []
+    for sp in sub_products:
+        sp_sku = (sp or {}).get("sku")
+        qty = (sp or {}).get("quantity") or 1
+        if not sp_sku:
+            errors.append("sub_product has no sku — EE payload malformed")
+            continue
+        map_row = frappe.db.get_value(
+            "EasyEcom Item Map",
+            {"ee_sku": sp_sku},
+            ["erpnext_doctype", "erpnext_name"],
+            as_dict=True,
+        )
+        if not map_row or not map_row.erpnext_name:
+            errors.append(
+                f"sub_product {sp_sku!r} not yet mapped — pull or push it "
+                "as a normal item first, then re-pull this combo "
+                "(component-identity resolver, §8.1.6)."
+            )
+            continue
+        if map_row.erpnext_doctype != "Item":
+            errors.append(
+                f"sub_product {sp_sku!r} maps to "
+                f"{map_row.erpnext_doctype}, not Item — nested combos "
+                "(combo-of-combos) aren't supported. FDE: unmap or "
+                "convert the sub-product."
+            )
+            continue
+        components.append({"item_code": map_row.erpnext_name, "qty": qty})
+    return components, errors
+
+
+def _create_product_bundle(
+    wrapper_item_code: str, *, components: list[dict]
+) -> Any:
+    """Insert a Product Bundle whose new_item_code is the wrapper.
+    components is the list from _resolve_pull_sub_products."""
+    bundle = frappe.new_doc("Product Bundle")
+    bundle.update({"new_item_code": wrapper_item_code})
+    for c in components:
+        bundle.append("items", {"item_code": c["item_code"], "qty": c["qty"]})
+    bundle.insert(ignore_permissions=True)
+    return bundle
+
+
+def _load_or_refresh_bundle_from_map(
+    map_doc: Any, erpnext_fields: dict, components: list[dict]
+) -> tuple[Any, Any]:
+    """Re-pull path: refresh the wrapper Item + Product Bundle in
+    place. The bundle's items list is REPLACED with the freshly-
+    resolved component set (an EE-side combo edit — adding/removing
+    sub-products — must propagate)."""
+    bundle = frappe.get_doc("Product Bundle", map_doc.erpnext_name)
+    wrapper_item = frappe.get_doc("Item", bundle.new_item_code)
+    _refresh_existing_item(wrapper_item, erpnext_fields)
+    bundle.set("items", [])
+    for c in components:
+        bundle.append("items", {"item_code": c["item_code"], "qty": c["qty"]})
+    bundle.save(ignore_permissions=True)
+    return wrapper_item, bundle
 
 
 # ----- Internal: Item/Map upsert helpers -----

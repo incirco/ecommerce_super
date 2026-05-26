@@ -157,17 +157,17 @@ def push_one_item(
 
     item = frappe.get_doc("Item", item_code)
 
-    # === Stage 4 gate — bundles are not Stage 3 territory ===
-    if frappe.db.exists("Product Bundle", {"new_item_code": item_code}):
-        return PushOutcome(
-            item_code=item_code,
-            pushed=False,
-            operation="skipped",
-            flag_reasons=[
-                "Product Bundle wrapper Item — Stage 4 will push as combo "
-                "(itemType=1 with subProducts); Stage 3 only handles "
-                "normal items."
-            ],
+    # === Stage 4: Product Bundle wrapper → dispatch to combo push ===
+    bundle_name = frappe.db.get_value(
+        "Product Bundle", {"new_item_code": item_code}, "name"
+    )
+    if bundle_name:
+        return push_one_bundle(
+            bundle_name,
+            client=client,
+            account=account,
+            executor=executor,
+            enabled_companies=enabled_companies,
         )
 
     # === Disabled items don't get a Create — they may get a
@@ -345,6 +345,347 @@ def push_lifecycle(
         ee_product_id=map_row.ee_product_id,
         ee_payload=payload,
     )
+
+
+# ============================================================
+# §8d Stage 4 — Bundle (combo) push
+# ============================================================
+
+
+# EE rejects a combo with fewer than 2 sub-products (per §8.1.6 spec
+# echoing EE FAQ). The constraint is symmetric — pull also flags a
+# combo that arrives with <2 sub_products.
+MIN_COMBO_SUB_PRODUCTS: int = 2
+
+
+def push_one_bundle(
+    bundle_name: str,
+    *,
+    client: EasyEcomClient,
+    account: Any,
+    executor: FieldMappingExecutor | None = None,
+    enabled_companies: list[str] | None = None,
+) -> PushOutcome:
+    """Push (or update) an ERPNext Product Bundle to EE as a combo
+    product (itemType=1 with subProducts).
+
+    Stage 4 contract (§8.1.6):
+    - Components must exist EE-side BEFORE the combo references them
+      (dependency-ordering). A component without an ee_product_id
+      → FLAG the bundle, don't push a broken combo.
+    - EE requires ≥2 sub-products → FLAG if fewer.
+    - The bundle gets its OWN map row (linked to "Product Bundle",
+      not the wrapper Item). The wrapper Item itself never gets a
+      map row from the push path — it exists to anchor the bundle
+      but isn't an EE product on its own. (The pull's combo
+      creation also uses this same pattern.)
+    - itemType=1 comes from the ruleset's `conditional_constant`
+      reading `source_doc.flags.is_bundle_wrapper`, which this
+      function sets to True on the wrapper Item before calling
+      executor.push().
+    """
+    if executor is None:
+        executor = FieldMappingExecutor(ITEM_PUSH_RULESET)
+    if enabled_companies is None:
+        enabled_companies = _enabled_companies()
+
+    bundle = frappe.get_doc("Product Bundle", bundle_name)
+    wrapper_item = frappe.get_doc("Item", bundle.new_item_code)
+
+    # === Resolve components via their own map rows ===
+    components, resolution_errors = _resolve_bundle_components(bundle)
+
+    if resolution_errors:
+        # Components not yet mapped/pushed → flag the bundle, don't
+        # build a broken combo payload.
+        _upsert_bundle_map_row_flagged(bundle, reasons=resolution_errors)
+        return PushOutcome(
+            item_code=bundle.new_item_code,
+            pushed=False,
+            operation="flagged",
+            flag_reasons=resolution_errors,
+        )
+
+    if len(components) < MIN_COMBO_SUB_PRODUCTS:
+        reason = (
+            f"EE requires a combo to have at least {MIN_COMBO_SUB_PRODUCTS} "
+            f"sub-products; this bundle has {len(components)}. "
+            "Add more components in the Product Bundle (or push the "
+            "wrapper Item as a normal product instead)."
+        )
+        _upsert_bundle_map_row_flagged(bundle, reasons=[reason])
+        return PushOutcome(
+            item_code=bundle.new_item_code,
+            pushed=False,
+            operation="flagged",
+            flag_reasons=[reason],
+        )
+
+    # === Set the per-record flag the ruleset's itemType conditional
+    # reads (in-memory, not persisted; lives on the doc's flags dict). ===
+    wrapper_item.flags.is_bundle_wrapper = True
+
+    # === Build the wrapper's payload via the ruleset; inject subProducts. ===
+    payload, flag_reasons = build_push_payload(
+        wrapper_item,
+        executor=executor,
+        enabled_companies=enabled_companies,
+    )
+    if flag_reasons:
+        # Wrapper-Item content problem (missing dims, no tax) — same
+        # FNC path as normal items, but the flag lands on the bundle's
+        # map row (not the wrapper's, which has no map row of its own).
+        _upsert_bundle_map_row_flagged(bundle, reasons=flag_reasons)
+        return PushOutcome(
+            item_code=bundle.new_item_code,
+            pushed=False,
+            operation="flagged",
+            flag_reasons=flag_reasons,
+            ee_payload=payload,
+        )
+
+    # Defensive: confirm the ruleset emitted itemType=1.
+    if payload.get("itemType") != 1:
+        # Indicates the ruleset's conditional didn't pick up our flag
+        # — would mean the conditional was edited to something the FDE
+        # didn't intend. Fail loud rather than silently push a normal
+        # itemType=0 for a combo (which would be wrong on EE's side).
+        raise RuntimeError(
+            f"Bundle push expected itemType=1 (combo); ruleset emitted "
+            f"itemType={payload.get('itemType')!r}. The "
+            "EasyEcom-Item-Push ruleset's itemType rule must read "
+            "source_doc.flags.is_bundle_wrapper — the FDE may have "
+            "edited the conditional. Fix the ruleset and re-push."
+        )
+
+    payload["subProducts"] = [
+        {"sku": c["ee_sku"], "quantity": c["qty"]} for c in components
+    ]
+
+    # === Route Create vs Update — keyed on bundle's OWN map row ===
+    existing_map = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"erpnext_doctype": "Product Bundle", "erpnext_name": bundle_name},
+        ["name", "ee_product_id"],
+        as_dict=True,
+    )
+    if existing_map and existing_map.ee_product_id:
+        return _do_update_bundle(
+            bundle=bundle,
+            wrapper_item=wrapper_item,
+            payload=payload,
+            client=client,
+            account=account,
+            ee_product_id=existing_map.ee_product_id,
+        )
+    return _do_create_bundle(
+        bundle=bundle,
+        wrapper_item=wrapper_item,
+        payload=payload,
+        client=client,
+        account=account,
+        existing_map=existing_map,
+    )
+
+
+def _resolve_bundle_components(
+    bundle: Any,
+) -> tuple[list[dict], list[str]]:
+    """Walk bundle.items[] and look up each component's EE identity
+    via its EasyEcom Item Map row.
+
+    Returns:
+        (components, errors). components is a list of
+        {item_code, ee_sku, ee_product_id, qty}. errors is a list of
+        human-readable reasons covering missing-map and missing-product_id
+        — both of which mean "component is not on EE yet" and must
+        FLAG the bundle (dependency-ordering, §8.1.6).
+    """
+    components: list[dict] = []
+    errors: list[str] = []
+    for row in bundle.items or []:
+        component_code = row.item_code
+        qty = row.qty
+        if not component_code:
+            errors.append("bundle has a blank component row — fix in ERPNext")
+            continue
+        map_row = frappe.db.get_value(
+            "EasyEcom Item Map",
+            {"erpnext_doctype": "Item", "erpnext_name": component_code},
+            ["ee_sku", "ee_product_id"],
+            as_dict=True,
+        )
+        if not map_row:
+            errors.append(
+                f"component {component_code!r} has no EasyEcom Item Map row "
+                "— push or pull it as a normal item first, then re-push "
+                "this bundle (dependency-ordering, §8.1.6)."
+            )
+            continue
+        if not map_row.ee_product_id:
+            errors.append(
+                f"component {component_code!r} is mapped but has no "
+                "ee_product_id (never successfully pushed) — push it as a "
+                "normal item first, then re-push this bundle "
+                "(dependency-ordering, §8.1.6)."
+            )
+            continue
+        if not map_row.ee_sku:
+            errors.append(
+                f"component {component_code!r}'s map row has no ee_sku "
+                "(unexpected — map rows are keyed on ee_sku); investigate "
+                "the map row before re-pushing this bundle."
+            )
+            continue
+        components.append(
+            {
+                "item_code": component_code,
+                "ee_sku": map_row.ee_sku,
+                "ee_product_id": map_row.ee_product_id,
+                "qty": qty,
+            }
+        )
+    return components, errors
+
+
+def _do_create_bundle(
+    *,
+    bundle: Any,
+    wrapper_item: Any,
+    payload: dict,
+    client: EasyEcomClient,
+    account: Any,
+    existing_map: dict | None,
+) -> PushOutcome:
+    """CreateMasterProduct for a bundle (itemType=1, with subProducts).
+    Returned product_id writes back to the BUNDLE's map row (not the
+    wrapper Item's — bundles have their own map row per §8.1.2)."""
+    idem_key = _idempotency_key(wrapper_item, payload, account)
+    response = client.post(
+        PRODUCT_MASTER_CREATE, payload=payload, idempotency_key=idem_key
+    )
+    returned_product_id = ((response or {}).get("data") or {}).get("product_id")
+    if not returned_product_id:
+        reasons = [
+            f"CreateMasterProduct returned no product_id for combo "
+            f"(response: {response!r}); FDE: investigate before re-pushing — "
+            "EE may have created the combo without us learning its id."
+        ]
+        _upsert_bundle_map_row_flagged(bundle, reasons=reasons)
+        return PushOutcome(
+            item_code=wrapper_item.item_code,
+            pushed=False,
+            operation="flagged",
+            flag_reasons=reasons,
+            ee_payload=payload,
+        )
+
+    product_id_str = str(returned_product_id)
+    _upsert_bundle_map_row_after_create(
+        bundle, ee_product_id=product_id_str, existing_map=existing_map
+    )
+    return PushOutcome(
+        item_code=wrapper_item.item_code,
+        pushed=True,
+        operation="create",
+        ee_product_id=product_id_str,
+        ee_payload=payload,
+    )
+
+
+def _do_update_bundle(
+    *,
+    bundle: Any,
+    wrapper_item: Any,
+    payload: dict,
+    client: EasyEcomClient,
+    account: Any,
+    ee_product_id: str,
+) -> PushOutcome:
+    """UpdateMasterProduct for a bundle. Sends the full subProducts
+    array — EE replaces the combo's component set on update."""
+    payload = dict(payload)
+    payload["productId"] = ee_product_id
+    idem_key = _idempotency_key(wrapper_item, payload, account)
+    client.post(PRODUCT_MASTER_UPDATE, payload=payload, idempotency_key=idem_key)
+    return PushOutcome(
+        item_code=wrapper_item.item_code,
+        pushed=True,
+        operation="update",
+        ee_product_id=ee_product_id,
+        ee_payload=payload,
+    )
+
+
+def _upsert_bundle_map_row_after_create(
+    bundle: Any, *, ee_product_id: str, existing_map: dict | None
+) -> str:
+    """Write back the bundle's EE product_id to its OWN map row
+    (erpnext_doctype='Product Bundle'). Mirrors
+    _upsert_map_row_after_create but for the bundle dual-object link."""
+    if existing_map and existing_map.get("name"):
+        frappe.db.set_value(
+            "EasyEcom Item Map",
+            existing_map["name"],
+            {
+                "ee_product_id": ee_product_id,
+                "status": STATUS_MAPPED,
+                "flag_reason": None,
+            },
+            update_modified=True,
+        )
+        return existing_map["name"]
+
+    doc = frappe.new_doc("EasyEcom Item Map")
+    doc.update(
+        {
+            "ee_sku": bundle.name,  # bundle name == wrapper's item_code
+            "erpnext_doctype": "Product Bundle",
+            "erpnext_name": bundle.name,
+            "ee_product_id": ee_product_id,
+            "status": STATUS_MAPPED,
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return doc.name
+
+
+def _upsert_bundle_map_row_flagged(
+    bundle: Any, *, reasons: list[str]
+) -> str:
+    """Bundle-flavoured FNC map-row upsert. Always points to the
+    Product Bundle (not the wrapper Item) per §8.1.2."""
+    existing = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"erpnext_doctype": "Product Bundle", "erpnext_name": bundle.name},
+        "name",
+    )
+    reason_str = " || ".join(reasons)
+    if existing:
+        frappe.db.set_value(
+            "EasyEcom Item Map",
+            existing,
+            {"status": STATUS_FLAGGED_NOT_PUSHED, "flag_reason": reason_str},
+            update_modified=True,
+        )
+        return existing
+    doc = frappe.new_doc("EasyEcom Item Map")
+    doc.update(
+        {
+            "ee_sku": bundle.name,
+            "erpnext_doctype": "Product Bundle",
+            "erpnext_name": bundle.name,
+            "status": STATUS_FLAGGED_NOT_PUSHED,
+            "flag_reason": reason_str,
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return doc.name
+
+
+# ============================================================
+# Queue trigger (Stage 3 — kept here for proximity to bundle work)
+# ============================================================
 
 
 def enqueue_item_push(item_code: str, *, account_name: str) -> None:
