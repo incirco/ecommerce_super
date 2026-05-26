@@ -205,4 +205,140 @@ Cess (the extra duty on things like tobacco, aerated drinks, some cosmetics) rid
 
 ---
 
+## Part I — Item / Product Master (§8.1)
+
+*Append this to `process/primers/FDE_PRIMER_section_8_masters.md`, after Part H (Tax). Same FDE-facing voice as Parts F (Location), G (Channel), H (Tax). This is orientation — what the Item master does and how you operate it day to day — not a test script (that's `section_8d_item.md`).*
+
+---
+
+## What the Item master is
+
+Items are the product/SKU master — the thing every order, GRN, and invoice ultimately points at. Of the six masters, Item is the largest, because unlike Location, Channel, and Tax (which are discovered-and-classified, or configured), **Items move in both directions and the direction of truth changes over the life of a client.**
+
+The one idea that makes everything else make sense: **an Item can be born on either side.** A product might already exist in EasyEcom (the catalog team listed it on marketplaces) and need a financial counterpart in ERPNext. Or it might be born in ERPNext (a B2B SKU, a private-label product) and need to be pushed to EasyEcom so it can be sold and fulfilled. The Item master handles both, and it does so through **two phases** with an explicit switch between them.
+
+## The two phases — and the flip
+
+This is the most important thing to understand before you touch the Item buttons.
+
+**Phase 1 — Onboarding (the default).** When you first connect a client, products exist on both sides and need reconciling. In this phase the Item master is *bidirectional and supervised*: you pull EasyEcom's products into ERPNext, you push ERPNext's products to EasyEcom, you review what gets flagged, and you fix mismatches by hand. EasyEcom and ERPNext are both legitimate sources during onboarding because neither side is yet authoritative.
+
+**Phase 2 — ERPNext-mastered (steady state).** Once onboarding is done and the catalogs agree, you **flip** the account to ERPNext-mastered mode. From that point on, **ERPNext is the source of truth for items.** ERPNext→EasyEcom push is the authoritative direction; EasyEcom-side changes are no longer accepted automatically — they surface as **drift** for you to decide on (more below).
+
+**The flip is one-way.** It is a deliberate, role-gated, explicit-confirm action on the EasyEcom Account form ("Flip → ERPNext-Mastered"). Once flipped, the account refuses to flip back. You flip a client *after* you've reconciled their catalog and you're confident ERPNext holds the correct master data. Don't flip early — onboarding's bidirectional supervision is there for a reason.
+
+Why this matters operationally: in onboarding you're doing reconciliation work (pull, review flags, push, fix). After the flip, your job changes to *monitoring* — the steady state mostly runs itself (ERPNext changes push out), and the thing you watch for is drift.
+
+## The Item Map — the spine of the whole thing
+
+Every Item the integration knows about has a row in **EasyEcom Item Map**. This single registry is what links an EasyEcom SKU to its ERPNext counterpart, in either direction, regardless of which side the product was born on. It's the first place you look when you want to know "what is the state of this product?"
+
+A map row links a SKU to **either an ERPNext Item or a Product Bundle** (combos map to Bundles — see below). Each row carries a **status** that tells you exactly where the product stands:
+
+| Status | Colour | Meaning | What you do |
+|---|---|---|---|
+| **Mapped** | green | Linked and healthy. Item exists, tax stamped, nothing wrong. | Nothing — this is the happy state. |
+| **Created-Flagged** | orange | The Item *was created* (downstream orders can use it), but something needs your attention — a dirty unit of measure, or an unmapped tax rule. | Review the flag reason, fix the underlying issue (e.g. map the tax rule), the flag clears on next sync. |
+| **Flagged-Not-Created** | grey | The Item was **not** created because a hard requirement is missing — most commonly **no HSN code** (India Compliance won't allow an HSN-less Item), or an unsupported product type. | Fix the cause (add the HSN, etc.), then re-pull. The product stays held until then. |
+| **Drift** | red | (Post-flip only.) EasyEcom changed something on a mapped item, but ERPNext is the source of truth now, so the change was **not** accepted. The map row records exactly what differs. | Decide: dismiss it (EE change is wrong/irrelevant) or re-assert ERPNext to EE. See the drift section. |
+| **Disabled** | dark grey | The product is inactive. | Usually nothing; reactivate if needed. |
+
+The map is also your worklist. The workspace surfaces counts — *Items in Drift*, *Items Created-Flagged*, *Items Flagged-Not-Created* — and each links into the filtered Item Map list. Those three numbers are your daily Item triage: anything in Drift, Created-Flagged, or Flagged-Not-Created is work waiting for you.
+
+## How matching works (and why it's deliberately simple)
+
+When a product comes in from EasyEcom, the integration decides what ERPNext Item it corresponds to using a deliberately simple rule:
+
+1. **If a map row already exists for that SKU** → use it. Done.
+2. **Else, if an ERPNext Item exists whose `item_code` exactly equals the SKU** (byte-for-byte) → auto-map to it and create the map row.
+3. **Else** → create a brand-new Item and a map row.
+
+There is **no fuzzy matching, no EAN/barcode matching, no name matching.** This is on purpose. The guiding principle is *"never wrongly link"* over *"never duplicate."* A duplicate Item is visible and easy to merge; a *wrong* link silently corrupts data (orders for product A flow against product B's books). So when in doubt, the integration creates a new Item rather than guessing at a match — and if that produces a duplicate, you fix it by hand. Don't expect the integration to be clever about matching; expect it to be safe.
+
+## Combos → Product Bundles
+
+EasyEcom "combo" products (a bundle of several SKUs sold as one) become **ERPNext Product Bundles**, not Items. The combo's component SKUs are resolved to their own Items via their own map rows. A few things to know:
+
+- The Bundle gets its **own** map row (linking the Product Bundle, not the wrapper Item).
+- If any component SKU **can't be resolved** (no map row for it yet), the **whole bundle is held** (Flagged-Not-Created) with a reason naming the missing component — the integration won't build a half-broken bundle. Fix by making sure the components exist/are mapped first, then re-pull.
+- EasyEcom requires a combo to have **at least 2** sub-products; a combo with fewer is flagged.
+- On push (ERPNext→EE), components must exist on the EasyEcom side **before** the combo that references them (dependency order). A bundle whose components haven't been pushed yet is flagged, not pushed broken.
+
+## What does NOT get created
+
+Some EasyEcom product types are deliberately **not** turned into ERPNext records — they're flagged-not-created and left for you to handle out of band:
+
+- **Variant parents / child variants** — variants shouldn't exist in the EE↔ERPNext item flow; manufacturing/variant structure stays ERPNext-side.
+- **Kits / BOMs** — manufacturing stays in ERPNext; we don't pull or push BOMs/kits.
+- **Unknown future types** — if EasyEcom introduces a product type we don't recognise, it's flagged rather than guessed at (forward-safe).
+
+Only **normal products** (→ Items) and **combos** (→ Product Bundles) create anything.
+
+## Tax — where §8.5 goes live
+
+This is where the Tax master (Part H) you configured actually gets used. After each Item is created or updated on pull, the integration stamps tax onto it — and because an item is shared across companies but tax is per-company, it does this **for every enabled company on the account**. Each company's tax rows coexist on the shared item's tax table; ERPNext picks the right one per transaction.
+
+What this means for you: if an item comes in **Created-Flagged for an unmapped tax rule**, that's the Tax master telling you a `(tax rule, company)` pair isn't configured yet. Go to the Tax Rule Map, configure it (Part H), and the flag clears. The Item master and the Tax master work together here — a tax flag on an item is usually a tax-map gap, not an item problem.
+
+## Drift — the post-flip safety net
+
+After you flip to ERPNext-mastered, the pull stops *accepting* EasyEcom changes and starts *detecting* them. When a scheduled or manual pull finds that EasyEcom has changed a field on a mapped item (someone edited the name, the weight, the price on the EE side), the integration does **not** overwrite ERPNext — instead it sets the map row to **Drift** and records exactly which fields differ (ERPNext value vs EE value, one row per field, in a structured table on the map row).
+
+Drift is **not an error** — it's a divergence you need to decide about. On an Item Map row in Drift status you get two actions:
+
+- **Dismiss Drift (Mark Reviewed)** — the EE change is wrong or irrelevant; ignore it. Returns the row to Mapped. ERPNext is left untouched.
+- **Push ERPNext → EE (Re-assert SoT)** — ERPNext is right; push the ERPNext values back to EasyEcom to correct the EE side.
+
+There is deliberately **no "Accept EE Value" button** — accepting an EasyEcom value would mean letting EE overwrite ERPNext, which contradicts the whole point of being ERPNext-mastered. If EE genuinely holds the correct value, that's a sign the flip was premature or the data needs a manual look, not a routine accept.
+
+Two conveniences worth knowing:
+- A **quiet re-pull** (nothing changed) does **not** flap the status — your nightly pulls won't mark everything Drift over nothing.
+- If you *intentionally* keep a field different between ERPNext and EE (say you renamed something in ERPNext on purpose and don't want to be re-flagged every night), you can add that field to the item's **drift exclusion list** so the detector skips it for that item.
+
+## The buttons — where to click
+
+Everything is on either the **EasyEcom Account** form or the **Item** form.
+
+On **EasyEcom Account**:
+- **Discover → Products** — pulls products from EasyEcom (cursor-paginated, resumable). Pre-flip it creates/updates items; post-flip the *same button* runs drift detection instead (it's mode-aware — you don't pick).
+- **Push → Push All Pending Items** — the onboarding sweep; pushes every ERPNext item not yet on EE. Enqueues the work and returns immediately (it doesn't hang your browser on a big catalog).
+- **Flip → ERPNext-Mastered** — the one-way phase switch. Deliberate, confirm-gated.
+- **Auto-push Items to EasyEcom on save** (checkbox) — default **OFF**. When ON, every item save pushes to EE automatically. Turn this on only in steady state when you want hands-off push; leave it off during onboarding and testing.
+
+On **Item** (and Product Bundle):
+- **Push to EasyEcom** — push this one item (bundles auto-dispatch to the bundle path).
+- **Sync Lifecycle to EasyEcom** — push this item's enabled/disabled state to EE (activate/deactivate).
+
+On an **Item Map** row in Drift:
+- **Dismiss Drift** / **Push ERPNext → EE** (the two drift actions above).
+
+## The scheduler
+
+Once a client is live, you don't have to click Discover Products every day — there's a daily scheduled pull (like Location and Channel have). Pre-flip it pulls deltas; post-flip it runs drift detection. The manual button is there for onboarding and for when you want an immediate pull.
+
+## The typical FDE lifecycle with Items
+
+1. **Connect** the account, configure the masters (Location, Channel, Tax first — Item depends on them).
+2. **Discover → Products** — pull the EE catalog in. Review the map: fix Flagged-Not-Created (usually missing HSN), fix Created-Flagged (usually an unmapped tax rule via the Tax master).
+3. **Push → Push All Pending Items** — push any ERPNext-only items to EE.
+4. Iterate until the map is clean (everything Mapped, nothing flagged).
+5. **Flip → ERPNext-Mastered** — once you're confident ERPNext is correct.
+6. **Steady state** — ERPNext changes push out (optionally auto-push on save); the daily pull now watches for drift. Your job becomes: handle the occasional Drift row, keep the worklist counts at zero.
+
+## One note for whoever comes next
+
+The individual-push trigger (push-on-item-save) is **built but not auto-wired** — it only fires when the "Auto-push on save" checkbox is on. This is deliberate: it keeps item saves from firing EE traffic until a client is genuinely in controlled steady-state operation. When you take a client live and want hands-off push, that checkbox is the switch.
+
+## Live-verified status and three things to know
+
+§8d was **live-verified end-to-end against the Harmony sandbox** — every pull and push path (CREATE/UPDATE/EAN/Bundle/Lifecycle/batch-sweep), the flip, and drift all confirmed against real EasyEcom. Three operational realities worth carrying forward:
+
+1. **Tax must exist before push.** §8c tax stamping happens on *pull*. An item you create in ERPNext and push to EE must have an Item Tax row first — push will *refuse* an item with no resolvable tax rate rather than send a broken payload. Add the tax row before pushing ERPNext-origin items.
+2. **Weight and dimension units are per-client and FDE-editable.** Weight (Kg/Gram/etc → grams) and L/H/W (Cm/Inch/etc → cm) convert via Field Mapping rules you can edit in the desk — no code change. To let a client enter dimensions in inches, add an `ecs_dim_uom` field on Item; the rule already reads it.
+3. **Never run `bench run-tests` against a live site.** It triggers test cleanup that once wiped the live Harmony account, Locations, and Company Settings (Items survived). Use `bench execute` for any live work. Cleanup is now prefix-guarded, but the rule holds regardless.
+
+**Tested by:** `../test_scripts/section_8d_item.md`.
+
+---
+
 *As each further master ships (Item, Customer, Supplier), a new Part is appended here, and a matching test script is added.*
