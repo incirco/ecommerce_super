@@ -44,17 +44,25 @@ from ecommerce_super.easyecom.exceptions import FieldMappingCompileError
 # ----- Allowed name sets per expression role (§5.5, §5.6, §5.7) -----
 
 
-ALLOWED_NAMES_CONDITION: frozenset[str] = frozenset({"source_doc", "source_payload"})
+# Numeric/type-coercion builtins that frappe.utils.safe_exec.safe_eval
+# exposes at runtime via WHITELISTED_SAFE_EVAL_GLOBALS. Without these in
+# the compile-time allow-list, an FDE writing a normal expression like
+# `int(round(value * 1000))` fails to save even though it would run
+# fine — the validator must match the runtime surface.
+_SAFE_BUILTINS: frozenset[str] = frozenset({"int", "float", "round"})
+
+
+ALLOWED_NAMES_CONDITION: frozenset[str] = frozenset({"source_doc", "source_payload"}) | _SAFE_BUILTINS
 
 ALLOWED_NAMES_COMPUTED: frozenset[str] = frozenset(
     {"source_doc", "source_payload", "get_path", "sum_path", "filter_path"}
-)
+) | _SAFE_BUILTINS
 
 # custom_python additionally exposes `value` (the current field value the
 # transformer operates on). Same support helpers as computed fields.
 ALLOWED_NAMES_CUSTOM_PYTHON: frozenset[str] = frozenset(
     {"source_doc", "source_payload", "get_path", "sum_path", "filter_path", "value"}
-)
+) | _SAFE_BUILTINS
 
 # Hard-blocklist of names — even if a future allow-list bug exposes one of
 # these, the compile-time check still rejects. Defence in depth.

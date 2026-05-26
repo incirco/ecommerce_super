@@ -410,9 +410,12 @@
    {
     "erpnext_path": "weight_per_unit",
     "easyecom_path": "Weight",
-    "transform_push": "float_to_int",
+    "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "Grams. EE contract: Weight is Integer (per CreateMasterProduct table). Flow flags item Not-Pushed if missing. Push casts to int (truncates fractional grams - FDE: pre-round in ERPNext if half-up is needed)."
+    "notes": "EE contract: Weight is Integer (grams). ERPNext Item.weight_per_unit is a Float with a sibling Item.weight_uom Link. The expression below reads weight_uom and converts to grams, then int-rounds for EE. FDE: edit transform_args.expression to add UOMs your client uses (e.g. \"Pound\": 453.592). If weight_uom is empty or unrecognised, value is treated as grams (back-compat with EE-pulled items where weight already arrived in grams). 0g still flags as Not-Pushed by the push validator - that's intentional.",
+    "transform_args": {
+     "expression": "int(round((value or 0) * {\"Kg\": 1000, \"Gram\": 1, \"Mg\": 0.001, \"Lbs\": 453.592, \"Oz\": 28.3495, \"Tonne\": 1000000}.get(source_doc.weight_uom, 1)))"
+    }
    },
    {
     "erpnext_path": "ecs_length_cm",
