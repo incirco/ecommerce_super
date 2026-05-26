@@ -652,6 +652,11 @@ def validate_transformer_args(name: str, args: dict | None, *, rule_label: str) 
     Caller (the compiler) wraps the rule_label in to make the error point at
     the offending rule.
     """
+    # An empty/null transform on one direction means "this rule is
+    # one-way; skip it on this direction at run time" (handled in
+    # the executor). The compiler accepts it without lookup.
+    if not name:
+        return
     if name == "compose":
         # Composition is validated by the compiler (max-depth, target ruleset
         # exists, direction matches) — not here.

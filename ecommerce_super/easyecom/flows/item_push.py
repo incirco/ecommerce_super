@@ -706,7 +706,11 @@ def _do_update_bundle(
     """UpdateMasterProduct for a bundle. Sends the full subProducts
     array — EE replaces the combo's component set on update."""
     payload = dict(payload)
-    payload["productId"] = ee_product_id
+    # EE's productId on UpdateMasterProduct = the value EE returned
+    # as cp_id on GetProductMaster. See _push_update for the full
+    # context; same fix on the bundle wrapper.
+    write_id = wrapper_item.get("ecs_ee_cp_id")
+    payload["productId"] = int(write_id) if write_id else write_id
     idem_key = _idempotency_key(wrapper_item, payload, account)
     client.post(PRODUCT_MASTER_UPDATE, payload=payload, idempotency_key=idem_key)
     return PushOutcome(
@@ -1384,7 +1388,21 @@ def _do_update(
         surface.
     """
     payload = dict(payload)
-    payload["productId"] = ee_product_id
+    # EE's WRITE contract for UpdateMasterProduct expects `productId`
+    # to be the value EE's READ contract (GetProductMaster) returns
+    # in the `cp_id` field - NOT the `product_id` field. This is an
+    # EE-side naming inconsistency confirmed live 2026-05-26 in the
+    # Harmony sandbox: the user shared a working Postman call sending
+    # `"productId": 125293829` for HPC-APC-002, and that integer is
+    # exactly what our pull captured as `cp_id` for the primary
+    # location. The `product_id` (25766043) is informational only on
+    # updates - sending it produces EE body code 400 "product/sku
+    # doest not exist".
+    #
+    # Also: cast to int per EE's contract (their example payload uses
+    # integer literals).
+    write_id = item.get("ecs_ee_cp_id")
+    payload["productId"] = int(write_id) if write_id else write_id
     idem_key = _idempotency_key(item, payload, account)
     client.post(PRODUCT_MASTER_UPDATE, payload=payload, idempotency_key=idem_key)
     return PushOutcome(

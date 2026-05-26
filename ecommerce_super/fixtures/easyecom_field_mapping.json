@@ -444,15 +444,16 @@
    {
     "erpnext_path": "ecs_ee_product_id",
     "easyecom_path": "productId",
-    "transform_push": "identity",
-    "transform_pull": "identity",
-    "notes": "Only meaningful on Update calls (UpdateMasterProduct keys on sku OR productId). On Create the field is absent on the Item until EE returns the product_id and the flow writes it back to the map row + Item.ecs_ee_product_id."
+    "transform_push": "str_to_int",
+    "transform_pull": "int_to_str",
+    "notes": "EE's UpdateMasterProduct expects productId as INTEGER (`{\"productId\": 61160356}` per the EE-provided contract). We store it as string in Frappe so int_to_str on pull / str_to_int on push. Without the int cast EE rejects the call with body code 400 \"product/sku doest not exist\" - the type comparison silently fails. Only meaningful on Update; on Create the field is absent on the Item until EE returns product_id and the flow writes it back."
    },
    {
     "erpnext_path": "ecs_ee_cp_id",
     "easyecom_path": "cpId",
-    "transform_push": "identity",
-    "transform_pull": "identity"
+    "transform_push": null,
+    "transform_pull": "int_to_str",
+    "notes": "PULL only. EE's UpdateMasterProduct/CreateMasterProduct contract does NOT accept cpId (it's a per-channel-partner identifier captured on pull but never echoed back on master writes). Including it caused EE to reject UpdateMasterProduct with body code 400 \"product/sku doest not exist\". transform_push=null tells the executor to skip this mapping on push."
    },
    {
     "erpnext_path": "item_code",

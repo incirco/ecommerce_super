@@ -302,6 +302,16 @@ class FieldMappingExecutor:
 
         # Compose: handled separately (delegates to a child executor).
         transform_name = _transform_for(rule, direction)
+        # A null/empty transform name on one direction means "skip this
+        # rule for that direction" - the rule is one-way. Used when
+        # a field has a meaningful pull mapping but no push contract
+        # (e.g. cpId: EE returns it on GetProductMaster but rejects
+        # it on UpdateMasterProduct - the field is read-only per EE's
+        # write contract).
+        if not transform_name:
+            if trace is not None:
+                trace.append(_trace_skip(rule, f"no transform for direction={direction}"))
+            return
         if transform_name == compiler.COMPOSE_NAME:
             self._apply_compose(
                 rule, direction=direction, context=context, output=output, trace=trace
