@@ -128,36 +128,77 @@ class SweepOutcome:
 
 def _with_push_sync_record(fn):
     """Decorator that writes a Sync Record after the push function
-    returns, mapping the PushOutcome to (status, last_error). Audit
-    fix #1 — every push op gets a Sync Record so §22 alert routing
-    can subscribe to push failures."""
+    returns OR raises, mapping the PushOutcome to (status,
+    last_error). Audit fix #1 - every push op gets a Sync Record so
+    §22 alert routing can subscribe to push failures.
+
+    Two failure modes are both observable now (live-verified
+    2026-05-26 against the Harmony sandbox):
+
+      (a) `fn` returns normally with a PushOutcome whose `pushed`
+          is False (e.g. operation='flagged' for missing-mandatory)
+          - the executor already maps that to SR.status=Failed via
+          map_outcome_to_sync_status.
+
+      (b) `fn` raises an exception (e.g. EasyEcomValidationError
+          when EE returns HTTP 200 wrapping body code 400). Before
+          this fix, the wrapper read `outcome = fn(...)`, the
+          exception propagated up through the wrapper, the SR-write
+          block was never reached, and the SR was left in its
+          prior state (Pending on first push, or last-known status
+          on a re-push) - falsely "Success" in the worst case.
+          This fix catches the exception, writes the SR as Failed
+          with the exception's `repr` as last_error, then re-raises
+          so the caller still sees the failure.
+    """
     import functools
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
-        outcome = fn(*args, **kwargs)
-        try:
-            from ecommerce_super.easyecom.flows._item_sync_records import (
-                map_outcome_to_sync_status,
-                write_item_push_sync_record,
-            )
+        from ecommerce_super.easyecom.flows._item_sync_records import (
+            map_outcome_to_sync_status,
+            write_item_push_sync_record,
+        )
 
-            status, last_error = map_outcome_to_sync_status(outcome, "Push")
-            # entity_doctype: Item for normal items / lifecycle calls;
-            # bundles' push_one_bundle returns ee.item_code = the
-            # wrapper Item's code, but the entity is conceptually
-            # the Product Bundle. Detect via Product Bundle existence.
+        # Best-effort entity-name + entity-doctype guess for the
+        # failure path before any outcome exists.
+        item_code = (
+            args[0] if args else kwargs.get("item_code")
+            or kwargs.get("bundle_name") or "?"
+        )
+
+        outcome: PushOutcome | None = None
+        raised: BaseException | None = None
+        try:
+            outcome = fn(*args, **kwargs)
+        except BaseException as exc:
+            raised = exc
+
+        try:
+            if outcome is not None:
+                status, last_error = map_outcome_to_sync_status(
+                    outcome, "Push"
+                )
+                entity_name = outcome.item_code
+            else:
+                # fn raised before producing an outcome - SR must
+                # still land as Failed so observability isn't lying.
+                status = "Failed"
+                last_error = (
+                    f"{type(raised).__name__}: {raised}" if raised else
+                    "push raised before producing an outcome"
+                )
+                entity_name = item_code
+
             entity_doctype = "Item"
-            entity_name = outcome.item_code
             if frappe.db.exists(
-                "Product Bundle", {"new_item_code": outcome.item_code}
+                "Product Bundle", {"new_item_code": entity_name}
             ):
                 entity_doctype = "Product Bundle"
-                # Product Bundle's docname == wrapper item_code in this codebase.
             write_item_push_sync_record(
                 entity_doctype=entity_doctype,
                 entity_name=entity_name,
-                sku=outcome.item_code,
+                sku=entity_name,
                 status=status,
                 last_error=last_error,
             )
@@ -165,10 +206,13 @@ def _with_push_sync_record(fn):
             frappe.log_error(
                 title=(
                     f"EasyEcom: push Sync Record write failed for "
-                    f"{getattr(outcome, 'item_code', '?')}"
+                    f"{item_code}"
                 ),
                 message=f"{type(sr_exc).__name__}: {sr_exc}",
             )
+
+        if raised is not None:
+            raise raised
         return outcome
 
     return wrapper
