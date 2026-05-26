@@ -18,6 +18,12 @@ app_color = "blue"
 app_home = "/app/easyecom"
 app_logo_url = "/assets/ecommerce_super/images/easyecom.svg"
 
+# §8e Stage 6 — full-width layout override for the EasyEcom workspace.
+# The default Frappe desk centers workspace content with side gutters
+# which wastes horizontal space on a dashboard with many cards. Scoped
+# to data-page-route="easyecom" so other workspaces are unaffected.
+app_include_css = "/assets/ecommerce_super/css/easyecom_workspace.css"
+
 
 # ============================================================
 # v16 apps screen (the launcher at /desk)

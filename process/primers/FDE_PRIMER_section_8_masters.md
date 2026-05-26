@@ -341,4 +341,87 @@ The individual-push trigger (push-on-item-save) is **built but not auto-wired** 
 
 ---
 
+## Part J — Customer / Wholesale B2B (§8.2)
+
+*Append to `process/primers/FDE_PRIMER_section_8_masters.md`, after Part I (Item), before the trailer line. Same FDE-facing voice as Parts F–I. This is orientation, not a test script (that's `section_8e_customer.md`).*
+
+---
+
+## What the Customer master is
+
+This master syncs **wholesale B2B trade partners** — the companies you sell to wholesale. EasyEcom exposes them at `/Wholesale/v2/UserManagement?type=b2b`. These are real, named businesses with a GSTIN and addresses, synced **bidirectionally** with the same two-phase flip model as Item.
+
+**Important scope boundary:** this master is ONLY for wholesale B2B customers. Marketplace end-buyers (the anonymous consumers behind Amazon/Flipkart orders) are NOT handled here — they're an order-flow concern (§11/§12), where they attach to a per-marketplace pseudo-customer pool. If you're looking for "where do my Amazon B2C buyers go," that's the order flow, not this master.
+
+## The two phases — same as Item
+
+**Onboarding (default):** bidirectional, supervised. Pull EE's wholesale customers in, push ERPNext's out, reconcile.
+
+**ERPNext-mastered (after flip):** ERPNext is source of truth for customers; EN→EE push is authoritative; EE-side edits become **drift** for you to decide on. The flip ("Flip Customers → ERPNext-Mastered") is one-way, role-gated, confirm-required — and **independent of the Item flip** (you flip customers and items separately).
+
+## The EasyEcom Customer Map
+
+Every synced customer has a row in **EasyEcom Customer Map**, linking the EE customer to an ERPNext **Customer** (and its Billing/Shipping Address records). Same status model as Item Map:
+
+| Status | Meaning | What you do |
+|---|---|---|
+| **Mapped** (green) | Linked and healthy. | Nothing. |
+| **Created-Flagged** (orange) | Customer created, minor non-tax issue flagged. | Review, fix, clears on next sync. |
+| **Flagged-Not-Created** (grey) | Held — a GST-relevant problem prevents creation (bad GSTIN, GSTIN-state mismatch, pincode-state mismatch). | Fix the tax/address data, re-pull. |
+| **Drift** (red) | Post-flip: EE changed a mapped customer; not accepted. | Dismiss, or Push ERPNext→EE. |
+| **Disabled** (dark grey) | Inactive. | Usually nothing. |
+
+The map is also your worklist — the workspace shows Customers in Drift / Created-Flagged / Flagged-Not-Created counts, each clicking through to the filtered list.
+
+## Matching — strictly map-row-only, no natural key
+
+Unlike Item (which auto-matches on exact SKU==item_code), Customer has **no natural-key matching at all.** A map row exists → use it; otherwise → **create a new Customer + map row.** No matching on gstNum, companyname, or email.
+
+Why: the real EE data has heavily duplicated GSTINs and company names (one GSTIN appeared 7 times across distinct partners). Auto-matching on any of these would silently collapse separate businesses into one Customer — a wrong link, which is silent corruption. The rule is "never wrongly link > never duplicate": duplicates are visible and you dedupe them; a wrong link quietly corrupts your books. So the master errs toward creating, and you dedupe by hand if needed.
+
+## GST gating — the held vs flagged split
+
+The GSTIN is the tax hinge, and India Compliance enforces it strictly. Three things send a customer to **Flagged-Not-Created (held, no Customer created)**:
+- Invalid GSTIN (bad format / check digit)
+- GSTIN's state code doesn't match the address state
+- Pincode prefix doesn't match the state
+
+All three are **GST place-of-supply-relevant**, so the master holds rather than create a customer with wrong tax data. The held row's flag names which check failed.
+
+**URP (Unregistered) is the clean escape:** an EE customer marked URP (or with no GSTIN) maps to ERPNext `gst_category = Unregistered` with an empty GSTIN — created normally, no hold. So genuinely-unregistered wholesale customers sync fine; only *invalid* GST data is held.
+
+## Push — create and update
+
+**Create** (EN→EE, `/Wholesale/CreateCustomer`): the integration manufactures the EE-mandatory fields. Two things to know:
+- EE requires a **password** on create, but the EE wholesale portal login is a dummy nobody uses — the integration sets a random string. You never deal with it.
+- EE requires **contactNumber** on create (a missing contact is rejected).
+- State is sent as an **ID** on create (resolved from the name via the cached state list).
+
+**Update** (`/Wholesale/UpdateCustomer`): sparse — only changed fields, keyed on the EE customer id. State sent as a **name** here (EE is inconsistent: id on create, name on update — the integration handles both). No password needed.
+
+**Triggers:** individual push (Customer save, gated by the **"Auto-push Customers on save" checkbox, default OFF**) + batch sweep ("Push All Pending Customers" — pushes never-pushed Company customers with an email, returns immediately).
+
+## Drift — same as Item
+
+Post-flip, an EE-side change to a mapped customer → **Drift** status + a record of which fields differ (customer-level: name/email/mobile/gstin/currency; address-level: billing & dispatch street/city/state/pincode/country, labelled by side). ERPNext is **not** overwritten. Resolve via **Dismiss** (EE change is wrong/handled — returns to Mapped, ERPNext untouched) or **Push ERPNext→EE** (re-assert SoT). **No "Accept EE Value"** — accepting EE would contradict ERPNext-mastered. A clean re-pull clears stale diff rows but the status stays Drift until you Dismiss (same as Item). You can exclude specific fields from drift detection per-customer.
+
+## What EE does NOT support for customers
+
+- **No lifecycle endpoint.** EE's wholesale API has no activate/deactivate for customers, and the read carries no active/disabled signal. So customer enable/disable stays ERPNext-local — there's no lifecycle sync either direction (unlike Item, which has ActivateDeactivateProduct).
+- **No delta/updated_after filter.** The read returns a flat full list. The scheduled pull is therefore a **daily full pull** (05:30 IST), fine at wholesale-customer cardinality (tens to low hundreds). A client with thousands of wholesale customers would need EE to expose an incremental endpoint.
+
+## The buttons
+
+On **EasyEcom Account:** Discover Customers, Push All Pending Customers, Refresh States/Countries, Flip Customers → ERPNext-Mastered, and the Auto-push-on-save checkbox (default OFF).
+On **Customer:** Push to EasyEcom (Company customers only).
+On **EasyEcom Customer Map** (Drift rows): Dismiss Drift, Push ERPNext → EE.
+
+## Parked (not yet built)
+
+Pricing & discount sync (`b2bDiscountScheme`, pricing group, invoice series, salesman, payment/delivery terms) is a later stage. Core customer + addresses + GST is what's live.
+
+**Tested by:** `../test_scripts/section_8e_customer.md`.
+
+---
+
 *As each further master ships (Item, Customer, Supplier), a new Part is appended here, and a matching test script is added.*

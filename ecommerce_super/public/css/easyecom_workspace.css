@@ -1,0 +1,34 @@
+/*
+ * EasyEcom workspace — full-width layout.
+ *
+ * Frappe's default desk centers workspace content in a max-width
+ * container with side gutters, which wastes horizontal space on
+ * dashboards with many cards. The EasyEcom workspace shows up to 9
+ * worklist + 3 KPI cards plus charts, all of which read better
+ * edge-to-edge.
+ *
+ * Scope: only the EasyEcom workspace page (matched by
+ * data-page-route="easyecom"). Other workspaces keep their default
+ * gutters.
+ */
+
+[data-page-route="easyecom"] .layout-main-section-wrapper,
+[data-route*="/easyecom"] .layout-main-section-wrapper {
+  max-width: none !important;
+}
+
+[data-page-route="easyecom"] .layout-main-section,
+[data-route*="/easyecom"] .layout-main-section {
+  max-width: none !important;
+  padding-left: 24px !important;
+  padding-right: 24px !important;
+}
+
+/* Tighten the cards a bit on full-width — the default 12-col grid
+ * leaves cards quite wide; clamp the number-card content so the big
+ * number doesn't drift off-axis. */
+[data-page-route="easyecom"] .widget-body .number,
+[data-route*="/easyecom"] .widget-body .number {
+  font-size: 28px;
+  font-weight: 600;
+}
