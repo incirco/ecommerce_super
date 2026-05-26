@@ -201,6 +201,19 @@ class EasyEcomClient:
             url = f"{self._account.api_endpoint}{endpoint}"
             log_endpoint = endpoint
 
+        # The API Call row's `endpoint` field is a 140-char Data field
+        # with search_index=1, meant to group calls by *path identity*
+        # (e.g. "/Products/GetProductMaster") so the
+        # ix_api_call_endpoint_time index can answer "all calls to
+        # GetProductMaster in the last hour" cheaply. Cursor-follow
+        # endpoints carry a long base64 token in the query string —
+        # leaving it on the field overflows the 140-char limit AND
+        # gives every cursor follow a unique endpoint, killing the
+        # index's grouping value. Keep the path only; the full URL
+        # (with cursor, redacted) already lives in request_url
+        # (length=2000).
+        log_endpoint = log_endpoint.split("?", 1)[0]
+
         request_id = str(uuid.uuid4())
         creds = self._account.get_credentials_for_client()
 

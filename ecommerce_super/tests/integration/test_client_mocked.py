@@ -174,3 +174,45 @@ class TestClientMocked(FrappeTestCase):
         # And the body must not contain the password.
         payload_text = token_call.request_payload or ""
         self.assertNotIn("test-password", payload_text)
+
+    def test_endpoint_field_excludes_query_string(self) -> None:
+        """Regression: the EasyEcom API Call `endpoint` field is a
+        140-char Data field with search_index=1 — meant to group calls
+        by path identity ("/Products/GetProductMaster") so the
+        ix_api_call_endpoint_time index can answer
+        "all GetProductMaster calls in the last hour" cheaply.
+
+        Cursor-follow calls pass `endpoint=current_cursor` which
+        contains a long base64 token in the query string. Without the
+        strip, the row hits Frappe's 140-char Data overflow throw AND
+        every cursor follow gets a unique endpoint, killing the index.
+
+        The full URL (with cursor, redacted) remains in `request_url`
+        (length=2000). Cursor lives there; identity stays in endpoint."""
+        from ecommerce_super.easyecom.client.client import EasyEcomClient
+
+        # Use a cursor-style path with a long-ish query string. The
+        # actual cursor token can be 200+ chars in production; 60 is
+        # enough to prove the field would overflow without the strip.
+        long_cursor = "ABC" * 60  # 180 chars; >140 alone
+        cursor_endpoint = f"/Products/GetProductMaster?cursor={long_cursor}"
+
+        with patch(
+            "ecommerce_super.easyecom.client.auth.requests.post",
+            return_value=_ok_token_response(),
+        ), patch(
+            "ecommerce_super.easyecom.client.client.requests.request",
+            return_value=_FakeResponse(200, {"data": [], "nextUrl": None}),
+        ):
+            client = EasyEcomClient(location_key="MOCK-LOC")
+            client.get(cursor_endpoint)
+
+        row = frappe.get_last_doc("EasyEcom API Call")
+        self.assertEqual(
+            row.endpoint, "/Products/GetProductMaster",
+            "endpoint field must be path-only (no query string); "
+            f"got {row.endpoint!r}",
+        )
+        # The full URL with the cursor token should still be preserved
+        # for debugging in request_url (length=2000 so it fits).
+        self.assertIn(long_cursor, row.request_url or "")
