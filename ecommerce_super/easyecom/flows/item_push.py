@@ -713,22 +713,42 @@ def _do_update_bundle(
     account: Any,
     ee_product_id: str,
 ) -> PushOutcome:
-    """UpdateMasterProduct for a bundle. Sends the full subProducts
-    array — EE replaces the combo's component set on update."""
-    payload = dict(payload)
-    # EE's productId on UpdateMasterProduct = the value EE returned
-    # as cp_id on GetProductMaster. See _push_update for the full
-    # context; same fix on the bundle wrapper.
+    """UpdateMasterProduct for a bundle. Sparse-payload semantics same
+    as _push_update (productId + changed fields only) with one
+    invariant: if subProducts is in the diff, send the FULL array
+    (EE replaces the combo's component set on update, so a partial
+    subProducts list would silently truncate the bundle on EE)."""
+    full_payload = dict(payload)
     write_id = wrapper_item.get("ecs_ee_cp_id")
-    payload["productId"] = int(write_id) if write_id else write_id
-    idem_key = _idempotency_key(wrapper_item, payload, account)
-    client.post(PRODUCT_MASTER_UPDATE, payload=payload, idempotency_key=idem_key)
+    full_payload["productId"] = (
+        int(write_id) if write_id else write_id
+    )
+
+    sparse_payload = _build_sparse_update_payload(
+        full_payload=full_payload, item_code=wrapper_item.item_code,
+    )
+    # Safety: if any component-level change happened, EE expects the
+    # complete subProducts array (it does a set-replace on update).
+    # Our scalar diff would only include subProducts if the LIST
+    # value differs in any way - but if it does, send the full array
+    # from the freshly-built payload, never a partial.
+    if "subProducts" in sparse_payload:
+        sparse_payload["subProducts"] = full_payload.get("subProducts")
+
+    idem_key = _idempotency_key(wrapper_item, sparse_payload, account)
+    client.post(
+        PRODUCT_MASTER_UPDATE, payload=sparse_payload,
+        idempotency_key=idem_key,
+    )
+    _save_push_snapshot(
+        item_code=wrapper_item.item_code, payload=full_payload,
+    )
     return PushOutcome(
         item_code=wrapper_item.item_code,
         pushed=True,
         operation="update",
         ee_product_id=ee_product_id,
-        ee_payload=payload,
+        ee_payload=sparse_payload,
     )
 
 
