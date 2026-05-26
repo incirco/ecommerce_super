@@ -281,6 +281,30 @@ class EasyEcomClient:
 
             status_class = classify_response(resp.status_code)
 
+            # EE wraps business-level errors in a HTTP-200 envelope:
+            #   {"code": 400, "data": [], "message": "product/sku doest not exist"}
+            # The HTTP status doesn't tell us anything in that case. If
+            # the body carries a `code` field and it's >= 400, demote
+            # the classification to a permanent failure so the call
+            # logs as Failed (not Success) and the appropriate
+            # exception is raised below. Observed live in the Harmony
+            # sandbox 2026-05-26 on UpdateMasterProduct - HTTP 200
+            # wrapping a business-level 400 was silently treated as
+            # success and the Sync Record falsely reported Success
+            # while EE rejected the write.
+            if (
+                status_class == "success"
+                and isinstance(response_body, dict)
+            ):
+                body_code = response_body.get("code")
+                if isinstance(body_code, (int, float)) and body_code >= 400:
+                    status_class = (
+                        "auth" if int(body_code) == 401
+                        else "rate_limit" if int(body_code) == 429
+                        else "transient" if 500 <= int(body_code) < 600
+                        else "permanent"
+                    )
+
             # Log every call, success or failure (§7.2).
             log_api_call(
                 account=self._account.name,
