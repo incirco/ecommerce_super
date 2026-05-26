@@ -504,6 +504,96 @@ frappe.ui.form.on("EasyEcom Account", {
         );
     },
 
+    refresh_states_countries_action(frm) {
+        if (!_ensureSaved(frm, "Save the Account before refreshing reference data.")) {
+            return;
+        }
+        frappe.show_alert({
+            message: __("Refreshing /getCountries + /getStates…"),
+            indicator: "blue",
+        });
+        frappe.call({
+            method:
+                "ecommerce_super.easyecom.api.customer_lookups.refresh_countries_and_states",
+            freeze: true,
+            freeze_message: __("Refreshing reference data…"),
+            callback(r) {
+                const result = r.message || {};
+                if (!result.ok) {
+                    frappe.msgprint({
+                        title: __("Refresh Failed"),
+                        message: result.message || __("Unknown error."),
+                        indicator: "red",
+                    });
+                    return;
+                }
+                const lines = [
+                    __(
+                        "Countries: <b>{0}</b> seen ({1} new, {2} updated, {3} skipped, {4} failed)",
+                        [
+                            result.countries_total,
+                            result.countries_new,
+                            result.countries_updated,
+                            result.countries_skipped,
+                            result.countries_failed_count,
+                        ]
+                    ),
+                    __(
+                        "States: <b>{0}</b> seen ({1} new, {2} updated, {3} skipped, {4} failed)",
+                        [
+                            result.states_total,
+                            result.states_new,
+                            result.states_updated,
+                            result.states_skipped,
+                            result.states_failed_count,
+                        ]
+                    ),
+                ];
+                if ((result.countries_failed_sample || []).length) {
+                    lines.push(
+                        "<br><b>Country failures (sample):</b><br>" +
+                            result.countries_failed_sample
+                                .map(f =>
+                                    frappe.utils.escape_html(
+                                        `${f.country || "?"} (id=${f.country_id ?? "?"}): ${f.error}`
+                                    )
+                                )
+                                .join("<br>")
+                    );
+                }
+                if ((result.states_failed_sample || []).length) {
+                    lines.push(
+                        "<br><b>State failures (sample):</b><br>" +
+                            result.states_failed_sample
+                                .map(f =>
+                                    frappe.utils.escape_html(
+                                        `${f.state_name || "?"} (id=${f.state_id ?? "?"}, country_id=${f.country_id ?? "?"}): ${f.error}`
+                                    )
+                                )
+                                .join("<br>")
+                    );
+                }
+                const overallOk =
+                    result.countries_failed_count === 0 &&
+                    result.states_failed_count === 0;
+                frappe.msgprint({
+                    title: __("Reference Data Refreshed"),
+                    message: lines.join("<br>"),
+                    indicator: overallOk ? "green" : "orange",
+                });
+            },
+            error() {
+                frappe.msgprint({
+                    title: __("Refresh Failed"),
+                    message: __(
+                        "The refresh call itself failed (network or permission)."
+                    ),
+                    indicator: "red",
+                });
+            },
+        });
+    },
+
     test_connection_action(frm) {
         if (!_ensureSaved(frm, "Save the Account before testing the connection — credentials must be persisted (encrypted) before the test can read them back transiently.")) {
             return;

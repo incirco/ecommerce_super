@@ -1,0 +1,151 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-ST-{state_id}",
+ "creation": "2026-05-26 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "state_id",
+  "state_name",
+  "country",
+  "country_id",
+  "is_union_territory",
+  "zip_section",
+  "zip_start_range",
+  "zip_end_range",
+  "zip_col_2",
+  "postal_code",
+  "zone"
+ ],
+ "fields": [
+  {
+   "fieldname": "state_id",
+   "fieldtype": "Int",
+   "label": "EE State ID",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "EasyEcom internal state id. The write-side identifier — the §8.2 push uses this value for `billingStateId` / `dispatchStateId` (int). UNIQUE at the DB level. Note: EE historically duplicates some states across legacy + merged admin units (e.g. Daman & Diu as id 35 and the merged 'Dadra & Nagar Haveli and Daman & Diu' as id 3848). The resolver prefers the LARGEST id for the same name (best-fit for the current administrative unit)."
+  },
+  {
+   "fieldname": "state_name",
+   "fieldtype": "Data",
+   "label": "State Name",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Canonical state name as EE returns it. The resolver's case-insensitive lookup key. On update push, EE expects the state NAME (not id) under `billingState` / `dispatchState`."
+  },
+  {
+   "fieldname": "country",
+   "fieldtype": "Link",
+   "label": "Country",
+   "options": "EasyEcom Country",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Link to the parent EasyEcom Country row. The discover flow looks up the country docname via country_id before inserting the state."
+  },
+  {
+   "fieldname": "country_id",
+   "fieldtype": "Int",
+   "label": "EE Country ID",
+   "reqd": 1,
+   "read_only": 1,
+   "description": "EE's country_id from the state response. Stored for fast filtering during resolve_state(name, country_id) without a JOIN."
+  },
+  {
+   "fieldname": "is_union_territory",
+   "fieldtype": "Check",
+   "label": "Union Territory",
+   "read_only": 1,
+   "default": "0"
+  },
+  {
+   "fieldname": "zip_section",
+   "fieldtype": "Section Break",
+   "label": "Pincode Range",
+   "description": "EE returns 2-3 digit prefix ranges (e.g. Karnataka 56-59 means pincodes starting with 56, 57, 58, 59). A null zip_end_range means single-prefix (zip_start_range only). validate_pincode_state() uses these for soft-flag validation (mismatch is Created-Flagged, not hard-block)."
+  },
+  {
+   "fieldname": "zip_start_range",
+   "fieldtype": "Int",
+   "label": "Zip Start Prefix",
+   "read_only": 1,
+   "description": "2-3 digit numeric prefix that marks the start of this state's pincode range."
+  },
+  {
+   "fieldname": "zip_end_range",
+   "fieldtype": "Int",
+   "label": "Zip End Prefix",
+   "read_only": 1,
+   "description": "2-3 digit numeric prefix that marks the end of this state's pincode range. Null means single-prefix state (validate_pincode_state treats null as equal to start)."
+  },
+  {
+   "fieldname": "zip_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "postal_code",
+   "fieldtype": "Data",
+   "label": "Postal Code (2-letter)",
+   "read_only": 1,
+   "description": "2-letter state code (e.g. 'KA' for Karnataka, 'AR' for Arunachal Pradesh). EE's `postal_code` field."
+  },
+  {
+   "fieldname": "zone",
+   "fieldtype": "Data",
+   "label": "Zone",
+   "read_only": 1,
+   "description": "EE's geographic zone classification (e.g. 'South', 'North East'). Informational; not used in resolver logic."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-26 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom State",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "state_id",
+ "sort_order": "ASC",
+ "states": []
+}

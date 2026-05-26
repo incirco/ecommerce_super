@@ -1,0 +1,104 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-CNTRY-{country_id}",
+ "creation": "2026-05-26 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "country_id",
+  "country_name",
+  "code_2",
+  "code_3",
+  "default_currency_code"
+ ],
+ "fields": [
+  {
+   "fieldname": "country_id",
+   "fieldtype": "Int",
+   "label": "EE Country ID",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "EasyEcom internal country id (e.g. India = 1). The join key for state lookups via /getStates?countryId=N. UNIQUE at the DB level — discover-and-cache upserts by this id."
+  },
+  {
+   "fieldname": "country_name",
+   "fieldtype": "Data",
+   "label": "Country Name",
+   "reqd": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Canonical country name as EE returns it (e.g. 'India', 'United States of America (USA)'). The resolver's case-insensitive lookup key."
+  },
+  {
+   "fieldname": "code_2",
+   "fieldtype": "Data",
+   "label": "ISO 3166-1 alpha-2",
+   "read_only": 1,
+   "description": "Two-letter country code (e.g. 'IN', 'US')."
+  },
+  {
+   "fieldname": "code_3",
+   "fieldtype": "Data",
+   "label": "ISO 3166-1 alpha-3",
+   "read_only": 1,
+   "description": "Three-letter country code (e.g. 'IND', 'USA')."
+  },
+  {
+   "fieldname": "default_currency_code",
+   "fieldtype": "Data",
+   "label": "Default Currency Code",
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "ISO 4217 currency code (e.g. 'INR', 'USD'). Used by the Stage 4 push as the default currency on CreateCustomer when ERPNext doesn't carry one."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-26 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Country",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "country_id",
+ "sort_order": "ASC",
+ "states": []
+}

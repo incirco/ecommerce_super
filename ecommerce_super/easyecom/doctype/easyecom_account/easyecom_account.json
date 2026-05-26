@@ -75,6 +75,7 @@
   "customer_master_flipped_at",
   "customer_master_mode_col_2",
   "flip_to_erpnext_mastered_customers_action",
+  "refresh_states_countries_action",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -560,6 +561,12 @@
    "fieldtype": "Button",
    "label": "Flip Customers → ERPNext-Mastered",
    "description": "One-way flip for Customer master: marks onboarding complete and switches the §8.2 pull from accept-and-create to drift-detection-only. The FDE confirms in a dialog before the flip lands. Reverse flips require manual intervention."
+  },
+  {
+   "fieldname": "refresh_states_countries_action",
+   "fieldtype": "Button",
+   "label": "Refresh States/Countries",
+   "description": "§8e Stage 2 — discover-and-cache /getCountries + /getStates. Pure foundational reference data (no entity mapping, no Sync Records, mode-irrelevant). The 8.2 push needs the int stateId for CreateCustomer's billingStateId/dispatchStateId; the pull uses the cache to soft-validate pincode-vs-state and to translate names. Idempotent — re-runs refresh in-place; never deletes legacy rows."
   },
   {
    "fieldname": "item_pull_section",

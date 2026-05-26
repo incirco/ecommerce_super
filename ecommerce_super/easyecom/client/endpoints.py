@@ -28,6 +28,12 @@ VENDOR_GET: str = "/Wms/Vendor/getVendor"  # GET
 LOCATIONS_GET: str = "/getAllLocation"  # GET — foundational (§7.7, §8.4.1)
 CHANNELS_GET: str = "/current-channel-status"  # GET — per-location (§8.6.3, §8b)
 
+# §8e Stage 2 — Customer-master foundational lookups. Reference data
+# (countries + states), discovered-and-cached. Account-scoped — no
+# company/location dimension. (§8.2 / §7.7.)
+COUNTRIES_GET: str = "/getCountries"  # GET — foundational
+STATES_GET: str = "/getStates"  # GET ?countryId=N — foundational
+
 # §8d Item Master (Pull). Cursor-paginated via `nextUrl` (≤200/page);
 # count-aware via PRODUCT_MASTER_COUNT_GET. Both are account-wide
 # (includeLocations=1 → one catalogue keyed by globally-unique SKU,
@@ -95,6 +101,9 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
         PRODUCT_MASTER_CREATE,
         PRODUCT_MASTER_UPDATE,
         PRODUCT_MASTER_ACTIVATE_DEACTIVATE,
+        # §8e Stage 2 — country / state reference data (pure foundational).
+        COUNTRIES_GET,
+        STATES_GET,
     }
 )
 

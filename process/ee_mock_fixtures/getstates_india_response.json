@@ -1,0 +1,395 @@
+{
+  "code": 200,
+  "states": [
+    {
+      "id": 1,
+      "name": "Andhra Pradesh",
+      "is_union_territory": 0,
+      "zip_start_range": 51,
+      "zip_end_range": 53,
+      "postal_code": "AP",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 2,
+      "name": "Arunachal Pradesh",
+      "is_union_territory": 0,
+      "zip_start_range": 790,
+      "zip_end_range": 792,
+      "postal_code": "AR",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 3,
+      "name": "Assam",
+      "is_union_territory": 0,
+      "zip_start_range": 78,
+      "zip_end_range": null,
+      "postal_code": "AS",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 4,
+      "name": "Bihar",
+      "is_union_territory": 0,
+      "zip_start_range": 80,
+      "zip_end_range": 85,
+      "postal_code": "BR",
+      "country_id": 1,
+      "Zone": "East"
+    },
+    {
+      "id": 5,
+      "name": "Chhattisgarh",
+      "is_union_territory": 0,
+      "zip_start_range": 49,
+      "zip_end_range": null,
+      "postal_code": "CG",
+      "country_id": 1,
+      "Zone": "Central"
+    },
+    {
+      "id": 6,
+      "name": "Goa",
+      "is_union_territory": 0,
+      "zip_start_range": 403,
+      "zip_end_range": null,
+      "postal_code": "GA",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 7,
+      "name": "Gujarat",
+      "is_union_territory": 0,
+      "zip_start_range": 36,
+      "zip_end_range": 39,
+      "postal_code": "GJ",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 8,
+      "name": "Haryana",
+      "is_union_territory": 0,
+      "zip_start_range": 12,
+      "zip_end_range": 13,
+      "postal_code": "HR",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 9,
+      "name": "Himachal Pradesh",
+      "is_union_territory": 0,
+      "zip_start_range": 17,
+      "zip_end_range": null,
+      "postal_code": "HP",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 10,
+      "name": "Jammu & Kashmir",
+      "is_union_territory": 1,
+      "zip_start_range": 18,
+      "zip_end_range": 19,
+      "postal_code": "JK",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 11,
+      "name": "Jharkhand",
+      "is_union_territory": 0,
+      "zip_start_range": 825,
+      "zip_end_range": 829,
+      "postal_code": "JH",
+      "country_id": 1,
+      "Zone": "East"
+    },
+    {
+      "id": 12,
+      "name": "Karnataka",
+      "is_union_territory": 0,
+      "zip_start_range": 56,
+      "zip_end_range": 59,
+      "postal_code": "KA",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 13,
+      "name": "Kerala",
+      "is_union_territory": 0,
+      "zip_start_range": 67,
+      "zip_end_range": 69,
+      "postal_code": "KL",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 14,
+      "name": "Madhya Pradesh",
+      "is_union_territory": 0,
+      "zip_start_range": 45,
+      "zip_end_range": 48,
+      "postal_code": "MP",
+      "country_id": 1,
+      "Zone": "Central"
+    },
+    {
+      "id": 15,
+      "name": "Maharashtra",
+      "is_union_territory": 0,
+      "zip_start_range": 40,
+      "zip_end_range": 44,
+      "postal_code": "MH",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 16,
+      "name": "Manipur",
+      "is_union_territory": 0,
+      "zip_start_range": 795,
+      "zip_end_range": null,
+      "postal_code": "MN",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 17,
+      "name": "Meghalaya",
+      "is_union_territory": 0,
+      "zip_start_range": 793,
+      "zip_end_range": 794,
+      "postal_code": "ML",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 18,
+      "name": "Mizoram",
+      "is_union_territory": 0,
+      "zip_start_range": 796,
+      "zip_end_range": null,
+      "postal_code": "MZ",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 19,
+      "name": "Nagaland",
+      "is_union_territory": 0,
+      "zip_start_range": 797,
+      "zip_end_range": 798,
+      "postal_code": "NL",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 20,
+      "name": "Odisha",
+      "is_union_territory": 0,
+      "zip_start_range": 75,
+      "zip_end_range": 77,
+      "postal_code": "OR",
+      "country_id": 1,
+      "Zone": "East"
+    },
+    {
+      "id": 21,
+      "name": "Punjab",
+      "is_union_territory": 0,
+      "zip_start_range": 14,
+      "zip_end_range": 16,
+      "postal_code": "PB",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 22,
+      "name": "Rajasthan",
+      "is_union_territory": 0,
+      "zip_start_range": 30,
+      "zip_end_range": 34,
+      "postal_code": "RJ",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 23,
+      "name": "Sikkim",
+      "is_union_territory": 0,
+      "zip_start_range": 737,
+      "zip_end_range": null,
+      "postal_code": "SK",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 24,
+      "name": "Tamil Nadu",
+      "is_union_territory": 0,
+      "zip_start_range": 60,
+      "zip_end_range": 64,
+      "postal_code": "TN",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 25,
+      "name": "Telangana",
+      "is_union_territory": 0,
+      "zip_start_range": 50,
+      "zip_end_range": null,
+      "postal_code": "TS",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 26,
+      "name": "Tripura",
+      "is_union_territory": 0,
+      "zip_start_range": 79,
+      "zip_end_range": null,
+      "postal_code": "TR",
+      "country_id": 1,
+      "Zone": "North East"
+    },
+    {
+      "id": 27,
+      "name": "Uttar Pradesh",
+      "is_union_territory": 0,
+      "zip_start_range": 20,
+      "zip_end_range": 28,
+      "postal_code": "UP",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 28,
+      "name": "Uttarakhand",
+      "is_union_territory": 0,
+      "zip_start_range": 26,
+      "zip_end_range": null,
+      "postal_code": "UK",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 29,
+      "name": "West Bengal",
+      "is_union_territory": 0,
+      "zip_start_range": 70,
+      "zip_end_range": 74,
+      "postal_code": "WB",
+      "country_id": 1,
+      "Zone": "East"
+    },
+    {
+      "id": 30,
+      "name": "Delhi",
+      "is_union_territory": 0,
+      "zip_start_range": 11,
+      "zip_end_range": null,
+      "postal_code": "DL",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 31,
+      "name": "Puducherry",
+      "is_union_territory": 0,
+      "zip_start_range": 60,
+      "zip_end_range": null,
+      "postal_code": "PY",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 32,
+      "name": "Andaman & Nicobar Islands",
+      "is_union_territory": 1,
+      "zip_start_range": 744,
+      "zip_end_range": null,
+      "postal_code": "AN",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 33,
+      "name": "Chandigarh",
+      "is_union_territory": 1,
+      "zip_start_range": 14,
+      "zip_end_range": 16,
+      "postal_code": "CH",
+      "country_id": 1,
+      "Zone": "North"
+    },
+    {
+      "id": 34,
+      "name": "Dadra & Nagar Haveli",
+      "is_union_territory": 1,
+      "zip_start_range": 39,
+      "zip_end_range": null,
+      "postal_code": "DN",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 35,
+      "name": "Daman & Diu",
+      "is_union_territory": 1,
+      "zip_start_range": 39,
+      "zip_end_range": null,
+      "postal_code": "DD",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 37,
+      "name": "Lakshadweep",
+      "is_union_territory": 1,
+      "zip_start_range": 68,
+      "zip_end_range": null,
+      "postal_code": "LD",
+      "country_id": 1,
+      "Zone": "South"
+    },
+    {
+      "id": 3848,
+      "name": "Dadra & Nagar Haveli and Daman & Diu",
+      "is_union_territory": 1,
+      "zip_start_range": 39,
+      "zip_end_range": null,
+      "postal_code": "DH",
+      "country_id": 1,
+      "Zone": "West"
+    },
+    {
+      "id": 3849,
+      "name": "Not Available",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": "NA",
+      "country_id": 1,
+      "Zone": null
+    },
+    {
+      "id": 3851,
+      "name": "Ladakh",
+      "is_union_territory": 1,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": "LA",
+      "country_id": 1,
+      "Zone": "North"
+    }
+  ]
+}
