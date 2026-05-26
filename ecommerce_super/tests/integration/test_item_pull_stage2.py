@@ -1260,3 +1260,128 @@ class TestLifecycleDisable(FrappeTestCase):
         )
         item = frappe.get_doc("Item", payload["sku"])
         self.assertEqual(item.disabled, 0)
+
+
+class TestNonFoundationalClientConstruction(FrappeTestCase):
+    """Regression: §8d Item Pull/Push endpoints are NON-foundational
+    (§31.2.4). The EasyEcom API Call controller's validate() throws
+    'Non-foundational API Calls require either a Company or a Location
+    Key' when a row lands with both blank. Item flows are account-wide
+    (no location_key), so client.company MUST be populated.
+
+    Two prior fixes in this lineage:
+      1. b5b5fd6 — removed bad `EasyEcomClient(account=...)` kwarg that
+         hit TypeError; replaced with `EasyEcomClient()`.
+      2. THIS fix — `EasyEcomClient()` constructs the client with
+         company=None, which the validate() throw caught on the first
+         real Discover Products run. Must pass company=.
+
+    The MockClient-based tests above DO bypass this branch (they pass
+    client= explicitly), so they don't cover construction. This class
+    spies on the real EasyEcomClient symbol with mock.patch to assert
+    the kwargs at the construction site itself."""
+
+    def setUp(self) -> None:
+        _wipe(PREFIX)
+        _ensure_test_company()
+        self.account_name = _ensure_account_for_pull()
+
+    def test_pull_constructs_client_with_company(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        captured: dict[str, Any] = {}
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            # Return a stand-in that satisfies the rest of pull_products
+            # enough to exit cleanly. _read_total_count and _iter_pages
+            # both go through client; an empty iterable + None count
+            # short-circuits the walk.
+            m = MagicMock()
+            m.get.return_value = {"data": [], "totalCount": 0}
+            return m
+
+        with patch(
+            "ecommerce_super.easyecom.flows.item_pull.EasyEcomClient",
+            side_effect=_spy,
+        ):
+            pull_products(account_name=self.account_name, client=None)
+
+        # company= must be present and resolve to a real Company name
+        # (validate() throws when both company AND location_key blank
+        # on a non-foundational call).
+        self.assertIn(
+            "company", captured["kwargs"],
+            "EasyEcomClient must be constructed with company= for "
+            "non-foundational Item Pull calls; got "
+            f"args={captured.get('args')} kwargs={captured.get('kwargs')}",
+        )
+        co = captured["kwargs"]["company"]
+        self.assertTrue(
+            co and frappe.db.exists("Company", co),
+            f"company= must be a real Company; got {co!r}",
+        )
+
+    def test_push_one_product_constructs_client_with_company(self) -> None:
+        """Same regression on the push side. The 4 push call sites
+        (push_all_pending_items, push_one_product whitelist,
+        push_lifecycle_product whitelist, item_push_queue_handler) all
+        construct EasyEcomClient — the whitelist wrappers are the
+        path the desk buttons hit, so cover one of them here."""
+        from unittest.mock import MagicMock, patch
+
+        from ecommerce_super.easyecom.flows.item_push import (
+            push_one_product,
+        )
+
+        # Need a real Item so the whitelist doesn't bail on "Item not
+        # found" before reaching client construction. Minimal payload.
+        item_code = f"{PREFIX}push-client-co"
+        _ensure_hsn("85171000")
+        _ensure_uom("Nos")
+        _ensure_item_group()
+        if not frappe.db.exists("Item", item_code):
+            it = frappe.new_doc("Item")
+            it.item_code = item_code
+            it.item_name = item_code
+            it.item_group = "All Item Groups"
+            it.stock_uom = "Nos"
+            it.gst_hsn_code = "85171000"
+            it.insert(ignore_permissions=True)
+
+        captured: dict[str, Any] = {}
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            m = MagicMock()
+            # push_one_product → push_one_item → executor.run → EE.post;
+            # we never reach EE because we'll patch push_one_item too
+            # to a no-op. Just return something callable.
+            return m
+
+        with patch(
+            "ecommerce_super.easyecom.flows.item_push.EasyEcomClient",
+            side_effect=_spy,
+        ), patch(
+            "ecommerce_super.easyecom.flows.item_push.push_one_item",
+            return_value=MagicMock(
+                pushed=False, operation="skipped",
+                ee_product_id=None, flag_reasons=[],
+            ),
+        ):
+            result = push_one_product(item_code=item_code)
+
+        self.assertTrue(result.get("ok"), f"push wrapper failed: {result}")
+        self.assertIn(
+            "company", captured["kwargs"],
+            "EasyEcomClient must be constructed with company= for "
+            "non-foundational Item Push calls; got "
+            f"args={captured.get('args')} kwargs={captured.get('kwargs')}",
+        )
+        co = captured["kwargs"]["company"]
+        self.assertTrue(
+            co and frappe.db.exists("Company", co),
+            f"company= must be a real Company; got {co!r}",
+        )

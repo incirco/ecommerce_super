@@ -198,7 +198,17 @@ def pull_products(
     """
     account = frappe.get_doc("EasyEcom Account", account_name)
     if client is None:
-        client = EasyEcomClient()
+        # Item Pull endpoints (GetProductMaster, GetProductMastersCount)
+        # are NON-foundational — the EasyEcom API Call validate requires
+        # either a Company or a Location Key on every persisted row.
+        # §8d items are account-wide, so we pick a Company the same way
+        # the Sync Record writes do (§audit #1): first enabled Company
+        # Settings, then first Company on the site.
+        from ecommerce_super.easyecom.flows._item_sync_records import (
+            _company_for_item_sync,
+        )
+
+        client = EasyEcomClient(company=_company_for_item_sync())
 
     outcome = PullOutcome()
     outcome.total_count_reported = _read_total_count(client)

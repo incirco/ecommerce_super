@@ -310,7 +310,11 @@ def push_all_pending(
     """
     account = frappe.get_doc("EasyEcom Account", account_name)
     if client is None:
-        client = EasyEcomClient()
+        # Push endpoints are non-foundational; client.company must be
+        # populated or API Call.validate throws ("Non-foundational API
+        # Calls require either a Company or a Location Key"). §8d items
+        # are account-wide — use the Company picker.
+        client = EasyEcomClient(company=_company_for_item_push(account_name))
     executor = FieldMappingExecutor(ITEM_PUSH_RULESET)
     enabled_companies = _enabled_companies()
 
@@ -940,7 +944,7 @@ def push_one_product(item_code: str, account: str | None = None) -> dict[str, An
         }
     account_name = _resolve_account(account)
     account_doc = frappe.get_doc("EasyEcom Account", account_name)
-    client = EasyEcomClient()
+    client = EasyEcomClient(company=_company_for_item_push(account_name))
     try:
         outcome = push_one_item(
             item_code, client=client, account=account_doc
@@ -982,7 +986,7 @@ def push_lifecycle_product(
         }
     account_name = _resolve_account(account)
     account_doc = frappe.get_doc("EasyEcom Account", account_name)
-    client = EasyEcomClient()
+    client = EasyEcomClient(company=_company_for_item_push(account_name))
     try:
         outcome = push_lifecycle(
             item_code, client=client, account=account_doc
@@ -1088,7 +1092,7 @@ def item_push_queue_handler(qj: Any) -> None:
             f"Item Push job {qj.name} missing item_code or account_name in payload"
         )
     account = frappe.get_doc("EasyEcom Account", account_name)
-    client = EasyEcomClient()
+    client = EasyEcomClient(company=_company_for_item_push(account_name))
     push_one_item(item_code, client=client, account=account)
 
 
