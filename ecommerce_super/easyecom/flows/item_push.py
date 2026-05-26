@@ -310,7 +310,7 @@ def push_all_pending(
     """
     account = frappe.get_doc("EasyEcom Account", account_name)
     if client is None:
-        client = EasyEcomClient(account=account)
+        client = EasyEcomClient()
     executor = FieldMappingExecutor(ITEM_PUSH_RULESET)
     enabled_companies = _enabled_companies()
 
@@ -940,7 +940,7 @@ def push_one_product(item_code: str, account: str | None = None) -> dict[str, An
         }
     account_name = _resolve_account(account)
     account_doc = frappe.get_doc("EasyEcom Account", account_name)
-    client = EasyEcomClient(account=account_doc)
+    client = EasyEcomClient()
     try:
         outcome = push_one_item(
             item_code, client=client, account=account_doc
@@ -982,7 +982,7 @@ def push_lifecycle_product(
         }
     account_name = _resolve_account(account)
     account_doc = frappe.get_doc("EasyEcom Account", account_name)
-    client = EasyEcomClient(account=account_doc)
+    client = EasyEcomClient()
     try:
         outcome = push_lifecycle(
             item_code, client=client, account=account_doc
@@ -1088,7 +1088,7 @@ def item_push_queue_handler(qj: Any) -> None:
             f"Item Push job {qj.name} missing item_code or account_name in payload"
         )
     account = frappe.get_doc("EasyEcom Account", account_name)
-    client = EasyEcomClient(account=account)
+    client = EasyEcomClient()
     push_one_item(item_code, client=client, account=account)
 
 

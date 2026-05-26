@@ -198,7 +198,7 @@ def pull_products(
     """
     account = frappe.get_doc("EasyEcom Account", account_name)
     if client is None:
-        client = EasyEcomClient(account=account)
+        client = EasyEcomClient()
 
     outcome = PullOutcome()
     outcome.total_count_reported = _read_total_count(client)
