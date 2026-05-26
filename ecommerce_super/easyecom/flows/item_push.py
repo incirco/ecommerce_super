@@ -559,6 +559,24 @@ def push_one_bundle(
             "edited the conditional. Fix the ruleset and re-push."
         )
 
+    # subProducts shape - known-working for UPDATE; CREATE rejects.
+    #
+    # UPDATE: `{sku, quantity}` accepted (verified live against the
+    # Harmony sandbox 2026-05-26 for VC-KITCHEN-001 - EE 200
+    # "Product Updated Successfully"). EE matches by SKU because the
+    # combo already exists and its component associations are known.
+    #
+    # CREATE: `{sku, quantity}` AND `{sku, product_id, quantity}` both
+    # rejected with body code 400 "Unable to find sub-products". EE's
+    # GetProductMaster combo sub_product carries a richer shape - sku,
+    # product_id (DIFFERENT from the standalone's product_id - the
+    # value is a combo-membership id), cpId (camelCase here, snake
+    # elsewhere), combo_cp_id, plus content fields. The right CREATE
+    # shape is unconfirmed; needs EE-side spec clarification (no
+    # CreateMasterProduct example with subProducts is in the docs
+    # the user shared). Parked 2026-05-26 - test bundle
+    # ECS-SMOKE-BUNDLE-001 deleted, no EE write happened (data: []
+    # in the rejection).
     payload["subProducts"] = [
         {"sku": c["ee_sku"], "quantity": c["qty"]} for c in components
     ]
