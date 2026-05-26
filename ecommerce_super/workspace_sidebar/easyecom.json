@@ -151,6 +151,17 @@
    "type": "Section Break"
   },
   {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "list-alt",
+   "indent": 2,
+   "keep_closed": 0,
+   "label": "Foundationals",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {
    "child": 1,
    "collapsible": 1,
    "indent": 0,
@@ -190,6 +201,17 @@
    "route_options": "{\"workflow_state\": \"To Configure\"}"
   },
   {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "list-alt",
+   "indent": 2,
+   "keep_closed": 0,
+   "label": "Items",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {
    "child": 1,
    "collapsible": 1,
    "indent": 0,
@@ -227,6 +249,17 @@
    "type": "Link",
    "url": null,
    "route_options": "{\"status\": \"Flagged-Not-Created\"}"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "list-alt",
+   "indent": 2,
+   "keep_closed": 0,
+   "label": "Customers",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
   },
   {
    "child": 1,
