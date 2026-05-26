@@ -453,42 +453,24 @@ def push_lifecycle(
     """ERPNext disable/enable → EE ActivateDeactivateProduct (§8.1.7).
 
     No-op when the item has never been pushed to EE (no cp_id) -
-    nothing on EE's side to toggle. We gate on ecs_ee_cp_id (the
-    write-side identifier) rather than ee_product_id because the
-    payload below uses cp_id; an item with product_id but no cp_id
-    can't be lifecycle-toggled.
+    nothing on EE's side to toggle. EE's ActivateDeactivateProduct
+    takes `product_id` (snake, int) but the value is the cp_id - same
+    naming-vs-semantics flip as UpdateMasterProduct's `productId`.
+    Contract confirmed against Harmony sandbox 2026-05-26 via working
+    curl with product_id=125293829 (HPC-APC-002's cp_id).
     """
     item = frappe.get_doc("Item", item_code)
-    # PARKED 2026-05-26: ActivateDeactivateProduct contract
-    # unconfirmed. Three EE-rejected attempts against the Harmony
-    # sandbox (HPC-APC-002, which UpdateMasterProduct works fine on):
-    #   - `{product_id: "25766043"}` (snake, string master_id)
-    #     -> HTTP 400 "Invalid product_id provided"
-    #   - `{productId: 125293829}`   (camel, int cp_id)
-    #     -> HTTP 400 "Unable to find the Company Product"
-    #   - `{productId: 25766043}`    (camel, int master_id)
-    #     -> HTTP 400 "Unable to find the Company Product"
-    # The error wording "Company Product" suggests EE looks up via a
-    # per-channel-partner identifier we haven't matched yet (possibly
-    # one of the per-warehouse cp_ids EE returns at
-    # includeLocations=1, or sku-keyed). Needs the EE API doc for
-    # ActivateDeactivateProduct.
-    #
-    # Until then this code emits the original snake_case shape so
-    # the smoke fails fast with the EE error rather than masking via
-    # our own classifier path. Set ecs_ee_cp_id-based shape once the
-    # contract is confirmed.
-    master_id = item.get("ecs_ee_product_id")
-    if not master_id:
+    cp_id = item.get("ecs_ee_cp_id")
+    if not cp_id:
         return PushOutcome(
             item_code=item_code,
             pushed=False,
             operation="skipped",
-            flag_reasons=["item has no ecs_ee_product_id — never pushed"],
+            flag_reasons=["item has no ecs_ee_cp_id — never pushed"],
         )
 
     payload = {
-        "product_id": master_id,
+        "product_id": int(cp_id),
         "status": 0 if item.disabled else 1,
     }
     client.post(PRODUCT_MASTER_ACTIVATE_DEACTIVATE, payload=payload)
@@ -496,7 +478,7 @@ def push_lifecycle(
         item_code=item_code,
         pushed=True,
         operation="update",  # lifecycle is an update in EE's vocabulary
-        ee_product_id=str(write_id),
+        ee_product_id=str(cp_id),
         ee_payload=payload,
     )
 
