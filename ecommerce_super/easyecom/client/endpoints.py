@@ -34,6 +34,14 @@ CHANNELS_GET: str = "/current-channel-status"  # GET — per-location (§8.6.3, 
 COUNTRIES_GET: str = "/getCountries"  # GET — foundational
 STATES_GET: str = "/getStates"  # GET ?countryId=N — foundational
 
+# §8e Stage 3+ — Wholesale Customer master.
+# /Wholesale/v2/UserManagement → list (?type=b2b) AND single (?type=b2b&id=N)
+#   - foundational at the API Call layer (account-wide; no Company tag)
+#   - the FLOW still writes Sync Records per customer (entity-sync §7.3)
+# Mirrors §8d Item Pull's "foundational endpoint + per-item Sync Record"
+# split.
+WHOLESALE_USER_MANAGEMENT: str = "/Wholesale/v2/UserManagement"  # GET — foundational
+
 # §8d Item Master (Pull). Cursor-paginated via `nextUrl` (≤200/page);
 # count-aware via PRODUCT_MASTER_COUNT_GET. Both are account-wide
 # (includeLocations=1 → one catalogue keyed by globally-unique SKU,
@@ -104,6 +112,8 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
         # §8e Stage 2 — country / state reference data (pure foundational).
         COUNTRIES_GET,
         STATES_GET,
+        # §8e Stage 3 — wholesale customer master (account-wide).
+        WHOLESALE_USER_MANAGEMENT,
     }
 )
 

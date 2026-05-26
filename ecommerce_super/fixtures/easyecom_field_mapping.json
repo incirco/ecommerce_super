@@ -525,12 +525,12 @@
   "mapping_name": "EasyEcom-Customer-Sync",
   "entity_type": "Customer",
   "direction": "Bidirectional",
-  "active": 1,
+  "active": 0,
   "missing_field_policy": "Permissive",
-  "version": 1,
+  "version": 2,
   "last_modified_by": "Administrator",
-  "last_modified_at": "2026-05-24 00:00:00",
-  "change_reason": "Initial library fixture (\u00a75.11)",
+  "last_modified_at": "2026-05-26 00:00:00",
+  "change_reason": "RETIRED in \u00a78e Stage 3 (2026-05-26). This ruleset mapped a dead EE shape (customer_id / customer_name / mobile / gstin / customer_category) from an older EE API. The real /Wholesale/v2/UserManagement endpoint we integrate against in 8e uses c_id / companyname / gstNum / billing+dispatch addresses \u2014 see EasyEcom-Customer-Pull (added in this commit) for the live shape. Left in the fixture as active=0 so the historical reference is preserved; the engine ignores inactive rulesets per the DocType's own description. Safe to delete the JSON block entirely if the FDE wants the cleanup; doing so on a separate commit so the deprecation event has its own SHA.",
   "rules": [
    {
     "erpnext_path": "name",
@@ -576,6 +576,127 @@
      },
      "default": "B2C"
     }
+   }
+  ]
+ },
+ {
+  "doctype": "EasyEcom Field Mapping",
+  "name": "EasyEcom-Customer-Pull",
+  "mapping_name": "EasyEcom-Customer-Pull",
+  "entity_type": "Customer",
+  "direction": "Pull",
+  "active": 1,
+  "missing_field_policy": "Permissive",
+  "version": 1,
+  "last_modified_by": "Administrator",
+  "last_modified_at": "2026-05-26 00:00:00",
+  "change_reason": "§8e Stage 3 — reconciled against the captured Harmony /Wholesale/v2/UserManagement?type=b2b payload (process/ee_mock_fixtures/getcustomers_b2b_response.json, 23 real records). The engine translates EE fields into a FLAT dict; the flow (customer_pull.py) splits into Customer + 2 Address docs and handles GSTIN gating, pincode-state validation, and the customer_type=Company convention. Replaces the now-retired EasyEcom-Customer-Sync which mapped a dead EE shape. Anonymous marketplace buyers (§11/§12) use EasyEcom-Customer-Anon-Pull — out of 8e scope.",
+  "rules": [
+   {
+    "erpnext_path": "ee_c_id",
+    "easyecom_path": "c_id",
+    "transform_push": "noop",
+    "transform_pull": "int_to_str",
+    "required": 1,
+    "notes": "EE's c_id is the read-side identifier (Int in EE; stored as Data on the Customer Map ee_c_id field). The push uses customerId (= c_id value) — stored separately on the Map. cpId-equivalent for §8e."
+   },
+   {
+    "erpnext_path": "customer_name",
+    "easyecom_path": "companyname",
+    "transform_push": "str_strip",
+    "transform_pull": "str_strip",
+    "required": 1,
+    "notes": "EE's `companyname` is the wholesale partner name — maps to ERPNext Customer.customer_name. Dirty duplicates exist in real data (e.g. 'TEST CUSTOMER' appears twice across c_ids); the FLOW does NOT auto-match on this field — pull always creates a new Customer when there's no map row. 'Never wrongly link > never duplicate' (§8e packet decision #1)."
+   },
+   {
+    "erpnext_path": "gstin",
+    "easyecom_path": "gstNum",
+    "transform_push": "str_upper",
+    "transform_pull": "str_upper",
+    "notes": "EE's gstNum is the GSTIN (or empty / 'URP' for unregistered parties). India Compliance enforces 15-char format on Customer.validate and throws on invalid. The FLOW catches that throw and lands the row as Flagged-Not-Created (no placeholder; the FDE fixes the source). URP handling: empty/URP → gst_category='Unregistered' + empty gstin (the FLOW sets gst_category; the engine just passes the value)."
+   },
+   {
+    "erpnext_path": "email_id",
+    "easyecom_path": "customer_support_email",
+    "transform_push": "str_lower",
+    "transform_pull": "str_lower",
+    "notes": "EE's customer_support_email maps to Customer.email_id. May be empty in real data — Permissive missing_field_policy lets the rule skip silently."
+   },
+   {
+    "erpnext_path": "mobile_no",
+    "easyecom_path": "customer_support_contact",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "EE's customer_support_contact maps to Customer.mobile_no. May be empty string in real data."
+   },
+   {
+    "erpnext_path": "default_currency",
+    "easyecom_path": "currency_code",
+    "transform_push": "str_upper",
+    "transform_pull": "str_upper",
+    "notes": "EE's currency_code (e.g. 'INR') maps to Customer.default_currency. ERPNext expects a 3-letter ISO 4217 code matching a Currency record."
+   },
+   {
+    "erpnext_path": "billing_street",
+    "easyecom_path": "billingStreet",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "Address fields — flat-namespaced; the flow splits these into a Billing Address doc linked to the Customer via Frappe's standard Address.links Dynamic Link."
+   },
+   {
+    "erpnext_path": "billing_city",
+    "easyecom_path": "billingCity",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "billing_zipcode",
+    "easyecom_path": "billingZipcode",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "billing_state_name",
+    "easyecom_path": "billingState",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "EE returns state NAME (e.g. 'Karnataka'). On push, EE's CreateCustomer needs the int stateId for billingStateId; Stage 4 will resolve via the Stage 2 cache. Stage 3 pull just stores the name."
+   },
+   {
+    "erpnext_path": "billing_country_name",
+    "easyecom_path": "billingCountry",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_street",
+    "easyecom_path": "dispatchStreet",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_city",
+    "easyecom_path": "dispatchCity",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_zipcode",
+    "easyecom_path": "dispatchZipcode",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_state_name",
+    "easyecom_path": "dispatchState",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_country_name",
+    "easyecom_path": "dispatchCountry",
+    "transform_push": "identity",
+    "transform_pull": "identity"
    }
   ]
  },

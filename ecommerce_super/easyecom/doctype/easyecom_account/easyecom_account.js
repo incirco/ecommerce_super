@@ -594,6 +594,72 @@ frappe.ui.form.on("EasyEcom Account", {
         });
     },
 
+    discover_customers_action(frm) {
+        if (!_ensureSaved(frm, "Save the Account before discovering customers.")) {
+            return;
+        }
+        frappe.show_alert({
+            message: __("Pulling /Wholesale/v2/UserManagement…"),
+            indicator: "blue",
+        });
+        frappe.call({
+            method: "ecommerce_super.easyecom.api.customer_pull.discover_customers",
+            freeze: true,
+            freeze_message: __("Pulling wholesale customers…"),
+            callback(r) {
+                const result = r.message || {};
+                if (!result.ok) {
+                    frappe.msgprint({
+                        title: __("Discover Customers Failed"),
+                        message: result.message || __("Unknown error."),
+                        indicator: "red",
+                    });
+                    return;
+                }
+                const lines = [
+                    __(
+                        "Total: <b>{0}</b> | Created: {1} | Skipped (mapped): {2} | Created-Flagged: {3} | FNC: {4} | Failed: {5}",
+                        [
+                            result.total,
+                            result.created,
+                            result.skipped,
+                            result.created_flagged,
+                            result.flagged_not_created,
+                            result.failed,
+                        ]
+                    ),
+                ];
+                if ((result.failures_sample || []).length) {
+                    lines.push(
+                        "<br><b>Failure sample:</b><br>" +
+                            result.failures_sample
+                                .map(f =>
+                                    frappe.utils.escape_html(
+                                        `c_id=${f.ee_c_id} (${f.companyname || "?"}): ${f.error}`
+                                    )
+                                )
+                                .join("<br>")
+                    );
+                }
+                const overallOk = result.failed === 0;
+                frappe.msgprint({
+                    title: __("Customer Pull Result"),
+                    message: lines.join("<br>"),
+                    indicator: overallOk ? "green" : "orange",
+                });
+            },
+            error() {
+                frappe.msgprint({
+                    title: __("Discover Customers Failed"),
+                    message: __(
+                        "The pull call itself failed (network or permission)."
+                    ),
+                    indicator: "red",
+                });
+            },
+        });
+    },
+
     test_connection_action(frm) {
         if (!_ensureSaved(frm, "Save the Account before testing the connection — credentials must be persisted (encrypted) before the test can read them back transiently.")) {
             return;

@@ -76,6 +76,7 @@
   "customer_master_mode_col_2",
   "flip_to_erpnext_mastered_customers_action",
   "refresh_states_countries_action",
+  "discover_customers_action",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -567,6 +568,12 @@
    "fieldtype": "Button",
    "label": "Refresh States/Countries",
    "description": "§8e Stage 2 — discover-and-cache /getCountries + /getStates. Pure foundational reference data (no entity mapping, no Sync Records, mode-irrelevant). The 8.2 push needs the int stateId for CreateCustomer's billingStateId/dispatchStateId; the pull uses the cache to soft-validate pincode-vs-state and to translate names. Idempotent — re-runs refresh in-place; never deletes legacy rows."
+  },
+  {
+   "fieldname": "discover_customers_action",
+   "fieldtype": "Button",
+   "label": "Discover Customers",
+   "description": "§8e Stage 3 — pull wholesale customers from /Wholesale/v2/UserManagement?type=b2b. Creates one Customer + Billing Address + Shipping Address + Customer Map row per EE c_id. Matching: map row exists → reuse; else create new (no natural-key auto-match — gstNum and companyname are dirty/duplicated in real EE data). GSTIN gating via India Compliance; pincode/state mismatch → Created-Flagged (soft). Run Refresh States/Countries first if the cache is empty."
   },
   {
    "fieldname": "item_pull_section",
