@@ -602,26 +602,26 @@ def push_one_bundle(
             "edited the conditional. Fix the ruleset and re-push."
         )
 
-    # subProducts shape - known-working for UPDATE; CREATE rejects.
-    #
-    # UPDATE: `{sku, quantity}` accepted (verified live against the
-    # Harmony sandbox 2026-05-26 for VC-KITCHEN-001 - EE 200
-    # "Product Updated Successfully"). EE matches by SKU because the
-    # combo already exists and its component associations are known.
-    #
-    # CREATE: `{sku, quantity}` AND `{sku, product_id, quantity}` both
-    # rejected with body code 400 "Unable to find sub-products". EE's
-    # GetProductMaster combo sub_product carries a richer shape - sku,
-    # product_id (DIFFERENT from the standalone's product_id - the
-    # value is a combo-membership id), cpId (camelCase here, snake
-    # elsewhere), combo_cp_id, plus content fields. The right CREATE
-    # shape is unconfirmed; needs EE-side spec clarification (no
-    # CreateMasterProduct example with subProducts is in the docs
-    # the user shared). Parked 2026-05-26 - test bundle
-    # ECS-SMOKE-BUNDLE-001 deleted, no EE write happened (data: []
-    # in the rejection).
+    # Component list. EE matches by SKU (the combo's component
+    # associations are looked up by EE-side SKU). The PARENT KEY name
+    # differs by operation - EE is inconsistent:
+    #   - UPDATE expects `subProducts` (plural) — verified live against
+    #     Harmony 2026-05-26 for VC-KITCHEN-001.
+    #   - CREATE expects `subProduct` (singular) — verified live against
+    #     Harmony 2026-05-26 via FDE-shared working curl (test combo
+    #     Test01 + components HPC-TBC-003 / HPC-DSH-004, EE returned
+    #     {"code": 200, "data": {"product_id": 206544800}}).
+    # We build with the plural here (UPDATE shape, also what the
+    # snapshot stores so future diffs stay stable) and let
+    # _do_create_bundle do the singular rename at the EE boundary.
+    # `quantity` must be Integer - EE rejects decimals with body code
+    # 400 "Quantity cannot be a decimal value". ERPNext Product Bundle
+    # items.qty is a Float so we int-round at the boundary (combo
+    # quantities are conceptually whole units; fractional units of a
+    # bundle component don't have an EE-side meaning).
     payload["subProducts"] = [
-        {"sku": c["ee_sku"], "quantity": c["qty"]} for c in components
+        {"sku": c["ee_sku"], "quantity": int(round(c["qty"]))}
+        for c in components
     ]
 
     # === Route Create vs Update — keyed on bundle's OWN map row ===
@@ -719,12 +719,23 @@ def _do_create_bundle(
     account: Any,
     existing_map: dict | None,
 ) -> PushOutcome:
-    """CreateMasterProduct for a bundle (itemType=1, with subProducts).
+    """CreateMasterProduct for a bundle (itemType=1, with subProduct).
     Returned product_id writes back to the BUNDLE's map row (not the
-    wrapper Item's — bundles have their own map row per §8.1.2)."""
-    idem_key = _idempotency_key(wrapper_item, payload, account)
+    wrapper Item's — bundles have their own map row per §8.1.2).
+
+    EE Create vs Update inconsistency: CREATE expects the parent key
+    `subProduct` (singular); UPDATE expects `subProducts` (plural).
+    The build path in `push_one_bundle` stores the plural form (so the
+    snapshot is stable across operations). Rename at the wire boundary
+    here for the CREATE request only.
+    """
+    create_payload = dict(payload)
+    if "subProducts" in create_payload:
+        create_payload["subProduct"] = create_payload.pop("subProducts")
+    idem_key = _idempotency_key(wrapper_item, create_payload, account)
     response = client.post(
-        PRODUCT_MASTER_CREATE, payload=payload, idempotency_key=idem_key
+        PRODUCT_MASTER_CREATE, payload=create_payload,
+        idempotency_key=idem_key,
     )
     returned_product_id = ((response or {}).get("data") or {}).get("product_id")
     if not returned_product_id:
@@ -756,6 +767,14 @@ def _do_create_bundle(
         wrapper_item.db_set(
             "ecs_ee_cp_id", product_id_str, update_modified=False
         )
+    # Save the snapshot with the canonical (plural) subProducts key so
+    # the next UPDATE can diff against it. We persist the BUILDER payload
+    # (`payload`), not the boundary-renamed `create_payload`, so all
+    # snapshots in the system carry the plural form regardless of which
+    # operation populated them.
+    _save_push_snapshot(
+        item_code=wrapper_item.item_code, payload=payload,
+    )
     return PushOutcome(
         item_code=wrapper_item.item_code,
         pushed=True,
