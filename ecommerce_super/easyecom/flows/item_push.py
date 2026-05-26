@@ -445,10 +445,14 @@ def push_lifecycle(
 # ============================================================
 
 
-# EE rejects a combo with fewer than 2 sub-products (per §8.1.6 spec
-# echoing EE FAQ). The constraint is symmetric — pull also flags a
-# combo that arrives with <2 sub_products.
-MIN_COMBO_SUB_PRODUCTS: int = 2
+# A combo must aggregate to at least 2 units total - mirrors the
+# pull-side MIN_COMBO_TOTAL_QTY. EE accepts both shapes: multiple
+# distinct sub-products (each qty>=1) OR a single sub-product with
+# qty>=2 (multi-pack offer). Confirmed against Harmony sandbox
+# 2026-05-26 - EE allowed creating a combo with 1 sub_product qty=2.
+# A combo whose components total qty 1 is identical to selling the
+# standalone, so we still flag that case rather than push it to EE.
+MIN_COMBO_TOTAL_QTY: int = 2
 
 
 @_with_push_sync_record
@@ -467,7 +471,8 @@ def push_one_bundle(
     - Components must exist EE-side BEFORE the combo references them
       (dependency-ordering). A component without an ee_product_id
       → FLAG the bundle, don't push a broken combo.
-    - EE requires ≥2 sub-products → FLAG if fewer.
+    - Combo must aggregate total qty >=2 (multi-pack 1xN ok, true
+      N-distinct combo ok, 1x1 flagged as degenerate).
     - The bundle gets its OWN map row (linked to "Product Bundle",
       not the wrapper Item). The wrapper Item itself never gets a
       map row from the push path — it exists to anchor the bundle
@@ -500,12 +505,14 @@ def push_one_bundle(
             flag_reasons=resolution_errors,
         )
 
-    if len(components) < MIN_COMBO_SUB_PRODUCTS:
+    total_qty = sum(float(c.get("qty") or 0) for c in components)
+    if total_qty < MIN_COMBO_TOTAL_QTY:
         reason = (
-            f"EE requires a combo to have at least {MIN_COMBO_SUB_PRODUCTS} "
-            f"sub-products; this bundle has {len(components)}. "
-            "Add more components in the Product Bundle (or push the "
-            "wrapper Item as a normal product instead)."
+            f"combo's total component qty is {total_qty}; needs total "
+            f"qty >={MIN_COMBO_TOTAL_QTY} to push as a combo "
+            "(a 1x1 combo is identical to the standalone). Either "
+            "raise a component's qty, add more components, or push "
+            "the wrapper Item as a normal product instead."
         )
         _upsert_bundle_map_row_flagged(bundle, reasons=[reason])
         return PushOutcome(

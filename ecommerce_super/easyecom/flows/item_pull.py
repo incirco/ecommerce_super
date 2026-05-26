@@ -1335,12 +1335,19 @@ def _mark_existing_map_drift(map_name: str, *, reasons: list[str]) -> None:
 # ============================================================
 
 
-# EE rejects a combo with fewer than 2 sub-products (per §8.1.6). The
-# same constant lives in item_push.py (cross-reference) — we re-state
-# here rather than import to avoid creating an implicit module-graph
-# dependency (Stage-2 pull → Stage-3 push), and because the number is
-# an EE-protocol fact rather than a flow choice.
-MIN_COMBO_SUB_PRODUCTS: int = 2
+# A combo must aggregate to at least 2 units total to be a real combo
+# (otherwise it's the same as selling the standalone). EE allows
+# either shape - confirmed in the Harmony sandbox 2026-05-26:
+#
+#   - "true combo": multiple distinct sub-products, e.g.
+#     VC-KITCHEN-001 wraps {APC qty=1, DSH qty=1, FVW qty=1, KDG qty=1}
+#     -> total qty 4
+#   - "multi-pack":  one sub-product with qty>1, e.g. a 2-pack of X
+#     sold as a different SKU than X -> 1 sub, qty=2
+#
+# The previous rule (>=2 DISTINCT sub-products) wrongly rejected
+# multi-packs. The right invariant is "sum of qty >= 2".
+MIN_COMBO_TOTAL_QTY: int = 2
 
 
 def _process_combo_product(
@@ -1366,7 +1373,9 @@ def _process_combo_product(
          EasyEcom Item Map → ERPNext Item. UNRESOLVED component →
          FLAG the whole bundle (don't create a broken Bundle), per
          §8.1.6 component-identity-resolver model.
-      4. Enforces ≥2 sub-products (EE constraint).
+      4. Enforces total component qty >=2 (a 1x1 combo is the
+         standalone; multi-pack 1xN and true N-distinct combos
+         both pass).
       5. Creates/refreshes the wrapper Item (`is_stock_item=0` — a
          Product Bundle's new_item_code must point to a non-stock
          item; Stage 1 verified this constraint) and the
@@ -1418,14 +1427,19 @@ def _process_combo_product(
             product=product,
         )
 
-    if len(components) < MIN_COMBO_SUB_PRODUCTS:
+    total_qty = sum(float(c.get("qty") or 0) for c in components)
+    if total_qty < MIN_COMBO_TOTAL_QTY:
+        comp_summary = ", ".join(
+            f"{c.get('item_code')}*{c.get('qty')}" for c in components
+        ) or "none"
         return _flag_not_created(
             sku,
             reason=(
-                f"combo arrived with {len(components)} resolvable "
-                f"sub-products; EE requires ≥{MIN_COMBO_SUB_PRODUCTS} "
-                "to be a valid combo. FDE: check the EE combo's "
-                "sub-product list."
+                f"combo's total component qty is {total_qty} "
+                f"(components: {comp_summary}); needs total qty "
+                f">={MIN_COMBO_TOTAL_QTY} to be a meaningful combo "
+                "(a 1x1 combo is identical to selling the standalone). "
+                "FDE: increase a sub-product qty or add components."
             ),
             product=product,
         )
