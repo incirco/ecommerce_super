@@ -715,9 +715,10 @@ def _detect_drift_one_customer(
     )
 
     if not diffs:
-        # Clean re-pull — clear any stale drift child rows AND auto-heal
-        # status (Drift → Mapped). The post-clear status is always
-        # Mapped on this path (the row is clean either way).
+        # Clean re-pull — clear any stale drift child rows so the FDE
+        # doesn't see ghost diffs. Status is preserved (§8d parity):
+        # a previously-Drift row stays Drift until the FDE Dismisses;
+        # a Mapped row stays Mapped.
         _clear_drift_state(map_row.name)
         _write_pull_sync_record(
             entity_name=customer.name,
@@ -728,7 +729,7 @@ def _detect_drift_one_customer(
         return CustomerOutcome(
             ee_c_id=ee_c_id,
             customer_docname=customer.name,
-            status="Mapped",
+            status=map_row.status or "Mapped",
             operation="skipped",
         )
 
@@ -942,20 +943,16 @@ def _record_drift_with_table(map_name: str, *, diffs: list[dict]) -> None:
 def _clear_drift_state(map_name: str) -> None:
     """Clean re-pull — clear the drift table + drift_detected_at so
     historical diffs don't linger when the EE-side state has been
-    fixed upstream. Auto-heal status: if the row was Drift, reset to
-    Mapped (FDE no longer needs to manually Dismiss stale drift). This
-    diverges from §8d Item where the FDE owns the status reset; for
-    Customer we prefer auto-recovery on no-diff to keep the worklist
-    clean."""
+    fixed upstream. Mirrors §8d EXACTLY: status is left untouched
+    (FDE owns the Drift → Mapped transition via Dismiss). A Drift
+    row whose diffs vanished still requires explicit FDE acknowledgement
+    — that's the §8.2 audit-trail contract.
+    """
     map_doc = frappe.get_doc("EasyEcom Customer Map", map_name)
-    was_drift = map_doc.status == STATUS_DRIFT
-    if not map_doc.get("drift_fields") and not was_drift:
+    if not map_doc.get("drift_fields"):
         return
     map_doc.set("drift_fields", [])
     map_doc.drift_detected_at = None
-    if was_drift:
-        map_doc.status = STATUS_MAPPED
-        map_doc.flag_reason = None
     map_doc.save(ignore_permissions=True)
 
 
@@ -1091,6 +1088,47 @@ def push_to_ee_for_drift(customer_map_name: str) -> dict[str, Any]:
         "ee_customer_id": outcome.ee_customer_id,
         "flag_reasons": outcome.flag_reasons,
     }
+
+
+# ----- Scheduler entry -----
+
+
+def scheduled_discover_customers() -> None:
+    """§8e Stage 6 daily customer pull — wired in hooks.py
+    scheduler_events at 05:30 IST (after §8d Items at 05:00).
+
+    NOTE on delta semantics: unlike §8d Item Pull which uses
+    Account.item_pull_last_updated_at as an updated_after delta
+    cursor, /Wholesale/v2/UserManagement has NO updated_after filter
+    (verified against the captured Harmony fixture — no cursor / no
+    timestamp / no high-water field exists on the response shape).
+    This is therefore a FULL pull every run. The wholesale customer
+    master is small (Harmony's sample has 23) so a daily full-pull
+    is acceptable; if a future deployment grows to N>>thousand
+    customers, EE would need to expose an incremental endpoint or
+    we'd need to switch to webhook-driven sync.
+
+    Mode-aware: process_one_customer's phase gate decides whether the
+    pulled customer is accepted-and-created (onboarding) or runs
+    through drift detection (erpnext_mastered). No mode-specific
+    branching here; same pull_customers call works for both phases.
+
+    Quiet on no enabled Account (pre-onboarding state). Catches every
+    exception so a transient EE outage doesn't fail the whole
+    scheduler tick.
+    """
+    account_name = frappe.db.get_value(
+        "EasyEcom Account", {"enabled": 1}, "name", order_by="name asc"
+    )
+    if not account_name:
+        return
+    try:
+        pull_customers()
+    except Exception as exc:  # noqa: BLE001 — scheduler boundary
+        frappe.log_error(
+            title="EasyEcom scheduled customer discovery failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
 
 
 # ----- Customer Group / Territory defaults -----

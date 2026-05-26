@@ -111,6 +111,11 @@ fixtures = [
                 "Items in Drift",
                 "Items Created-Flagged",
                 "Items Flagged-Not-Created",
+                # §8e Stage 6: Customer Map worklist cards — mirror the Item
+                # three for the §17 FDE Worklist row.
+                "Customers in Drift",
+                "Customers Created-Flagged",
+                "Customers Flagged-Not-Created",
                 "Locations - To Map",
                 "Channels - Unclassified",
                 "Tax Rules - To Configure",
@@ -297,6 +302,19 @@ scheduler_events = {
         # create, per process_one_product's phase gate.
         "0 5 * * *": [
             "ecommerce_super.easyecom.flows.item_pull.scheduled_discover_products",
+        ],
+        # §8e Stage 6 daily customer pull. Runs at 05:30 IST (after
+        # Items at 05:00 — the customer master doesn't depend on the
+        # product master, but staggering keeps the EE-side per-minute
+        # API budget unburdened on a single tick).
+        # FULL pull every run — /Wholesale/v2/UserManagement exposes
+        # NO updated_after / high-water field (verified live against
+        # the captured Harmony fixture). Acceptable given the
+        # wholesale-master cardinality (Harmony: 23 customers).
+        # Phase-aware: process_one_customer reads customer_master_mode
+        # and branches to drift detection in steady state.
+        "30 5 * * *": [
+            "ecommerce_super.easyecom.flows.customer_pull.scheduled_discover_customers",
         ],
         # Connection health rollup — every 5 minutes.
         "*/5 * * * *": [

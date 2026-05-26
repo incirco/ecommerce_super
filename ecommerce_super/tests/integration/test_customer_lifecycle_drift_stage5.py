@@ -374,9 +374,12 @@ class TestQuietRePullNoFlap(FrappeTestCase):
             "Mapped",
         )
 
-    def test_quiet_repull_after_drift_clears_drift_table(self) -> None:
-        """A previously-drifted row that becomes clean again must have
-        its drift_fields table cleared (no ghost diffs)."""
+    def test_quiet_repull_after_drift_clears_table_but_status_persists(self) -> None:
+        """A previously-drifted row that becomes clean again has its
+        drift_fields child rows cleared (no ghost diffs) BUT the row's
+        Drift status PERSISTS. The FDE owns the Drift → Mapped
+        transition via Dismiss — that's the §8d-parity audit-trail
+        contract (matches the Stage 5 revert 2026-05-27)."""
         c_name, map_name = _make_mapped_customer(
             customer_name=f"{PREFIX}QUIET-RECLEAR", ee_c_id="8520002",
         )
@@ -388,22 +391,27 @@ class TestQuietRePullNoFlap(FrappeTestCase):
         process_one_customer(
             row_drift, executor=executor, account_mode=MODE_ERPNEXT_MASTERED
         )
-        # Drift recorded.
         drift_rows_before = frappe.db.count(
             "EasyEcom Item Map Drift Field",
             filters={"parent": map_name},
         )
         self.assertGreater(drift_rows_before, 0)
 
-        # Now EE-side fixes back to match ERPNext.
+        # Now EE-side fixes back to match ERPNext (or ERPNext side was
+        # updated; either way no diff now).
         row_clean = _build_ee_row(
             c_id=8520002, companyname=f"{PREFIX}QUIET-RECLEAR"
         )
         out = process_one_customer(
             row_clean, executor=executor, account_mode=MODE_ERPNEXT_MASTERED
         )
-        self.assertEqual(out.status, "Mapped")
-        # Drift child rows cleared.
+        # Status PERSISTS as Drift — FDE must Dismiss explicitly.
+        self.assertEqual(out.status, "Drift")
+        self.assertEqual(
+            frappe.db.get_value("EasyEcom Customer Map", map_name, "status"),
+            "Drift",
+        )
+        # Drift child rows are cleared (no ghost diffs).
         self.assertEqual(
             frappe.db.count(
                 "EasyEcom Item Map Drift Field",
