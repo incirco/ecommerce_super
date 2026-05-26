@@ -122,25 +122,115 @@ def make_location(
 
 
 def cleanup_easyecom_state() -> None:
-    """Tear-down helper: delete EasyEcom DocTypes' rows in a safe order.
+    """Tear-down helper - deletes ONLY test-pattern rows.
 
-    Used in test setUp/tearDown to ensure tests don't pollute each other.
-    Uses frappe.delete_doc with force=True so DocPerm-restricted DocTypes
-    (API Call, Webhook Event) can be cleaned in tests.
+    Historic foot-gun: the previous implementation deleted every row
+    of every EasyEcom DocType (`frappe.db.get_all(dt, pluck="name")`)
+    and committed. When the test suite ran against a shared site
+    that had real onboarded state, the cleanup nuked production
+    accounts/locations/configuration. Rule going forward:
+
+      * Tests may only delete rows the tests themselves created.
+      * Identification is by name pattern (test-/TEST-/MOCK-) or by
+        link to a test-pattern Account or _Test* Frappe Company.
+      * Rows that look like user data are LEFT ALONE - persistent
+        leftover test data across runs is a minor annoyance;
+        deleting user data is a catastrophe.
+
+    DocPerm-restricted DocTypes (API Call, Webhook Event) are still
+    cleaned via force=True; the pattern filter keeps the blast
+    radius bounded.
     """
-    for dt in (
-        "EasyEcom API Call",
-        "EasyEcom Webhook Event",
-        "EasyEcom Queue Job",
-        "EasyEcom Sync Record",
-        "EasyEcom Sync Cursor",
-        "EasyEcom Location",
-        "EasyEcom Company Settings",
-        "EasyEcom Account",
-    ):
-        for name in frappe.db.get_all(dt, pluck="name"):
+    # 1. Identify test EasyEcom Accounts. factories.make_account
+    #    default is "test-account"; tests may use "test-*", "TEST-*",
+    #    or - in test_account_doctype.py and test_credentials_no_readback.py
+    #    - "acc-*" (those tests create accounts via frappe.new_doc
+    #    directly, not via the factory).
+    test_accounts: list[str] = []
+    for pattern in ("test-%", "TEST-%", "acc-%"):
+        test_accounts.extend(
+            frappe.db.get_all(
+                "EasyEcom Account",
+                filters=[["name", "like", pattern]],
+                pluck="name",
+            )
+        )
+
+    # 2. Identify test Companies (Frappe convention - "_Test*").
+    test_companies = frappe.db.get_all(
+        "Company",
+        filters=[["name", "like", "\\_Test%"]],
+        pluck="name",
+    )
+
+    # 3. Log rows: scope by account OR company link, depending on
+    #    which link field each DocType carries.
+    log_doctype_scope = (
+        ("EasyEcom API Call", "easyecom_account", test_accounts),
+        ("EasyEcom Sync Record", "company", test_companies),
+        ("EasyEcom Queue Job", "company", test_companies),
+        ("EasyEcom Sync Cursor", "company", test_companies),
+        ("EasyEcom Webhook Event", "company", test_companies),
+        ("EasyEcom Company Settings", "company", test_companies),
+    )
+    for dt, link_field, scope in log_doctype_scope:
+        if not scope:
+            continue
+        for name in frappe.db.get_all(
+            dt, filters=[[link_field, "in", scope]], pluck="name"
+        ):
             try:
-                frappe.delete_doc(dt, name, force=True, ignore_permissions=True)
+                frappe.delete_doc(
+                    dt, name, force=True, ignore_permissions=True
+                )
             except Exception:
                 pass
+
+    # 4. Test Locations - factories.make_location names them
+    #    "ECS-LOC-{location_key}" where location_key defaults to
+    #    "TEST-LOC-001" and mock tests pass "MOCK-LOC". Tests that
+    #    create locations directly via frappe.new_doc use prefixes
+    #    L-*, LOC-*, SOT-*. The location_discovery test fixture uses
+    #    "ne2948810*" to mirror the real EE response shape it captured.
+    #    Real EE locations the FDE imports are auto-named with the
+    #    EE-side location id, which (per the real data observed in the
+    #    Harmony sandbox) starts with a 2-letter prefix the user did
+    #    NOT pick - so a generic "ECS-LOC-%" filter is unsafe and we
+    #    enumerate the test prefixes explicitly.
+    location_patterns = (
+        "ECS-LOC-TEST%",
+        "ECS-LOC-MOCK%",
+        "ECS-LOC-L-%",
+        "ECS-LOC-LOC-%",
+        "ECS-LOC-SOT-%",
+        "ECS-LOC-ne2948810%",  # location_discovery fixture
+    )
+    for pattern in location_patterns:
+        for name in frappe.db.get_all(
+            "EasyEcom Location",
+            filters=[["name", "like", pattern]],
+            pluck="name",
+        ):
+            try:
+                frappe.delete_doc(
+                    "EasyEcom Location",
+                    name,
+                    force=True,
+                    ignore_permissions=True,
+                )
+            except Exception:
+                pass
+
+    # 5. Finally - the test Accounts themselves.
+    for name in test_accounts:
+        try:
+            frappe.delete_doc(
+                "EasyEcom Account",
+                name,
+                force=True,
+                ignore_permissions=True,
+            )
+        except Exception:
+            pass
+
     frappe.db.commit()
