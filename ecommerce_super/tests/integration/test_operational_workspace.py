@@ -143,7 +143,7 @@ class TestWorkspaceSidebarMirrorsWorkspace(FrappeTestCase):
         items = frappe.db.get_all(
             "Workspace Sidebar Item",
             filters={"parent": self.SIDEBAR_NAME, "type": "Link"},
-            fields=["label", "link_type", "link_to"],
+            fields=["label", "link_type", "link_to", "url"],
         )
         worklist_labels = {
             i.label for i in items
@@ -154,8 +154,11 @@ class TestWorkspaceSidebarMirrorsWorkspace(FrappeTestCase):
             EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS,
             "Sidebar missing one of the 6 FDE worklist URL items.",
         )
-        # Each worklist link is a URL pointing at a list view with a
-        # status / workflow_state filter.
+        # Each worklist link is link_type=URL with the destination in
+        # the `url` field — Frappe v16's sidebar_item.js reads
+        # this.item.url for URL-typed items (NOT link_to). Putting
+        # the URL string in link_to leaves the rendered item with no
+        # navigation path → not clickable. This test pins that bug.
         worklist_items = [i for i in items
                           if i.label in EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS]
         for w in worklist_items:
@@ -164,7 +167,13 @@ class TestWorkspaceSidebarMirrorsWorkspace(FrappeTestCase):
                 f"FDE worklist sidebar link {w.label!r} should be a URL "
                 f"(filtered list view), not {w.link_type!r}",
             )
-            self.assertIn("?", w.link_to or "",
+            self.assertTrue(
+                w.url,
+                f"{w.label}: URL value must live in the `url` field, "
+                "not `link_to` (Frappe v16 sidebar_item.js reads "
+                "this.item.url for URL-typed items).",
+            )
+            self.assertIn("?", w.url or "",
                           f"{w.label}: URL should carry a filter (?...)")
 
 
