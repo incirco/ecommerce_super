@@ -143,20 +143,9 @@
    "child": 0,
    "collapsible": 1,
    "icon": "filter",
-   "indent": 1,
-   "keep_closed": 0,
-   "label": "FDE Worklists",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Section Break"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "icon": "list-alt",
    "indent": 2,
    "keep_closed": 0,
-   "label": "Foundationals",
+   "label": "Worklist: Foundationals",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Section Break"
@@ -203,10 +192,10 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "list-alt",
+   "icon": "filter",
    "indent": 2,
    "keep_closed": 0,
-   "label": "Items",
+   "label": "Worklist: Items",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Section Break"
@@ -253,10 +242,10 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "list-alt",
+   "icon": "filter",
    "indent": 2,
    "keep_closed": 0,
-   "label": "Customers",
+   "label": "Worklist: Customers",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Section Break"
