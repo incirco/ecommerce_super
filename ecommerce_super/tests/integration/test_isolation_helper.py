@@ -47,12 +47,19 @@ class TestForEachRecordIsolation(FrappeTestCase):
         _wipe_accounts(self.PREFIX)
 
     def _insert_account(self, name: str) -> None:
-        """Per-record handler that writes one EasyEcom Account."""
+        """Per-record handler that writes one EasyEcom Account.
+
+        enabled=0 deliberately: the §8.1 single-Account constraint (added
+        as part of the §8d audit follow-up) forbids more than one
+        enabled Account; this test creates multiple Accounts in one
+        batch to exercise per-record savepoint isolation, not to
+        exercise Account-semantics. The savepoint behaviour the
+        test asserts is independent of the enabled flag."""
         doc = frappe.new_doc("EasyEcom Account")
         doc.update(
             {
                 "account_name": name,
-                "enabled": 1,
+                "enabled": 0,
                 "environment_badge": "Sandbox",
                 "api_endpoint": "https://api.example.test",
                 "x_api_key": "stub-key",

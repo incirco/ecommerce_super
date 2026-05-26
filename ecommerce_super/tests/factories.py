@@ -13,9 +13,31 @@ def make_account(
     tier: str = "Silver",
     enabled: bool = True,
 ) -> str:
-    """Insert (or return name of) a test EasyEcom Account."""
+    """Insert (or return name of) a test EasyEcom Account.
+
+    Honours the §8.1 single-Account constraint (enforced by the
+    Account controller's validate as of the audit follow-up): when
+    creating an `enabled=True` account, first disable any other
+    currently-enabled accounts. Tests that build accounts across
+    several test classes therefore never trip the constraint —
+    whichever test most-recently called make_account holds the
+    "enabled" slot.
+
+    Existing accounts already named the same are returned as-is
+    (no constraint check needed since enabled state isn't being
+    changed)."""
     if frappe.db.exists("EasyEcom Account", name):
         return name
+    if enabled:
+        # Disable any other currently-enabled account via db.set_value
+        # (bypasses validate so we don't recurse into the constraint).
+        for other in frappe.db.get_all(
+            "EasyEcom Account", filters={"enabled": 1}, pluck="name"
+        ):
+            frappe.db.set_value(
+                "EasyEcom Account", other, "enabled", 0, update_modified=False
+            )
+        frappe.db.commit()
     doc = frappe.new_doc("EasyEcom Account")
     doc.update(
         {

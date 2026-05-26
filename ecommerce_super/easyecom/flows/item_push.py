@@ -71,6 +71,7 @@ from ecommerce_super.easyecom.doctype.easyecom_tax_rule_map.easyecom_tax_rule_ma
 )
 from ecommerce_super.easyecom.field_mapping.executor import FieldMappingExecutor
 from ecommerce_super.easyecom.flows._isolation import for_each_record
+from ecommerce_super.easyecom.queue import enqueue_easyecom_job
 from ecommerce_super.easyecom.utils.idempotency import item_push_key
 
 ITEM_PUSH_RULESET: str = "EasyEcom-Item-Push"
@@ -125,6 +126,55 @@ class SweepOutcome:
 # ============================================================
 
 
+def _with_push_sync_record(fn):
+    """Decorator that writes a Sync Record after the push function
+    returns, mapping the PushOutcome to (status, last_error). Audit
+    fix #1 — every push op gets a Sync Record so §22 alert routing
+    can subscribe to push failures."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        outcome = fn(*args, **kwargs)
+        try:
+            from ecommerce_super.easyecom.flows._item_sync_records import (
+                map_outcome_to_sync_status,
+                write_item_push_sync_record,
+            )
+
+            status, last_error = map_outcome_to_sync_status(outcome, "Push")
+            # entity_doctype: Item for normal items / lifecycle calls;
+            # bundles' push_one_bundle returns ee.item_code = the
+            # wrapper Item's code, but the entity is conceptually
+            # the Product Bundle. Detect via Product Bundle existence.
+            entity_doctype = "Item"
+            entity_name = outcome.item_code
+            if frappe.db.exists(
+                "Product Bundle", {"new_item_code": outcome.item_code}
+            ):
+                entity_doctype = "Product Bundle"
+                # Product Bundle's docname == wrapper item_code in this codebase.
+            write_item_push_sync_record(
+                entity_doctype=entity_doctype,
+                entity_name=entity_name,
+                sku=outcome.item_code,
+                status=status,
+                last_error=last_error,
+            )
+        except Exception as sr_exc:  # noqa: BLE001
+            frappe.log_error(
+                title=(
+                    f"EasyEcom: push Sync Record write failed for "
+                    f"{getattr(outcome, 'item_code', '?')}"
+                ),
+                message=f"{type(sr_exc).__name__}: {sr_exc}",
+            )
+        return outcome
+
+    return wrapper
+
+
+@_with_push_sync_record
 def push_one_item(
     item_code: str,
     *,
@@ -310,6 +360,45 @@ def push_all_pending(
     return outcome
 
 
+def enqueue_push_all_pending(
+    *, account_name: str, limit: int | None = None
+) -> dict[str, Any]:
+    """Enqueue one Item Push job per sweep candidate (audit #8).
+
+    Replaces push_all_pending's inline-loop usage for the FDE-facing
+    button. Returns IMMEDIATELY with a list of enqueued Queue Job
+    docnames + counts; the FDE's browser doesn't hang through N
+    sequential EE calls.
+
+    Same which-items policy as push_all_pending (which is still used
+    for tests + tooling that wants synchronous results with a mock
+    client injected).
+
+    The enqueued handler (item_push_queue_handler) calls
+    push_one_item per item; failures land on each job's Queue Job
+    row and on the Item Map's Flagged-Not-Created status; the FDE
+    sees both via the workspace number cards and the Queue Job
+    list. No single-point-of-failure batch state to wrangle.
+    """
+    candidate_codes = _candidate_items_for_sweep(limit=limit)
+    enqueued: list[str] = []
+    for item_code in candidate_codes:
+        try:
+            qj_name = enqueue_item_push(item_code, account_name=account_name)
+            enqueued.append(qj_name)
+        except Exception as exc:  # noqa: BLE001
+            frappe.log_error(
+                title=f"EasyEcom sweep enqueue failed: {item_code}",
+                message=f"{type(exc).__name__}: {exc}",
+            )
+    return {
+        "total_considered": len(candidate_codes),
+        "enqueued_count": len(enqueued),
+        "queue_job_names_sample": enqueued[:10],
+    }
+
+
+@_with_push_sync_record
 def push_lifecycle(
     item_code: str, *, client: EasyEcomClient, account: Any
 ) -> PushOutcome:
@@ -358,6 +447,7 @@ def push_lifecycle(
 MIN_COMBO_SUB_PRODUCTS: int = 2
 
 
+@_with_push_sync_record
 def push_one_bundle(
     bundle_name: str,
     *,
@@ -914,32 +1004,31 @@ def push_lifecycle_product(
 
 @frappe.whitelist()
 def push_all_pending_products(account: str) -> dict[str, Any]:
-    """FDE-facing batch sweep. The Push All Pending button on the
-    EasyEcom Account form. Reports counts back inline."""
+    """FDE-facing batch sweep — ENQUEUES (audit fix #8).
+
+    Switched from inline-loop (which hung the FDE's browser through N
+    sequential EE calls) to enqueue-one-job-per-item via
+    enqueue_push_all_pending. Returns IMMEDIATELY with counts +
+    sample of enqueued Queue Job names. The FDE then watches the
+    Queue Job list / workspace number cards to see progress; each
+    item's success or failure is independent.
+    """
     _require_push_role()
     if not account:
         return {"ok": False, "message": "account required"}
     try:
-        outcome = push_all_pending(account_name=account)
+        result = enqueue_push_all_pending(account_name=account)
     except Exception as exc:  # noqa: BLE001
         frappe.log_error(
             title="EasyEcom push_all_pending_products failed",
             message=f"{type(exc).__name__}: {exc}",
         )
         return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
-    failed = [
-        {"item_code": o.item_code, "reason": " || ".join(o.flag_reasons)}
-        for o in outcome.outcomes
-        if o.operation in ("flagged", "error")
-    ]
     return {
         "ok": True,
-        "total_considered": outcome.total_considered,
-        "create_count": outcome.create_count,
-        "update_count": outcome.update_count,
-        "skipped_count": outcome.skipped_count,
-        "flagged_count": outcome.flagged_count,
-        "failed_sample": failed[:10],
+        "total_considered": result["total_considered"],
+        "enqueued_count": result["enqueued_count"],
+        "queue_job_names_sample": result["queue_job_names_sample"],
     }
 
 
@@ -948,37 +1037,109 @@ def push_all_pending_products(account: str) -> dict[str, Any]:
 # ============================================================
 
 
-def enqueue_item_push(item_code: str, *, account_name: str) -> None:
+def enqueue_item_push(item_code: str, *, account_name: str) -> str:
     """Queue-able worker entry for the individual-push trigger.
 
-    Wired by the FDE / user when ready to flip on outbound traffic.
-    NOT wired in this app's hooks.py during Stage 3 — see module
-    docstring HARD CONSTRAINT.
+    Uses the §6.3.1 facade (enqueue_easyecom_job) rather than raw
+    frappe.enqueue — the facade creates an EasyEcom Queue Job
+    tracking row so the FDE can see push state in the desk, retry
+    failures via the standard Queue Job retry button, and so the
+    QUEUE_FOR_JOB_TYPE tier routing fires (job_type='Item Push' →
+    'default' queue, 120s timeout per §31.4.3).
+
+    Used by:
+      - The auto-push hook (Item / Product Bundle doc_event)
+      - The push-all-pending batch sweep (one job per candidate
+        item — refactored from inline-loop to enqueued-per-item per
+        the §8d audit follow-up so the FDE button returns
+        immediately rather than blocking through 1000s of EE calls)
+      - Drift resolution "Push ERPNext → EE" action on the Item Map
+        form (re-asserts ERPNext as SoT via the same enqueued path)
+
+    Returns the EasyEcom Queue Job docname.
     """
-    frappe.enqueue(
-        "ecommerce_super.easyecom.flows.item_push._do_enqueued_push",
-        item_code=item_code,
-        account_name=account_name,
-        queue="default",
-        enqueue_after_commit=True,
-        deduplicate=True,
-        job_id=f"item_push:{account_name}:{item_code}",
+    payload = {"item_code": item_code, "account_name": account_name}
+    company = _company_for_item_push(account_name)
+    idem_key = _item_push_idempotency_key(
+        item_code=item_code, account_name=account_name, company=company
+    )
+    return enqueue_easyecom_job(
+        job_type="Item Push",
+        company=company,
+        target_doctype="Item",
+        target_name=item_code,
+        payload=payload,
+        idempotency_key=idem_key,
     )
 
 
-def _do_enqueued_push(*, item_code: str, account_name: str) -> None:
-    """Worker callee for enqueue_item_push. Builds a real client and
-    calls push_one_item. Wrapped in try/except so a single bad item
-    doesn't crash the worker."""
+def item_push_queue_handler(qj: Any) -> None:
+    """JOB_TYPE_HANDLERS['Item Push'] dispatch — workers.execute_job
+    calls this with the loaded Queue Job doc.
+
+    Reads target_name (item_code) + payload.account_name, builds the
+    real client, calls push_one_item. Raises on EE error so the
+    worker's retry/back-off disposition fires per §6.3.8."""
+    payload = frappe.parse_json(qj.payload) if qj.payload else {}
+    item_code = qj.target_name or payload.get("item_code")
+    account_name = payload.get("account_name")
+    if not item_code or not account_name:
+        raise ValueError(
+            f"Item Push job {qj.name} missing item_code or account_name in payload"
+        )
     account = frappe.get_doc("EasyEcom Account", account_name)
     client = EasyEcomClient(account=account)
-    try:
-        push_one_item(item_code, client=client, account=account)
-    except Exception as exc:  # noqa: BLE001 — worker boundary
-        frappe.log_error(
-            title=f"EasyEcom enqueued item push failed: {item_code}",
-            message=f"{type(exc).__name__}: {exc}",
+    push_one_item(item_code, client=client, account=account)
+
+
+def _company_for_item_push(account_name: str) -> str:
+    """Pick a Company for the Queue Job row.
+
+    §8d items are account-wide (not per-Company), but the Queue Job
+    DocType's company field is a Link to Company (real Company doc
+    required by Frappe's link validation). Prefer the first enabled
+    EasyEcom Company Settings; fall back to the first Company that
+    exists in the site so the row can land. If no Company at all is
+    configured (impossible on a real ERPNext site), raise — that's
+    a pre-onboarding state where enqueueing can't proceed.
+    """
+    row = frappe.db.get_value(
+        "EasyEcom Company Settings",
+        {"enabled": 1},
+        "company",
+        order_by="company asc",
+    )
+    if row:
+        return row
+    fallback = frappe.db.get_value(
+        "Company", filters={}, fieldname="name", order_by="creation asc"
+    )
+    if not fallback:
+        raise RuntimeError(
+            "Cannot enqueue Item Push: no Company exists on this site "
+            "(pre-onboarding state). Create a Company first."
         )
+    return fallback
+
+
+def _item_push_idempotency_key(
+    *, item_code: str, account_name: str, company: str
+) -> str:
+    """sha256('item:{company}:{item_code}:{account_name}:item_push_v1').
+
+    Used as the Queue Job's idempotency_key so a duplicate hook fire
+    (e.g. rapid double-save on the Item form) dedupes to one job.
+    The inner EE call has its OWN idempotency_key (built by
+    item_push._idempotency_key inside push_one_item) — those two are
+    separate by design: the Queue-Job key dedupes Frappe-side
+    workers; the EE-side key dedupes EE-side calls.
+    """
+    return item_push_key(
+        company=company,
+        item_code=item_code,
+        ee_location_key=account_name,
+        change_hash="item_push_v1",
+    )
 
 
 # ============================================================

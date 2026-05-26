@@ -335,6 +335,100 @@ def discover_products(
     }
 
 
+# ----- Drift resolution whitelists (audit fix #7) -----
+
+
+@frappe.whitelist()
+def dismiss_drift(item_map_name: str) -> dict[str, Any]:
+    """Drift resolution action — FDE acknowledges the EE-side change
+    is wrong or already-handled upstream. Returns the row to Mapped,
+    clears the Drift Fields table, leaves the underlying ERPNext doc
+    untouched.
+
+    The next pull will re-detect if the divergence still exists; to
+    silence persistent intentional divergence, the FDE adds the
+    field to ecs_drift_exclude_fields (audit #10) instead.
+    """
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Dismiss Drift requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not item_map_name:
+        return {"ok": False, "message": "item_map_name required"}
+    if not frappe.db.exists("EasyEcom Item Map", item_map_name):
+        return {
+            "ok": False,
+            "message": f"Item Map {item_map_name!r} not found.",
+        }
+    doc = frappe.get_doc("EasyEcom Item Map", item_map_name)
+    if doc.status != STATUS_DRIFT:
+        return {
+            "ok": False,
+            "message": (
+                f"Item Map {item_map_name!r} is not in Drift status "
+                f"(current: {doc.status}); nothing to dismiss."
+            ),
+        }
+    doc.status = STATUS_MAPPED
+    doc.flag_reason = None
+    doc.drift_detected_at = None
+    doc.set("drift_fields", [])
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {"ok": True, "item_map_name": item_map_name, "status": STATUS_MAPPED}
+
+
+# ----- Scheduler entry (audit fix #3) -----
+
+
+def scheduled_discover_products() -> None:
+    """Daily §8d delta-pull cron — wired in hooks.py scheduler_events
+    at 05:00 IST (after 8a locations 03:30, 8b channels 04:00).
+
+    Mirrors scheduled_discover_locations / scheduled_discover_channels:
+    - Catches every exception so a transient EE outage doesn't fail
+      the whole scheduler tick.
+    - Logs to Error Log so the FDE sees it on the next desk visit.
+    - Returns nothing — this is a scheduler hook, not a programmatic API.
+
+    Mode-aware: process_one_product's phase gate decides whether the
+    pulled product is accepted-and-created (onboarding) or runs
+    through drift detection (erpnext_mastered). No mode-specific
+    branching here; same pull_products call works for both phases.
+
+    Delta semantics: pull_products reads
+    Account.item_pull_last_updated_at as the updated_after parameter
+    on the first GetProductMaster call, so each daily run only sees
+    products changed since the previous successful run. A first run
+    (no high-water set) does a full walk.
+
+    Single-Account assumption (§8.1 / audit #11): finds the one
+    enabled Account and runs against it. Multiple enabled accounts
+    is now a DocType-level constraint violation; the scheduler just
+    picks the first if a multi-account state somehow exists.
+    """
+    account_name = frappe.db.get_value(
+        "EasyEcom Account", {"enabled": 1}, "name", order_by="name asc"
+    )
+    if not account_name:
+        # No enabled Account — pre-onboarding state, nothing to pull.
+        # Quiet log so a fresh deployment's daily cron doesn't spam.
+        return
+    try:
+        pull_products(account_name=account_name)
+    except Exception as exc:  # noqa: BLE001 — scheduler boundary
+        frappe.log_error(
+            title="EasyEcom scheduled product discovery failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+
+
 # ----- Helpers (kept module-private; the per-product function is the only test seam) -----
 
 
@@ -444,6 +538,26 @@ def _process_page(
         page_failures.append(
             {"ee_sku": sku, "error": f"{type(exc).__name__}: {exc}"}
         )
+        # Audit #1: write a Failed Sync Record OUTSIDE the rolled-back
+        # savepoint so the failure is visible in §18 / §22 routing.
+        try:
+            from ecommerce_super.easyecom.flows._item_sync_records import (
+                STATUS_FAILED,
+                write_item_pull_sync_record,
+            )
+
+            write_item_pull_sync_record(
+                entity_doctype="Item",
+                entity_name=sku,
+                sku=sku,
+                status=STATUS_FAILED,
+                last_error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception as inner_exc:  # noqa: BLE001
+            frappe.log_error(
+                title=f"EasyEcom: pull Failed Sync Record write failed for {sku}",
+                message=f"{type(inner_exc).__name__}: {inner_exc}",
+            )
         frappe.log_error(
             title=f"EasyEcom item pull failed: {sku}",
             message=(
@@ -494,14 +608,47 @@ def process_one_product(
     prior_pull_flag = frappe.flags.get("in_easyecom_pull")
     frappe.flags.in_easyecom_pull = True
     try:
-        return _process_one_product_inner(
+        outcome = _process_one_product_inner(
             product, product_type=product_type, sku=sku,
             account=account, executor=executor,
             enabled_companies=enabled_companies,
             is_stock_item=is_stock_item,
         )
+        _write_pull_sync_record(outcome, sku=sku)
+        return outcome
     finally:
         frappe.flags.in_easyecom_pull = prior_pull_flag
+
+
+def _write_pull_sync_record(outcome: ProductOutcome, *, sku: str) -> None:
+    """Audit #1: write a Sync Record for the pull operation.
+
+    First entity-sync flow to do this; 8e/8f follow. 8a/8b/8c are
+    foundational §7.7 and correctly don't.
+    """
+    try:
+        from ecommerce_super.easyecom.flows._item_sync_records import (
+            map_outcome_to_sync_status,
+            write_item_pull_sync_record,
+        )
+
+        status, last_error = map_outcome_to_sync_status(outcome, "Pull")
+        write_item_pull_sync_record(
+            entity_doctype=outcome.erpnext_doctype or "Item",
+            entity_name=outcome.erpnext_name or sku,
+            sku=sku,
+            status=status,
+            last_error=last_error,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A Sync Record write failure must NOT abort the per-product
+        # work that already succeeded. Log and continue — the §10
+        # three-log invariant is best-effort, not load-bearing for
+        # the underlying ERPNext write.
+        frappe.log_error(
+            title=f"EasyEcom: pull Sync Record write failed for {sku}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _process_one_product_inner(
@@ -783,28 +930,43 @@ def _detect_drift_one_product(
             created=False, flag_reasons=[reason],
         )
 
-    differences = _diff_payload_vs_doc(
-        erpnext_fields, existing_doc, compare_target=compare_target
+    # Audit #10: read FDE-marked exclude list so intentional divergence
+    # doesn't re-flag on every nightly pull. List of field names to
+    # skip in the drift comparison for THIS specific Item Map row.
+    excluded_fields = _load_excluded_fields(map_row.name)
+
+    # Audit #6: collect structured (field, erpnext_value, ee_value)
+    # tuples instead of `||`-delimited strings.
+    diffs = _diff_payload_vs_doc_structured(
+        erpnext_fields, existing_doc, excluded_fields=excluded_fields
     )
 
     # Lifecycle drift — EE active:0 vs ERPNext disabled. In onboarding
     # the pull would have flipped Item.disabled; in steady state we
-    # flag it.
-    ee_disabled = 1 if product.get("active") in (0, "0", False) else 0
-    if ee_disabled != (existing_doc.disabled or 0):
-        differences.append(
-            f"disabled: ERPNext={existing_doc.disabled or 0} "
-            f"EE→{ee_disabled}"
-        )
+    # flag it (unless excluded).
+    if "disabled" not in excluded_fields:
+        ee_disabled = 1 if product.get("active") in (0, "0", False) else 0
+        en_disabled = existing_doc.disabled or 0
+        if ee_disabled != en_disabled:
+            diffs.append(
+                {"field": "disabled",
+                 "erpnext_value": str(en_disabled),
+                 "ee_value": str(ee_disabled)}
+            )
 
-    # Bundle-specific: component-set drift.
-    if map_row.erpnext_doctype == "Product Bundle":
-        differences.extend(
-            _bundle_component_drift(product, bundle)
-        )
+    # Bundle-specific: component-set drift (unless excluded).
+    if (
+        map_row.erpnext_doctype == "Product Bundle"
+        and "combo_sub_products" not in excluded_fields
+    ):
+        bundle_diff = _bundle_component_drift_structured(product, bundle)
+        if bundle_diff is not None:
+            diffs.append(bundle_diff)
 
-    if not differences:
-        # Clean re-pull — map row left untouched (don't flap status).
+    if not diffs:
+        # Clean re-pull — map row left untouched, clear any prior
+        # drift table rows (the divergence has been resolved upstream).
+        _clear_drift_state(map_row.name)
         return ProductOutcome(
             ee_sku=sku,
             status=map_row.status or STATUS_MAPPED,
@@ -814,15 +976,135 @@ def _detect_drift_one_product(
             flag_reasons=[],
         )
 
-    _mark_existing_map_drift(map_row.name, reasons=differences)
+    _record_drift_with_table(map_row.name, diffs=diffs)
+    # Backward-compat: provide flag_reasons as human-readable strings
+    # too (ProductOutcome and tests still consume the list).
+    reason_strings = [
+        f"{d['field']}: ERPNext={d['erpnext_value']!r} EE→{d['ee_value']!r}"
+        for d in diffs
+    ]
     return ProductOutcome(
         ee_sku=sku,
         status=STATUS_DRIFT,
         erpnext_doctype=map_row.erpnext_doctype,
         erpnext_name=map_row.erpnext_name,
         created=False,
-        flag_reasons=differences,
+        flag_reasons=reason_strings,
     )
+
+
+def _load_excluded_fields(map_name: str) -> set[str]:
+    """Read the FDE-marked exclude list off the Item Map row. Empty
+    set when the FDE hasn't excluded anything (default Stage-5
+    behaviour preserved)."""
+    rows = frappe.db.get_all(
+        "EasyEcom Item Map Exclude Field",
+        filters={"parent": map_name, "parenttype": "EasyEcom Item Map"},
+        fields=["field"],
+    )
+    return {r.field for r in rows if r.field}
+
+
+def _diff_payload_vs_doc_structured(
+    erpnext_fields: dict, existing_doc: Any, *, excluded_fields: set[str]
+) -> list[dict]:
+    """Structured replacement for the Stage-5 _diff_payload_vs_doc.
+    Returns a list of dicts shaped like the EasyEcom Item Map Drift
+    Field child rows."""
+    diffs: list[dict] = []
+    for fld in DRIFT_COMPARABLE_FIELDS:
+        if fld in excluded_fields:
+            continue
+        if fld not in erpnext_fields:
+            continue
+        ee_value = erpnext_fields.get(fld)
+        en_value = existing_doc.get(fld)
+        if _values_differ(ee_value, en_value):
+            diffs.append(
+                {
+                    "field": fld,
+                    "erpnext_value": _stringify(en_value),
+                    "ee_value": _stringify(ee_value),
+                }
+            )
+    return diffs
+
+
+def _bundle_component_drift_structured(
+    product: dict, bundle: Any
+) -> dict | None:
+    """Combo subProducts diff as one structured row (field='combo_sub_products')."""
+    ee_components = sorted(
+        ((sp.get("sku") or "", sp.get("quantity") or 0)
+         for sp in (product.get("sub_products") or [])),
+        key=lambda x: x[0],
+    )
+    en_components: list[tuple[str, Any]] = []
+    for row in bundle.items or []:
+        ee_sku = frappe.db.get_value(
+            "EasyEcom Item Map",
+            {"erpnext_doctype": "Item", "erpnext_name": row.item_code},
+            "ee_sku",
+        )
+        en_components.append((ee_sku or "", row.qty or 0))
+    en_components.sort(key=lambda x: x[0])
+    if ee_components == en_components:
+        return None
+    return {
+        "field": "combo_sub_products",
+        "erpnext_value": str(en_components),
+        "ee_value": str(ee_components),
+    }
+
+
+def _record_drift_with_table(map_name: str, *, diffs: list[dict]) -> None:
+    """Audit #6: write the structured diff to the EasyEcom Item Map
+    Drift Field child table. Replaces _mark_existing_map_drift's
+    `||`-delimited Data.
+
+    Set parent map status to Drift, drift_detected_at to now, and
+    flag_reason to a short summary (e.g. '3 fields drifted') —
+    Drift Field table is the authoritative detail."""
+    map_doc = frappe.get_doc("EasyEcom Item Map", map_name)
+    map_doc.set("drift_fields", [])
+    now = frappe.utils.now_datetime()
+    for d in diffs:
+        map_doc.append(
+            "drift_fields",
+            {
+                "field": d["field"],
+                "erpnext_value": d["erpnext_value"],
+                "ee_value": d["ee_value"],
+                "detected_at": now,
+            },
+        )
+    map_doc.status = STATUS_DRIFT
+    map_doc.drift_detected_at = now
+    map_doc.flag_reason = (
+        f"{len(diffs)} field(s) drifted — see Drift Fields table below"
+    )
+    map_doc.save(ignore_permissions=True)
+
+
+def _clear_drift_state(map_name: str) -> None:
+    """Clear the drift table + drift_detected_at on a clean re-pull
+    (the divergence was resolved upstream — no need to keep the
+    historical diff lingering)."""
+    map_doc = frappe.get_doc("EasyEcom Item Map", map_name)
+    if not map_doc.get("drift_fields"):
+        return
+    map_doc.set("drift_fields", [])
+    map_doc.drift_detected_at = None
+    map_doc.save(ignore_permissions=True)
+
+
+def _stringify(v: Any) -> str:
+    """Stringify a value for the drift table's Data fields. Long
+    values truncate so the cell stays readable."""
+    if v is None:
+        return ""
+    s = str(v)
+    return s if len(s) <= 200 else (s[:197] + "...")
 
 
 def _diff_payload_vs_doc(

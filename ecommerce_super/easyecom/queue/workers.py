@@ -42,7 +42,14 @@ from ecommerce_super.easyecom.queue.routing import (
 # Example (when Master Sync is built):
 #   JOB_TYPE_HANDLERS["Item Push"] = "ecommerce_super.easyecom.flows.master_sync.item.push_handler"
 #
-JOB_TYPE_HANDLERS: dict[str, str] = {}
+JOB_TYPE_HANDLERS: dict[str, str] = {
+    # §8d Stage 3+6: per-Item push (Create / Update / lifecycle —
+    # push_one_item dispatches). Enqueued by enqueue_item_push from
+    # (a) the auto-push hook, (b) the batch sweep (one job per
+    # candidate, audit fix #8), (c) drift resolution's "Push
+    # ERPNext → EE" action.
+    "Item Push": "ecommerce_super.easyecom.flows.item_push.item_push_queue_handler",
+}
 
 
 def compute_backoff(attempts: int) -> int:

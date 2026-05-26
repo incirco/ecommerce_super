@@ -1,7 +1,7 @@
 {
  "app": "ecommerce_super",
  "charts": [],
- "content": "[{\"id\":\"hdr-intro\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>EasyEcom Integration</b></span>\",\"col\":12}},{\"id\":\"para-intro\",\"type\":\"paragraph\",\"data\":{\"text\":\"<span class=\\\"text-muted\\\">Setup &middot; Masters &middot; FDE worklists &middot; Runtime logs.</span>\",\"col\":12}},{\"id\":\"spacer-0\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"card-setup\",\"type\":\"card\",\"data\":{\"card_name\":\"Setup\",\"col\":4}},{\"id\":\"card-masters\",\"type\":\"card\",\"data\":{\"card_name\":\"Masters\",\"col\":4}},{\"id\":\"card-worklists\",\"type\":\"card\",\"data\":{\"card_name\":\"FDE Worklists\",\"col\":4}},{\"id\":\"spacer-1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"card-ops\",\"type\":\"card\",\"data\":{\"card_name\":\"Operations\",\"col\":6}},{\"id\":\"card-logs\",\"type\":\"card\",\"data\":{\"card_name\":\"Runtime Logs\",\"col\":6}}]",
+ "content": "[{\"id\": \"hdr-fde-counts\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>FDE Item Worklist</b></span>\", \"col\": 12}}, {\"id\": \"nc-drift\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"Items in Drift\", \"col\": 4}}, {\"id\": \"nc-cflag\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"Items Created-Flagged\", \"col\": 4}}, {\"id\": \"nc-fnc\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"Items Flagged-Not-Created\", \"col\": 4}}, {\"id\": \"spacer-nc\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"hdr-intro\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>EasyEcom Integration</b></span>\", \"col\": 12}}, {\"id\": \"para-intro\", \"type\": \"paragraph\", \"data\": {\"text\": \"<span class=\\\"text-muted\\\">Setup &middot; Masters &middot; FDE worklists &middot; Runtime logs.</span>\", \"col\": 12}}, {\"id\": \"spacer-0\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"card-setup\", \"type\": \"card\", \"data\": {\"card_name\": \"Setup\", \"col\": 4}}, {\"id\": \"card-masters\", \"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}, {\"id\": \"card-worklists\", \"type\": \"card\", \"data\": {\"card_name\": \"FDE Worklists\", \"col\": 4}}, {\"id\": \"spacer-1\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"card-ops\", \"type\": \"card\", \"data\": {\"card_name\": \"Operations\", \"col\": 6}}, {\"id\": \"card-logs\", \"type\": \"card\", \"data\": {\"card_name\": \"Runtime Logs\", \"col\": 6}}]",
  "creation": "2026-05-24 17:30:00",
  "custom_blocks": [],
  "docstatus": 0,
@@ -14,57 +14,303 @@
  "is_hidden": 0,
  "label": "EasyEcom",
  "links": [
-  {"hidden": 0, "is_query_report": 0, "label": "Setup", "link_count": 0, "onboard": 0, "type": "Card Break"},
-  {"hidden": 0, "is_query_report": 0, "label": "EasyEcom Account", "link_count": 0, "link_to": "EasyEcom Account", "link_type": "DocType", "onboard": 1, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Company Settings", "link_count": 0, "link_to": "EasyEcom Company Settings", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Field Mapping", "link_count": 0, "link_to": "EasyEcom Field Mapping", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Source-of-Truth Map", "link_count": 0, "link_to": "Source-of-Truth Map", "link_type": "DocType", "onboard": 0, "type": "Link"},
-
-  {"hidden": 0, "is_query_report": 0, "label": "Masters", "link_count": 0, "onboard": 0, "type": "Card Break"},
-  {"dependencies": "EasyEcom Account", "hidden": 0, "is_query_report": 0, "label": "Locations", "link_count": 0, "link_to": "EasyEcom Location", "link_type": "DocType", "onboard": 1, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Marketplaces (Channels)", "link_count": 0, "link_to": "Marketplace", "link_type": "DocType", "onboard": 1, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Tax Rule Map", "link_count": 0, "link_to": "EasyEcom Tax Rule Map", "link_type": "DocType", "onboard": 1, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Item Map", "link_count": 0, "link_to": "EasyEcom Item Map", "link_type": "DocType", "onboard": 1, "type": "Link"},
-
-  {"hidden": 0, "is_query_report": 0, "label": "FDE Worklists", "link_count": 0, "onboard": 0, "type": "Card Break"},
-  {"hidden": 0, "is_query_report": 0, "label": "Locations — To Map", "link_count": 0, "link_to": "EasyEcom Location", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Channels — Unclassified", "link_count": 0, "link_to": "Marketplace", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Tax Rules — To Configure", "link_count": 0, "link_to": "EasyEcom Tax Rule Map", "link_type": "DocType", "onboard": 0, "type": "Link"},
-
-  {"hidden": 0, "is_query_report": 0, "label": "Operations", "link_count": 0, "onboard": 0, "type": "Card Break"},
-  {"hidden": 0, "is_query_report": 0, "label": "Queue Jobs", "link_count": 0, "link_to": "EasyEcom Queue Job", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Sync Records", "link_count": 0, "link_to": "EasyEcom Sync Record", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Sync Cursors", "link_count": 0, "link_to": "EasyEcom Sync Cursor", "link_type": "DocType", "onboard": 0, "type": "Link"},
-
-  {"hidden": 0, "is_query_report": 0, "label": "Runtime Logs", "link_count": 0, "onboard": 0, "type": "Card Break"},
-  {"hidden": 0, "is_query_report": 0, "label": "API Calls", "link_count": 0, "link_to": "EasyEcom API Call", "link_type": "DocType", "onboard": 0, "type": "Link"},
-  {"hidden": 0, "is_query_report": 0, "label": "Webhook Events", "link_count": 0, "link_to": "EasyEcom Webhook Event", "link_type": "DocType", "onboard": 0, "type": "Link"}
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Setup",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "EasyEcom Account",
+   "link_count": 0,
+   "link_to": "EasyEcom Account",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Company Settings",
+   "link_count": 0,
+   "link_to": "EasyEcom Company Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Field Mapping",
+   "link_count": 0,
+   "link_to": "EasyEcom Field Mapping",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Source-of-Truth Map",
+   "link_count": 0,
+   "link_to": "Source-of-Truth Map",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Masters",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "dependencies": "EasyEcom Account",
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Locations",
+   "link_count": 0,
+   "link_to": "EasyEcom Location",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Marketplaces (Channels)",
+   "link_count": 0,
+   "link_to": "Marketplace",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Tax Rule Map",
+   "link_count": 0,
+   "link_to": "EasyEcom Tax Rule Map",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Item Map",
+   "link_count": 0,
+   "link_to": "EasyEcom Item Map",
+   "link_type": "DocType",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "FDE Worklists",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Locations \u2014 To Map",
+   "link_count": 0,
+   "link_to": "EasyEcom Location",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Channels \u2014 Unclassified",
+   "link_count": 0,
+   "link_to": "Marketplace",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Tax Rules \u2014 To Configure",
+   "link_count": 0,
+   "link_to": "EasyEcom Tax Rule Map",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Operations",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Queue Jobs",
+   "link_count": 0,
+   "link_to": "EasyEcom Queue Job",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Sync Records",
+   "link_count": 0,
+   "link_to": "EasyEcom Sync Record",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Sync Cursors",
+   "link_count": 0,
+   "link_to": "EasyEcom Sync Cursor",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Runtime Logs",
+   "link_count": 0,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "API Calls",
+   "link_count": 0,
+   "link_to": "EasyEcom API Call",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Webhook Events",
+   "link_count": 0,
+   "link_to": "EasyEcom Webhook Event",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
  ],
  "modified": "2026-05-26 14:00:00",
  "modified_by": "Administrator",
  "module": "EasyEcom",
  "name": "EasyEcom",
- "number_cards": [],
+ "number_cards": [
+  {
+   "label": "Items in Drift",
+   "number_card_name": "Items in Drift"
+  },
+  {
+   "label": "Items Created-Flagged",
+   "number_card_name": "Items Created-Flagged"
+  },
+  {
+   "label": "Items Flagged-Not-Created",
+   "number_card_name": "Items Flagged-Not-Created"
+  }
+ ],
  "owner": "Administrator",
  "parent_page": "",
  "public": 1,
  "quick_lists": [],
  "restrict_to_domain": "",
  "roles": [
-  {"role": "EasyEcom FDE"},
-  {"role": "EasyEcom System Manager"},
-  {"role": "EasyEcom Operator"}
+  {
+   "role": "EasyEcom FDE"
+  },
+  {
+   "role": "EasyEcom System Manager"
+  },
+  {
+   "role": "EasyEcom Operator"
+  }
  ],
  "sequence_id": 50.0,
  "shortcuts": [
-  {"color": "Grey", "doc_view": "List", "label": "Account", "link_to": "EasyEcom Account", "type": "DocType"},
-  {"color": "Yellow", "doc_view": "List", "label": "Locations", "link_to": "EasyEcom Location", "type": "DocType"},
-  {"color": "Yellow", "doc_view": "List", "label": "Tax Rule Map", "link_to": "EasyEcom Tax Rule Map", "type": "DocType"},
-  {"color": "Yellow", "doc_view": "List", "label": "Item Map", "link_to": "EasyEcom Item Map", "type": "DocType"},
-  {"color": "Orange", "doc_view": "List", "label": "Locations — To Map", "link_to": "EasyEcom Location", "stats_filter": "{\"workflow_state\": \"To Map\"}", "type": "DocType"},
-  {"color": "Orange", "doc_view": "List", "label": "Channels — Unclassified", "link_to": "Marketplace", "stats_filter": "{\"workflow_state\": \"Unclassified\"}", "type": "DocType"},
-  {"color": "Orange", "doc_view": "List", "label": "Tax Rules — To Configure", "link_to": "EasyEcom Tax Rule Map", "stats_filter": "{\"workflow_state\": \"To Configure\"}", "type": "DocType"},
-  {"color": "Blue", "doc_view": "List", "label": "Queue Jobs", "link_to": "EasyEcom Queue Job", "type": "DocType"}
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Account",
+   "link_to": "EasyEcom Account",
+   "type": "DocType"
+  },
+  {
+   "color": "Yellow",
+   "doc_view": "List",
+   "label": "Locations",
+   "link_to": "EasyEcom Location",
+   "type": "DocType"
+  },
+  {
+   "color": "Yellow",
+   "doc_view": "List",
+   "label": "Tax Rule Map",
+   "link_to": "EasyEcom Tax Rule Map",
+   "type": "DocType"
+  },
+  {
+   "color": "Yellow",
+   "doc_view": "List",
+   "label": "Item Map",
+   "link_to": "EasyEcom Item Map",
+   "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "doc_view": "List",
+   "label": "Locations \u2014 To Map",
+   "link_to": "EasyEcom Location",
+   "stats_filter": "{\"workflow_state\": \"To Map\"}",
+   "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "doc_view": "List",
+   "label": "Channels \u2014 Unclassified",
+   "link_to": "Marketplace",
+   "stats_filter": "{\"workflow_state\": \"Unclassified\"}",
+   "type": "DocType"
+  },
+  {
+   "color": "Orange",
+   "doc_view": "List",
+   "label": "Tax Rules \u2014 To Configure",
+   "link_to": "EasyEcom Tax Rule Map",
+   "stats_filter": "{\"workflow_state\": \"To Configure\"}",
+   "type": "DocType"
+  },
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "Queue Jobs",
+   "link_to": "EasyEcom Queue Job",
+   "type": "DocType"
+  }
  ],
  "title": "EasyEcom",
  "type": "Workspace"

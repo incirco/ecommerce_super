@@ -141,13 +141,22 @@ class TestSyncRecordLineSchema(FrappeTestCase):
 
 
 class TestSyncRecordStatusIsBinary(FrappeTestCase):
-    """§7.3: the per-record outcome is binary. No partial/discrepancy
-    Sync Record status is permitted."""
+    """§7.3: the per-record outcome is *not* simply binary — it's
+    Success | Failed | Discrepancy. Discrepancy is the
+    "succeeded-but-found-divergence" outcome (first used by §8d drift
+    detection). The §7.3 line says conflict/divergence routes to a
+    Discrepancy outcome, NOT Failed — keeping the two visibly
+    distinct so §22 alert routing can subscribe to drift events
+    without conflating with sync failures.
 
-    def test_status_enum_is_exactly_binary(self) -> None:
-        """The Select options on `status` are exactly the §31.2.3 set —
-        Pending | Running | Success | Failed | Cancelled | AlreadySynced.
-        No Partial, no Discrepancy, no completed_with_discrepancy."""
+    Partial is still forbidden — partial outcomes belong at the line
+    level, not the parent Sync Record."""
+
+    def test_status_enum_includes_discrepancy(self) -> None:
+        """Status options: Pending | Running | Success | Failed |
+        Discrepancy | Cancelled | AlreadySynced. Discrepancy added by
+        the §8d audit follow-up; matches the same value already
+        present on Sync Record Line's line_status enum."""
         meta = frappe.get_meta("EasyEcom Sync Record")
         field = meta.get_field("status")
         options = set(field.options.split("\n"))
@@ -156,14 +165,14 @@ class TestSyncRecordStatusIsBinary(FrappeTestCase):
             "Running",
             "Success",
             "Failed",
+            "Discrepancy",
             "Cancelled",
             "AlreadySynced",
         }
         self.assertEqual(options, expected)
-        # The forbidden ones — explicit so the test failure message is loud
-        # if a future change sneaks one in.
+        # Partial remains forbidden — partial outcomes are line-level,
+        # never parent-level (§7.3).
         self.assertNotIn("Partial", options)
-        self.assertNotIn("Discrepancy", options)
         self.assertNotIn("Completed With Discrepancy", options)
 
     def test_line_status_enum_is_exactly_three(self) -> None:

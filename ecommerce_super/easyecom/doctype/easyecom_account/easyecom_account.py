@@ -54,6 +54,41 @@ class EasyEcomAccount(Document):
         self._validate_webhook_config()
         self._warn_if_default_tier_in_production()
         self._update_webhook_endpoint_display()
+        self._validate_single_enabled_account()
+
+    def _validate_single_enabled_account(self) -> None:
+        """§8.1 / Stage-6-audit #11 — at most one EasyEcom Account may
+        be enabled at a time.
+
+        Multi-Account deployments aren't supported by the integration:
+        the §8d push code's _account_with_auto_push_enabled and
+        _resolve_account already refuse ambiguity at the runtime layer,
+        but a fresh deployment could silently land two enabled rows in
+        the DB before any push fires. This validate is the DocType-
+        level belt-and-suspenders: a save that would create a second
+        enabled Account fails loudly, with a message that tells the
+        FDE which other row is the conflict.
+
+        Disabled accounts (enabled=0) are unconstrained — keeping
+        historical / staging-environment rows around is fine."""
+        if not self.enabled:
+            return
+        other = frappe.db.sql(
+            """SELECT name FROM `tabEasyEcom Account`
+               WHERE enabled = 1 AND name != %s
+               LIMIT 1""",
+            (self.name or "",),
+            as_dict=True,
+        )
+        if other:
+            frappe.throw(
+                _(
+                    "Another EasyEcom Account ({0}) is already enabled. "
+                    "Disable it first, then enable this one. "
+                    "Multi-Account deployments aren't supported by §8.1."
+                ).format(other[0]["name"]),
+                title=_("Single-Account Constraint"),
+            )
 
     def _validate_api_endpoint(self) -> None:
         if not self.api_endpoint:

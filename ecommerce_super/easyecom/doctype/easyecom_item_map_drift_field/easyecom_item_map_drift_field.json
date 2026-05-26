@@ -1,0 +1,62 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-05-26 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "field",
+  "erpnext_value",
+  "ee_value",
+  "detected_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "field",
+   "fieldtype": "Data",
+   "label": "Field",
+   "in_list_view": 1,
+   "reqd": 1,
+   "columns": 2,
+   "description": "ERPNext field name (e.g. item_name, gst_hsn_code, weight_per_unit, disabled). For combo bundles, may be 'combo_sub_products' to flag a component-set drift."
+  },
+  {
+   "fieldname": "erpnext_value",
+   "fieldtype": "Data",
+   "label": "ERPNext Value",
+   "in_list_view": 1,
+   "columns": 4,
+   "description": "The current value on the ERPNext side."
+  },
+  {
+   "fieldname": "ee_value",
+   "fieldtype": "Data",
+   "label": "EE Value (Drift)",
+   "in_list_view": 1,
+   "columns": 4,
+   "description": "The new value EasyEcom is asserting; not accepted because the Account is in erpnext_mastered mode."
+  },
+  {
+   "fieldname": "detected_at",
+   "fieldtype": "Datetime",
+   "label": "Detected At",
+   "in_list_view": 1,
+   "read_only": 1,
+   "columns": 2
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-26 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Item Map Drift Field",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

@@ -15,7 +15,15 @@
   "ee_product_id",
   "ee_cp_id",
   "flag_section",
-  "flag_reason"
+  "flag_reason",
+  "drift_section",
+  "drift_detected_at",
+  "drift_fields",
+  "drift_actions_col",
+  "dismiss_drift_action",
+  "push_to_ee_action",
+  "exclude_section",
+  "ecs_drift_exclude_fields"
  ],
  "fields": [
   {
@@ -87,7 +95,59 @@
    "fieldname": "flag_reason",
    "fieldtype": "Small Text",
    "label": "Flag Reason",
-   "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: a plain-English explanation the FDE can act on (e.g. 'missing HSN', 'unsupported product_type=variant_parent', 'EE-side edit to product_name after onboarding flip')."
+   "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: a plain-English explanation the FDE can act on (e.g. 'missing HSN', 'unsupported product_type=variant_parent', 'EE-side edit to product_name after onboarding flip'). For Drift rows, the structured per-field diff lives in the Drift Fields table below; flag_reason summarises (e.g. '3 fields drifted')."
+  },
+  {
+   "fieldname": "drift_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Details",
+   "collapsible": 1,
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "Populated by the §8d post-flip drift detector (§8.1.8). One row per ERPNext field where the incoming EE payload differs from the current ERPNext doc. Cleared when the FDE dismisses (status → Mapped) or pushes ERPNext to EE (the next pull finds no drift)."
+  },
+  {
+   "fieldname": "drift_detected_at",
+   "fieldtype": "Datetime",
+   "label": "Drift Detected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drift_fields",
+   "fieldtype": "Table",
+   "label": "Drift Fields",
+   "options": "EasyEcom Item Map Drift Field",
+   "description": "Per-field divergence. field=ERPNext field name, erpnext_value=current ERPNext value, ee_value=what EE asserts (NOT accepted). Structured replacement for the prior `||`-delimited Data flag_reason; sortable / filterable in the desk."
+  },
+  {
+   "fieldname": "drift_actions_col",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "dismiss_drift_action",
+   "fieldtype": "Button",
+   "label": "Dismiss Drift (Mark Reviewed)",
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "FDE: the EE-side change is wrong / already-handled-upstream. Returns the row to Mapped and clears the Drift table; the underlying ERPNext doc is NOT touched. The next pull will re-detect if the EE-side state still differs (use the exclude list below to silence persistent intentional divergence)."
+  },
+  {
+   "fieldname": "push_to_ee_action",
+   "fieldtype": "Button",
+   "label": "Push ERPNext → EE (Re-assert SoT)",
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "FDE: ERPNext is the source of truth (per the post-flip contract); push current ERPNext values to EE via the §8d push, overwriting the EE-side divergence. Dispatches to push_one_product (or push_one_bundle for combos)."
+  },
+  {
+   "fieldname": "exclude_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Exclusions",
+   "collapsible": 1,
+   "description": "Fields the drift detector should IGNORE on this Item. Use case: FDE intentionally renames item_name in ERPNext (e.g. cleaner internal name vs EE marketplace title) and doesn't want every nightly pull to re-flag it. Empty list = compare every field (default Stage-5 behaviour)."
+  },
+  {
+   "fieldname": "ecs_drift_exclude_fields",
+   "fieldtype": "Table",
+   "label": "Excluded Fields",
+   "options": "EasyEcom Item Map Exclude Field"
   }
  ],
  "index_web_pages_for_search": 0,

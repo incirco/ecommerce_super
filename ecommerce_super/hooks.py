@@ -92,6 +92,18 @@ fixtures = [
     },
     "Marketplace",
     "Accounting Dimension",
+    # §8d audit fix #5 — workspace number cards for FDE item worklist
+    # counts (Drift / Created-Flagged / Flagged-Not-Created).
+    {
+        "dt": "Number Card",
+        "filters": [
+            ["name", "in", [
+                "Items in Drift",
+                "Items Created-Flagged",
+                "Items Flagged-Not-Created",
+            ]],
+        ],
+    },
     # Field Mapping library (§5.11) — child rulesets first, then parents.
     # Load order is honoured by the JSON file's element order; compose
     # references require the child ruleset to already be in the DB at
@@ -231,6 +243,16 @@ scheduler_events = {
         # location's JWT failure doesn't abort the whole sweep.
         "0 4 * * *": [
             "ecommerce_super.easyecom.flows.channel_discovery.scheduled_discover_channels",
+        ],
+        # Daily §8d product master delta pull (audit fix #3). Runs at
+        # 05:00 IST, AFTER channels (04:00) — the catalogue depends on
+        # Location + Channel being mapped before tax stamping can land.
+        # Uses item_pull_last_updated_at as the updated_after delta
+        # cursor. Mode-aware: post-flip (erpnext_mastered) this same
+        # scheduled call runs drift detection instead of accept-and-
+        # create, per process_one_product's phase gate.
+        "0 5 * * *": [
+            "ecommerce_super.easyecom.flows.item_pull.scheduled_discover_products",
         ],
         # Connection health rollup — every 5 minutes.
         "*/5 * * * *": [
