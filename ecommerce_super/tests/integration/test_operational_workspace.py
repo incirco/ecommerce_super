@@ -51,6 +51,25 @@ EXPECTED_NAV_CARD_BREAKS = {
     "Runtime Logs",
 }
 
+# Frappe v16's `Workspace Sidebar` DocType is a STANDARD sidebar
+# definition (separate from the workspace's own `links` array). For
+# the EasyEcom workspace, the sidebar JSON ships at
+# `ecommerce_super/workspace_sidebar/easyecom.json` and overrides
+# the workspace's link rendering in the left nav. The two must
+# match in structure — Card-Break section labels and FDE-worklist
+# children — or the FDE sees a different sidebar than the
+# workspace content advertises (the §17-audit caught this drift).
+EXPECTED_SIDEBAR_SECTIONS = EXPECTED_NAV_CARD_BREAKS
+
+EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS = {
+    "Locations — To Map",
+    "Channels — Unclassified",
+    "Tax Rules — To Configure",
+    "Items — Drift",
+    "Items — Created-Flagged",
+    "Items — Flagged-Not-Created",
+}
+
 
 def _workspace() -> "frappe.model.document.Document":
     return frappe.get_doc("Workspace", WORKSPACE)
@@ -80,6 +99,73 @@ class TestNavHubPreserved(FrappeTestCase):
         blocks = _content_blocks()
         card_blocks = {b["data"]["card_name"] for b in blocks if b["type"] == "card"}
         self.assertEqual(card_blocks, EXPECTED_NAV_CARD_BREAKS)
+
+
+# ============================================================
+# Frappe v16 Workspace Sidebar — must mirror the workspace's
+# Card Break structure (caught drifted from the workspace in
+# the post-§17 audit; this test pins the contract going forward)
+# ============================================================
+
+
+class TestWorkspaceSidebarMirrorsWorkspace(FrappeTestCase):
+    """The standard EasyEcom Workspace Sidebar (the read-only-from-
+    desk sidebar Frappe v16 renders in the left nav) must match the
+    workspace's own Card Break structure. Drift here means the FDE
+    sees one set of groupings in the sidebar and another in the
+    workspace content — confusing and pre-§17 we had exactly this."""
+
+    SIDEBAR_NAME = "EasyEcom"
+
+    def test_workspace_sidebar_exists(self) -> None:
+        self.assertTrue(
+            frappe.db.exists("Workspace Sidebar", self.SIDEBAR_NAME),
+            "Workspace Sidebar 'EasyEcom' missing — patch "
+            "refresh_easyecom_workspace_sidebar should have installed it.",
+        )
+
+    def test_sidebar_sections_match_workspace_card_breaks(self) -> None:
+        items = frappe.db.get_all(
+            "Workspace Sidebar Item",
+            filters={"parent": self.SIDEBAR_NAME, "type": "Section Break"},
+            fields=["label"],
+        )
+        sidebar_sections = {i.label for i in items}
+        self.assertEqual(
+            sidebar_sections,
+            EXPECTED_SIDEBAR_SECTIONS,
+            "Workspace Sidebar sections drifted from workspace "
+            "Card Breaks. The two must match — see "
+            "workspace_sidebar/easyecom.json.",
+        )
+
+    def test_sidebar_fde_worklist_has_all_six_links(self) -> None:
+        items = frappe.db.get_all(
+            "Workspace Sidebar Item",
+            filters={"parent": self.SIDEBAR_NAME, "type": "Link"},
+            fields=["label", "link_type", "link_to"],
+        )
+        worklist_labels = {
+            i.label for i in items
+            if i.label in EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS
+        }
+        self.assertEqual(
+            worklist_labels,
+            EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS,
+            "Sidebar missing one of the 6 FDE worklist URL items.",
+        )
+        # Each worklist link is a URL pointing at a list view with a
+        # status / workflow_state filter.
+        worklist_items = [i for i in items
+                          if i.label in EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS]
+        for w in worklist_items:
+            self.assertEqual(
+                w.link_type, "URL",
+                f"FDE worklist sidebar link {w.label!r} should be a URL "
+                f"(filtered list view), not {w.link_type!r}",
+            )
+            self.assertIn("?", w.link_to or "",
+                          f"{w.label}: URL should carry a filter (?...)")
 
 
 # ============================================================

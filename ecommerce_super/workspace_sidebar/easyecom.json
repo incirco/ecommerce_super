@@ -18,116 +18,23 @@
    "show_arrow": 0,
    "type": "Link"
   },
+
   {
    "child": 0,
    "collapsible": 1,
    "icon": "settings",
    "indent": 1,
    "keep_closed": 0,
-   "label": "Configuration",
+   "label": "Setup",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Section Break"
   },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "EasyEcom Account",
-   "link_to": "EasyEcom Account",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Locations",
-   "link_to": "EasyEcom Location",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Company Settings",
-   "link_to": "EasyEcom Company Settings",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
-   "icon": "list",
-   "indent": 1,
-   "keep_closed": 0,
-   "label": "Operations",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Section Break"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Queue Jobs",
-   "link_to": "EasyEcom Queue Job",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sync Records",
-   "link_to": "EasyEcom Sync Record",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Webhook Events",
-   "link_to": "EasyEcom Webhook Event",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "API Calls",
-   "link_to": "EasyEcom API Call",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Cursors",
-   "link_to": "EasyEcom Sync Cursor",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "EasyEcom Account",       "link_to": "EasyEcom Account",          "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Company Settings",      "link_to": "EasyEcom Company Settings", "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Field Mapping",         "link_to": "EasyEcom Field Mapping",    "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Source-of-Truth Map",   "link_to": "Source-of-Truth Map",       "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+
   {
    "child": 0,
    "collapsible": 1,
@@ -139,19 +46,59 @@
    "show_arrow": 0,
    "type": "Section Break"
   },
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Locations",             "link_to": "EasyEcom Location",         "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Marketplaces (Channels)","link_to": "Marketplace",              "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Tax Rule Map",          "link_to": "EasyEcom Tax Rule Map",     "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Item Map",              "link_to": "EasyEcom Item Map",         "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+
   {
-   "child": 1,
+   "child": 0,
    "collapsible": 1,
-   "indent": 0,
+   "icon": "filter",
+   "indent": 1,
    "keep_closed": 0,
-   "label": "Marketplaces",
-   "link_to": "Marketplace",
+   "label": "FDE Worklists",
    "link_type": "DocType",
    "show_arrow": 0,
-   "type": "Link"
-  }
+   "type": "Section Break"
+  },
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Locations — To Map",        "link_to": "/app/easyecom-location/view/list?workflow_state=To%20Map",          "link_type": "URL", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Channels — Unclassified",   "link_to": "/app/marketplace/view/list?workflow_state=Unclassified",            "link_type": "URL", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Tax Rules — To Configure",  "link_to": "/app/easyecom-tax-rule-map/view/list?workflow_state=To%20Configure", "link_type": "URL", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Items — Drift",             "link_to": "/app/easyecom-item-map/view/list?status=Drift",                     "link_type": "URL", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Items — Created-Flagged",   "link_to": "/app/easyecom-item-map/view/list?status=Created-Flagged",           "link_type": "URL", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Items — Flagged-Not-Created","link_to": "/app/easyecom-item-map/view/list?status=Flagged-Not-Created",      "link_type": "URL", "show_arrow": 0, "type": "Link"},
+
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "list",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "Operations",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Queue Jobs",            "link_to": "EasyEcom Queue Job",        "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Sync Records",          "link_to": "EasyEcom Sync Record",      "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Sync Cursors",          "link_to": "EasyEcom Sync Cursor",      "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "file",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "Runtime Logs",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "API Calls",             "link_to": "EasyEcom API Call",         "link_type": "DocType", "show_arrow": 0, "type": "Link"},
+  {"child": 1, "collapsible": 1, "indent": 0, "keep_closed": 0, "label": "Webhook Events",        "link_to": "EasyEcom Webhook Event",    "link_type": "DocType", "show_arrow": 0, "type": "Link"}
  ],
- "modified": "2026-05-24 19:00:00.000000",
+ "modified": "2026-05-26 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "EasyEcom",
  "name": "EasyEcom",
