@@ -1,4 +1,4 @@
-"""EasyEcom Item Map Drift Field — child table of EasyEcom Item Map.
+"""EasyEcom Drift Field — child table of EasyEcom Item Map.
 
 One row per ERPNext field that the post-flip drift detector found to
 differ between the EE payload and the current ERPNext doc. Surfaces
@@ -18,5 +18,5 @@ from __future__ import annotations
 from frappe.model.document import Document
 
 
-class EasyEcomItemMapDriftField(Document):
+class EasyEcomDriftField(Document):
     pass

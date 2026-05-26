@@ -110,7 +110,7 @@
    "fieldname": "drift_fields",
    "fieldtype": "Table",
    "label": "Drift Fields",
-   "options": "EasyEcom Item Map Drift Field",
+   "options": "EasyEcom Drift Field",
    "description": "Per-field divergence. field=ERPNext field name (e.g. 'gstin', 'customer_name', 'billing_address.city'), erpnext_value=current ERPNext value, ee_value=what EE asserts (NOT accepted). Reuses §8d's generic drift-field child DocType (field+value pairs are entity-agnostic)."
   },
   {
@@ -142,7 +142,7 @@
    "fieldname": "ecs_drift_exclude_fields",
    "fieldtype": "Table",
    "label": "Excluded Fields",
-   "options": "EasyEcom Item Map Exclude Field"
+   "options": "EasyEcom Exclude Field"
   },
   {
    "fieldname": "push_snapshot_section",

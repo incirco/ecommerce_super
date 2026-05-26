@@ -79,6 +79,11 @@
   "discover_customers_action",
   "auto_push_customers_on_save",
   "push_all_pending_customers_action",
+  "supplier_master_mode_section",
+  "supplier_master_mode",
+  "supplier_master_flipped_at",
+  "supplier_master_mode_col_2",
+  "flip_to_erpnext_mastered_suppliers_action",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -589,6 +594,40 @@
    "fieldtype": "Button",
    "label": "Push All Pending Customers",
    "description": "§8e Stage 4 — batch sweep: enqueue a /Wholesale/CreateCustomer push for every candidate Customer (customer_type=Company; no EasyEcom Customer Map row yet; has email_id; is enabled). Returns immediately with the count enqueued; per-Customer progress lands in Sync Records / Queue Job rows. Non-candidates (already on EE, missing email, individual-type) are skipped at the candidate-query level."
+  },
+  {
+   "fieldname": "supplier_master_mode_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Master Mode",
+   "description": "Controls the §8.3 Supplier master flow. Mirrors Customer Master Mode exactly: Onboarding (default) is bidirectional and FDE-supervised; ERPNext-Mastered is the steady state where ERPNext owns the supplier master and EE-side changes show up as Drift flags rather than auto-overwriting. The flip is explicit and one-way (until manually reverted). INDEPENDENT of the Item/Customer flips — accounts can flip Supplier master while still in Customer onboarding (or vice versa)."
+  },
+  {
+   "fieldname": "supplier_master_mode",
+   "fieldtype": "Select",
+   "label": "Supplier Master Mode",
+   "options": "onboarding\nerpnext_mastered",
+   "default": "onboarding",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "§8.3. `onboarding` = bidirectional pull + push, supervised; `erpnext_mastered` = ERPNext is source of truth, pull becomes drift-detection only. Read-only on the form — the FDE flips via the Flip action below (with confirmation)."
+  },
+  {
+   "fieldname": "supplier_master_flipped_at",
+   "fieldtype": "Datetime",
+   "label": "Supplier Master Flipped to ERPNext-Mastered At",
+   "read_only": 1,
+   "description": "Audit timestamp of when the FDE flipped Supplier master to ERPNext-mastered. Empty during onboarding."
+  },
+  {
+   "fieldname": "supplier_master_mode_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "flip_to_erpnext_mastered_suppliers_action",
+   "fieldtype": "Button",
+   "label": "Flip Suppliers → ERPNext-Mastered",
+   "description": "One-way flip for Supplier master: marks onboarding complete and switches the §8.3 pull from accept-and-create to drift-detection-only. The FDE confirms in a dialog before the flip lands. Reverse flips require manual intervention."
   },
   {
    "fieldname": "item_pull_section",

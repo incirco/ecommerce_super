@@ -1171,7 +1171,7 @@ def _load_excluded_fields(map_name: str) -> set[str]:
     set when the FDE hasn't excluded anything (default Stage-5
     behaviour preserved)."""
     rows = frappe.db.get_all(
-        "EasyEcom Item Map Exclude Field",
+        "EasyEcom Exclude Field",
         filters={"parent": map_name, "parenttype": "EasyEcom Item Map"},
         fields=["field"],
     )

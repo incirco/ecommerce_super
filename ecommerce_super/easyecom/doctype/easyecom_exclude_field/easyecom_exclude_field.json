@@ -34,7 +34,7 @@
  "modified": "2026-05-26 00:00:00",
  "modified_by": "Administrator",
  "module": "EasyEcom",
- "name": "EasyEcom Item Map Exclude Field",
+ "name": "EasyEcom Exclude Field",
  "owner": "Administrator",
  "permissions": [],
  "sort_field": "modified",

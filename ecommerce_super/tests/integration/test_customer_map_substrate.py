@@ -172,11 +172,11 @@ class TestCustomerMapSchema(FrappeTestCase):
         meta = frappe.get_meta("EasyEcom Customer Map")
         self.assertEqual(
             meta.get_field("drift_fields").options,
-            "EasyEcom Item Map Drift Field",
+            "EasyEcom Drift Field",
         )
         self.assertEqual(
             meta.get_field("ecs_drift_exclude_fields").options,
-            "EasyEcom Item Map Exclude Field",
+            "EasyEcom Exclude Field",
         )
 
 

@@ -83,7 +83,7 @@ def _account_in_mode(mode: str) -> Any:
     """Ensure the account exists and is in the requested
     item_master_mode. Avoids the flip endpoint (which is one-way) by
     db.set_value — tests need to flop modes."""
-    name = make_account(name=f"{PREFIX}acct".lower())
+    name = make_account(name=f"{PREFIX}acct".lower(), enabled=False)
     _ensure_uom()
     _ensure_item_group()
     frappe.db.set_value(
@@ -448,7 +448,7 @@ class TestFlipContractStillOneWay(FrappeTestCase):
     def setUp(self) -> None:
         _wipe()
         if not frappe.db.exists("EasyEcom Account", self.ACCOUNT_NAME):
-            make_account(name=self.ACCOUNT_NAME)
+            make_account(name=self.ACCOUNT_NAME, enabled=False)
         frappe.db.set_value(
             "EasyEcom Account", self.ACCOUNT_NAME,
             {

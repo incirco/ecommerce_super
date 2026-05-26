@@ -10,7 +10,7 @@ ALL MOCKED — no real EE traffic. Mirrors §8d Stage 5 coverage:
       - EE edit to mapped Customer → Drift, ERPNext untouched
       - quiet re-pull (no change) → stays Mapped (no flap)
   - Resolution actions: dismiss_drift, push_to_ee_for_drift; no Accept-EE.
-  - Field-level exclusion via EasyEcom Item Map Exclude Field child
+  - Field-level exclusion via EasyEcom Exclude Field child
     (reused from §8d — generic shape).
   - Sync Record Discrepancy mapping for drift (not Failed).
 """
@@ -305,7 +305,7 @@ class TestDriftOnEdit(FrappeTestCase):
         )
         # Drift Fields child row recorded the diff.
         rows = frappe.db.get_all(
-            "EasyEcom Item Map Drift Field",
+            "EasyEcom Drift Field",
             filters={"parent": map_name, "parenttype": "EasyEcom Customer Map"},
             fields=["field", "erpnext_value", "ee_value"],
         )
@@ -334,7 +334,7 @@ class TestDriftOnEdit(FrappeTestCase):
         )
         self.assertEqual(out.status, "Drift")
         rows = frappe.db.get_all(
-            "EasyEcom Item Map Drift Field",
+            "EasyEcom Drift Field",
             filters={"parent": map_name, "parenttype": "EasyEcom Customer Map"},
             fields=["field", "erpnext_value", "ee_value"],
         )
@@ -392,7 +392,7 @@ class TestQuietRePullNoFlap(FrappeTestCase):
             row_drift, executor=executor, account_mode=MODE_ERPNEXT_MASTERED
         )
         drift_rows_before = frappe.db.count(
-            "EasyEcom Item Map Drift Field",
+            "EasyEcom Drift Field",
             filters={"parent": map_name},
         )
         self.assertGreater(drift_rows_before, 0)
@@ -414,7 +414,7 @@ class TestQuietRePullNoFlap(FrappeTestCase):
         # Drift child rows are cleared (no ghost diffs).
         self.assertEqual(
             frappe.db.count(
-                "EasyEcom Item Map Drift Field",
+                "EasyEcom Drift Field",
                 filters={"parent": map_name},
             ),
             0,
@@ -500,7 +500,7 @@ class TestFieldExclusion(FrappeTestCase):
         # No drift recorded.
         self.assertEqual(out.status, "Mapped")
         diff_rows = frappe.db.get_all(
-            "EasyEcom Item Map Drift Field",
+            "EasyEcom Drift Field",
             filters={"parent": map_name},
         )
         self.assertEqual(len(diff_rows), 0)
@@ -532,7 +532,7 @@ class TestFieldExclusion(FrappeTestCase):
         )
         self.assertEqual(out.status, "Drift")
         rows = frappe.db.get_all(
-            "EasyEcom Item Map Drift Field",
+            "EasyEcom Drift Field",
             filters={"parent": map_name},
             fields=["field"],
         )
@@ -576,7 +576,7 @@ class TestDismissDrift(FrappeTestCase):
         )
         self.assertEqual(
             frappe.db.count(
-                "EasyEcom Item Map Drift Field", filters={"parent": map_name}
+                "EasyEcom Drift Field", filters={"parent": map_name}
             ),
             0,
         )

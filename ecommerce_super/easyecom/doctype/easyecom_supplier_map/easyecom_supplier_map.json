@@ -1,0 +1,209 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-SUPP-{ee_vendor_c_id}",
+ "creation": "2026-05-27 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ee_vendor_c_id",
+  "status",
+  "link_section",
+  "erpnext_doctype",
+  "erpnext_name",
+  "ee_ids_section",
+  "ee_vendor_id",
+  "flag_section",
+  "flag_reason",
+  "drift_section",
+  "drift_detected_at",
+  "drift_fields",
+  "drift_actions_col",
+  "dismiss_drift_action",
+  "push_to_ee_action",
+  "exclude_section",
+  "ecs_drift_exclude_fields",
+  "push_snapshot_section",
+  "ecs_last_pushed_payload"
+ ],
+ "fields": [
+  {
+   "fieldname": "ee_vendor_c_id",
+   "fieldtype": "Data",
+   "label": "EE vendor_c_id",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "EasyEcom READ-side vendor identifier — the `vendor_c_id` returned by /wms/V2/getVendors (e.g. 166334). The join key for this row. UNIQUE at the DB level. Direction-agnostic: the row exists whether the supplier was born in EE (pulled in) or in ERPNext (pushed out)."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Mapped\nCreated-Flagged\nFlagged-Not-Created\nDrift\nDisabled",
+   "default": "Mapped",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "§8.3 review/exception state. Mapped = clean; Created-Flagged = soft content issue (e.g. pincode/state mismatch); Flagged-Not-Created = held (e.g. India Compliance rejected GSTIN or PAN format); Drift = post-flip EE-side divergence; Disabled = lifecycle-deactivated. Drives the FDE worklist filter."
+  },
+  {
+   "fieldname": "link_section",
+   "fieldtype": "Section Break",
+   "label": "Linked ERPNext Object"
+  },
+  {
+   "fieldname": "erpnext_doctype",
+   "fieldtype": "Link",
+   "label": "ERPNext DocType",
+   "options": "DocType",
+   "in_list_view": 1,
+   "description": "Restricted to 'Supplier' (§8.3). Controller's validate refuses anything else. Dynamic-Link pattern: doctype controls the options for erpnext_name."
+  },
+  {
+   "fieldname": "erpnext_name",
+   "fieldtype": "Dynamic Link",
+   "label": "ERPNext Name",
+   "options": "erpnext_doctype",
+   "in_list_view": 1,
+   "description": "The Supplier docname. The pull/push flows write here when they create the corresponding ERPNext Supplier. Linked Billing / Dispatch Address records hang off Supplier via Frappe's standard Address.Dynamic Link."
+  },
+  {
+   "fieldname": "ee_ids_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Internal IDs",
+   "collapsible": 1,
+   "description": "Unlike §8e Customer (where c_id == customerId), §8f Supplier has TWO DISTINCT identifiers: vendor_c_id (read-side, this row's join key in ee_vendor_c_id) and vendor_id (write-side, captured below). Real Harmony data confirms they differ (e.g. 166334 vs 145). PO/STN flows (§9/§10) resolve ERPNext Supplier → EE write key via this row's ee_vendor_id."
+  },
+  {
+   "fieldname": "ee_vendor_id",
+   "fieldtype": "Data",
+   "label": "EE vendor_id (write key)",
+   "description": "EasyEcom WRITE-side vendor identifier — `vendor_id` (= `vendor_code`, e.g. '145'). Returned by /wms/CreateVendor; consumed by /wms/UpdateVendor as `vendorId`. Populated when push creates the supplier (or when pull observes vendor_code on a customer that was created via portal). Read-only after creation in normal flow; FDE can edit if remapping."
+  },
+  {
+   "fieldname": "flag_section",
+   "fieldtype": "Section Break",
+   "label": "Flag Details",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "flag_reason",
+   "fieldtype": "Small Text",
+   "label": "Flag Reason",
+   "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: a plain-English explanation the FDE can act on (e.g. 'ic_pan_invalid_format: bad PAN length', 'ic_gstin_check_digit: failed', 'state/pincode mismatch'). For Drift rows the structured per-field diff lives in the Drift Fields table below; flag_reason summarises ('N fields drifted')."
+  },
+  {
+   "fieldname": "drift_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Details",
+   "collapsible": 1,
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "Populated by the §8.3 post-flip drift detector (Stage 5). One row per field where the incoming EE payload differs from the current ERPNext Supplier / Address state. Cleared when the FDE dismisses (status → Mapped) or pushes ERPNext to EE."
+  },
+  {
+   "fieldname": "drift_detected_at",
+   "fieldtype": "Datetime",
+   "label": "Drift Detected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drift_fields",
+   "fieldtype": "Table",
+   "label": "Drift Fields",
+   "options": "EasyEcom Drift Field",
+   "description": "Per-field divergence. field=ERPNext field name (e.g. 'gstin', 'pan', 'supplier_name', 'billing.city'), erpnext_value=current ERPNext value, ee_value=what EE asserts (NOT accepted). Reuses §8d/§8e's generic Drift Field child DocType."
+  },
+  {
+   "fieldname": "drift_actions_col",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "dismiss_drift_action",
+   "fieldtype": "Button",
+   "label": "Dismiss Drift (Mark Reviewed)",
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "FDE: the EE-side change is wrong / already-handled-upstream. Returns the row to Mapped and clears the Drift Fields table; the underlying ERPNext Supplier is NOT touched."
+  },
+  {
+   "fieldname": "push_to_ee_action",
+   "fieldtype": "Button",
+   "label": "Push ERPNext → EE (Re-assert SoT)",
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "FDE: ERPNext is the source of truth (per the post-flip contract); push current ERPNext Supplier + Addresses to EE via the §8.3 push, overwriting the EE-side divergence."
+  },
+  {
+   "fieldname": "exclude_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Exclusions",
+   "collapsible": 1,
+   "description": "Fields the drift detector should IGNORE on this Supplier. Reuses §8d/§8e's generic Exclude Field child DocType. Empty list = compare every field."
+  },
+  {
+   "fieldname": "ecs_drift_exclude_fields",
+   "fieldtype": "Table",
+   "label": "Excluded Fields",
+   "options": "EasyEcom Exclude Field"
+  },
+  {
+   "fieldname": "push_snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Push Snapshot",
+   "collapsible": 1,
+   "description": "Last successful push payload, used to diff against current ERPNext state so the NEXT UpdateVendor sends only the changed fields. Refreshed automatically on every successful push."
+  },
+  {
+   "fieldname": "ecs_last_pushed_payload",
+   "fieldtype": "Long Text",
+   "label": "Last Pushed Payload (JSON)",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-27 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Supplier Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -758,7 +758,7 @@ def _diff_customer_payload_vs_docs(
 ) -> list[dict]:
     """Compare translated EE payload against the existing Customer +
     its linked Billing/Shipping Addresses. Returns structured diff
-    dicts shaped like EasyEcom Item Map Drift Field child rows
+    dicts shaped like EasyEcom Drift Field child rows
     (field/erpnext_value/ee_value)."""
     diffs: list[dict] = []
 
@@ -859,10 +859,10 @@ def _stringify(v: Any) -> str:
 
 def _load_excluded_fields(map_name: str) -> set[str]:
     """Read FDE-marked exclude list off the Customer Map row. Reuses
-    §8d's EasyEcom Item Map Exclude Field child DocType (the child
+    §8d's EasyEcom Exclude Field child DocType (the child
     schema is entity-agnostic — see Stage 1 inventory finding)."""
     rows = frappe.db.get_all(
-        "EasyEcom Item Map Exclude Field",
+        "EasyEcom Exclude Field",
         filters={"parent": map_name, "parenttype": "EasyEcom Customer Map"},
         fields=["field"],
     )

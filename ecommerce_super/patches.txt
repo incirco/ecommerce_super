@@ -7,6 +7,11 @@
 # ALTER TABLE rejects converting non-numeric strings (the §5-era starter-*
 # seed values) to INTEGER. Wipe them before the column type changes.
 ecommerce_super.patches.v0_1.drop_starter_marketplace_rows
+# §8f Stage 1: rename drift+exclude child DocTypes from "Item Map"-
+# prefixed to entity-agnostic. MUST run pre-model-sync — the JSON
+# files on disk are already at the NEW names, so model sync would
+# fail (or create duplicates) if the OLD DocType is still in the DB.
+ecommerce_super.patches.v0_1.rename_drift_exclude_doctypes
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated

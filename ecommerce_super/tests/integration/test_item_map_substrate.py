@@ -356,7 +356,11 @@ class TestItemMasterModeDefaultAndFlip(FrappeTestCase):
         # cleanup_easyecom_state was wiping all accounts in tests; create
         # afresh for this test class.
         if not frappe.db.exists("EasyEcom Account", self.ACCOUNT_NAME):
-            make_account(name=self.ACCOUNT_NAME)
+            # enabled=False because the live site may already have an
+            # enabled Account (Harmony) and the single-Account validator
+            # rejects a second enabled row. Stage 1 substrate tests don't
+            # need the account active — just present.
+            make_account(name=self.ACCOUNT_NAME, enabled=False)
         # Reset the flag to onboarding for each test.
         frappe.db.set_value(
             "EasyEcom Account",

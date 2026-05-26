@@ -504,6 +504,77 @@ frappe.ui.form.on("EasyEcom Account", {
         );
     },
 
+    flip_to_erpnext_mastered_suppliers_action(frm) {
+        if (frm.is_new()) {
+            frappe.msgprint({
+                title: __("Save First"),
+                message: __(
+                    "Save the Account before flipping Supplier Master Mode."
+                ),
+                indicator: "orange",
+            });
+            return;
+        }
+        if (frm.doc.supplier_master_mode === "erpnext_mastered") {
+            frappe.msgprint({
+                title: __("Already Flipped"),
+                message: __(
+                    "Account is already in <b>erpnext_mastered</b> mode for Supplier master (flipped at {0}).",
+                    [frappe.datetime.str_to_user(frm.doc.supplier_master_flipped_at) || "—"]
+                ),
+                indicator: "grey",
+            });
+            return;
+        }
+
+        frappe.confirm(
+            __(
+                "<b>Flip Suppliers to ERPNext-Mastered?</b><br><br>" +
+                    "After the flip:<br>" +
+                    "&bull; The §8.3 push (ERPNext → EasyEcom) becomes the authoritative supplier flow.<br>" +
+                    "&bull; The pull becomes <b>drift detection only</b> — EE-side new suppliers and edits to mapped suppliers will flag as <code>Drift</code> for the FDE, NOT auto-create or auto-overwrite.<br><br>" +
+                    "Reverse flips require manual intervention (set the field via Console). Make sure supplier reconciliation is complete before confirming. (Independent of the Item/Customer flips — this only affects Supplier master.)"
+            ),
+            () => {
+                frappe.call({
+                    method:
+                        "ecommerce_super.easyecom.api.supplier_master_mode.flip_to_erpnext_mastered_suppliers",
+                    args: {account: frm.doc.name, confirm: true},
+                    freeze: true,
+                    freeze_message: __("Flipping…"),
+                    callback(r) {
+                        const result = r.message || {};
+                        if (result.ok) {
+                            frappe.show_alert(
+                                {
+                                    message: __("Supplier master flipped to erpnext_mastered."),
+                                    indicator: "green",
+                                },
+                                7
+                            );
+                            frm.reload_doc();
+                        } else {
+                            frappe.msgprint({
+                                title: __("Flip Failed"),
+                                message: result.message || __("Unknown error."),
+                                indicator: "red",
+                            });
+                        }
+                    },
+                    error() {
+                        frappe.msgprint({
+                            title: __("Flip Failed"),
+                            message: __(
+                                "The flip call itself failed (network or permission)."
+                            ),
+                            indicator: "red",
+                        });
+                    },
+                });
+            }
+        );
+    },
+
     refresh_states_countries_action(frm) {
         if (!_ensureSaved(frm, "Save the Account before refreshing reference data.")) {
             return;

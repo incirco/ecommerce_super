@@ -1,4 +1,4 @@
-"""EasyEcom Item Map Exclude Field — child table of EasyEcom Item Map.
+"""EasyEcom Exclude Field — child table of EasyEcom Item Map.
 
 Lists ERPNext field names the drift detector should IGNORE when
 comparing this specific Item against an incoming EE payload. Use case:
@@ -17,5 +17,5 @@ from __future__ import annotations
 from frappe.model.document import Document
 
 
-class EasyEcomItemMapExcludeField(Document):
+class EasyEcomExcludeField(Document):
     pass
