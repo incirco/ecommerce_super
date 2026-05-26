@@ -337,16 +337,59 @@ def resolve_and_stamp_tax(item: Any, product: dict, company: str) -> TaxResoluti
 
 
 def _stamp_preview_onto_item(item: Any, preview: StampPreview) -> int:
-    """Apply the preview's rows onto item.taxes. Both source (preview)
-    and target (Item.taxes) speak the same Item Tax field set, so this
-    is a straight row-copy. Returns the number of rows stamped.
+    """Apply the preview's rows onto item.taxes — append + idempotent.
 
-    The clearing semantics match the resolver's contract: the map is
-    the source of truth for the item's Item Tax Template rows; any
-    pre-existing rows on the item are wiped before the stamp.
+    Append semantics (changed from clear-then-write in 8d Stage 2):
+    one item is shared across Companies but Item Tax Template names
+    are Company-scoped (India Compliance ships per-Company GST templates).
+    Calling this resolver once per Company on the same item (the 8d pull
+    pattern) must NOT clobber a sibling Company's already-stamped rows.
+
+    Idempotency: a re-pull (or a second resolver call for the same
+    Company in the same job) must NOT duplicate rows. The dedupe key is
+    the full 5-tuple (item_tax_template, tax_category, valid_from,
+    minimum_net_rate, maximum_net_rate) — banded templates legitimately
+    produce multiple rows per template, so template-name alone is not
+    enough, but the full tuple is unique-by-construction.
+
+    Single-Company behaviour (the 8c original contract) is preserved
+    end-to-end: an item with empty `taxes` followed by one resolver
+    call ends up with exactly the preview's rows — the same final
+    state as the old clear-then-write. The 8c test suite (which
+    starts every test from an empty item) is unaffected.
+
+    Returns the number of rows actually stamped (excludes dedupe-skipped
+    rows). Callers using this count to decide "did anything happen?"
+    should treat 0 as "all preview rows already present" — not "nothing
+    to stamp" — when the map itself is non-empty.
+
+    Updating a map's bands (FDE edits) leaves stale rows on items
+    until §8.1.8 drift-detection ships in Stage 5; that's a known
+    limitation of append semantics. The Stage-2 trade-off: bounded
+    accuracy with multi-Company correctness vs. unbounded clobber with
+    single-Company correctness only. We pick the former.
     """
-    item.set("taxes", [])
+    existing_keys = {
+        _row_dedupe_key(
+            r.item_tax_template,
+            r.tax_category,
+            r.valid_from,
+            r.minimum_net_rate,
+            r.maximum_net_rate,
+        )
+        for r in (item.get("taxes") or [])
+    }
+    stamped = 0
     for row in preview.rows_to_stamp:
+        key = _row_dedupe_key(
+            row["item_tax_template"],
+            row["tax_category"],
+            row["valid_from"],
+            row["minimum_net_rate"],
+            row["maximum_net_rate"],
+        )
+        if key in existing_keys:
+            continue
         item.append(
             "taxes",
             {
@@ -357,7 +400,37 @@ def _stamp_preview_onto_item(item: Any, preview: StampPreview) -> int:
                 "maximum_net_rate": row["maximum_net_rate"],
             },
         )
-    return len(preview.rows_to_stamp)
+        existing_keys.add(key)
+        stamped += 1
+    return stamped
+
+
+def _row_dedupe_key(
+    template: str | None,
+    tax_category: str | None,
+    valid_from: Any,
+    min_rate: Any,
+    max_rate: Any,
+) -> tuple:
+    """Normalise a row's key for dedupe across append calls.
+
+    None / 0 / "" are treated as equivalent for the optional band/category
+    fields (Frappe sometimes round-trips an empty Currency as 0 vs None
+    depending on insert path); template name and valid_from are required
+    to match verbatim."""
+
+    def _norm(v: Any) -> Any:
+        if v in (None, "", 0):
+            return None
+        return v
+
+    return (
+        template or None,
+        _norm(tax_category),
+        _norm(valid_from),
+        _norm(min_rate),
+        _norm(max_rate),
+    )
 
 
 def _effective_rate_for_template(template_name: str | None) -> float | None:

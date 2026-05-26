@@ -70,6 +70,13 @@
   "item_master_flipped_at",
   "item_master_mode_col_2",
   "flip_to_erpnext_mastered_action",
+  "item_pull_section",
+  "default_uom",
+  "item_pull_cursor",
+  "item_pull_cursor_at",
+  "item_pull_col_2",
+  "item_pull_last_updated_at",
+  "item_pull_total_seen",
   "internal_section",
   "last_full_sync_at"
  ],
@@ -510,6 +517,52 @@
    "fieldtype": "Button",
    "label": "Flip → ERPNext-Mastered",
    "description": "One-way flip: marks onboarding complete and switches the §8d pull from accept-and-create to drift-detection-only. The FDE confirms in a dialog before the flip lands. Reverse flips (back to onboarding) require manual intervention — design intent is one flip per client lifecycle."
+  },
+  {
+   "fieldname": "item_pull_section",
+   "fieldtype": "Section Break",
+   "label": "Item Pull (§8d)",
+   "collapsible": 1,
+   "description": "Account-wide §8d pull state: the resume cursor for the GetProductMaster walk, the high-water mark for incremental (updated_after) deltas, and the default UOM used when EE's accounting_unit is dirty/missing (the Created-Flagged trigger surfaces this)."
+  },
+  {
+   "fieldname": "default_uom",
+   "fieldtype": "Link",
+   "options": "UOM",
+   "label": "Default UOM",
+   "default": "Nos",
+   "description": "Substituted into stock_uom when EE's accounting_unit is missing or doesn't match an ERPNext UOM (real values seen: '111', '333', '11', 'PCS', 'NA'). The item is created with this UOM and flagged Created-Flagged so the FDE can correct."
+  },
+  {
+   "fieldname": "item_pull_cursor",
+   "fieldtype": "Long Text",
+   "label": "Resume Cursor",
+   "read_only": 1,
+   "description": "EE GetProductMaster nextUrl. Persisted page-by-page so an interrupted walk resumes from the last completed page rather than restarting. Cleared on full-pull start; advanced after each page commits."
+  },
+  {
+   "fieldname": "item_pull_cursor_at",
+   "fieldtype": "Datetime",
+   "label": "Cursor Advanced At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "item_pull_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "item_pull_last_updated_at",
+   "fieldtype": "Datetime",
+   "label": "Last Successful Pull (updated_after high-water)",
+   "read_only": 1,
+   "description": "High-water mark for incremental deltas. The next scheduled pull passes this as the GetProductMaster updated_after parameter. Set only on a clean full-walk (no failed pages); a partial run leaves the previous value untouched so the next run still covers the gap."
+  },
+  {
+   "fieldname": "item_pull_total_seen",
+   "fieldtype": "Int",
+   "label": "Total Products Seen (last successful pull)",
+   "read_only": 1,
+   "description": "From GetProductMastersCount at the start of the last full pull — used by the FDE to monitor whether the catalogue size is sane."
   },
   {
    "fieldname": "internal_section",

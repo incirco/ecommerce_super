@@ -388,10 +388,11 @@ class EasyEcomClient:
 
     @staticmethod
     def _extract_next_page_url(page: dict) -> str | None:
-        """EE returns the next-page cursor as `next_page_url` in v2 bulk
-        endpoints. Other shape variants surface in spec_sections; for now
-        we look for the common case."""
-        for key in ("next_page_url", "nextPageUrl", "next_page", "next"):
+        """EE returns the next-page cursor under different keys per
+        endpoint family — `next_page_url` on v2 bulk (orders/grns/returns),
+        `nextUrl` on /Products/GetProductMaster (§8d). Order is preserve-
+        compat-first; new families append."""
+        for key in ("next_page_url", "nextPageUrl", "next_page", "next", "nextUrl"):
             val = page.get(key)
             if val:
                 return val

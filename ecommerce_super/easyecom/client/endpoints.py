@@ -28,6 +28,13 @@ VENDOR_GET: str = "/Wms/Vendor/getVendor"  # GET
 LOCATIONS_GET: str = "/getAllLocation"  # GET — foundational (§7.7, §8.4.1)
 CHANNELS_GET: str = "/current-channel-status"  # GET — per-location (§8.6.3, §8b)
 
+# §8d Item Master (Pull). Cursor-paginated via `nextUrl` (≤200/page);
+# count-aware via PRODUCT_MASTER_COUNT_GET. Both are account-wide
+# (includeLocations=1 → one catalogue keyed by globally-unique SKU,
+# §8.1.4) so they're foundational (no Company tag on the API Call row).
+PRODUCT_MASTER_GET: str = "/Products/GetProductMaster"  # GET (bulk; nextUrl)
+PRODUCT_MASTER_COUNT_GET: str = "/Products/GetProductMastersCount"  # GET
+
 
 # ----- Buying flow endpoints (§31.3.3) -----
 
@@ -72,6 +79,9 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
     {
         TOKEN,
         LOCATIONS_GET,
+        # §8d Item Pull is account-wide (includeLocations=1).
+        PRODUCT_MASTER_GET,
+        PRODUCT_MASTER_COUNT_GET,
     }
 )
 

@@ -14,3 +14,5 @@ ecommerce_super.patches.v0_1.backfill_location_workflow_state
 ecommerce_super.patches.v0_1.drop_warehouse_pull_ruleset
 ecommerce_super.patches.v0_1.add_ecs_cess_to_item
 ecommerce_super.patches.v0_1.add_tax_rule_map_unique_index
+ecommerce_super.patches.v0_1.add_ecs_item_pull_fields
+ecommerce_super.patches.v0_1.drop_item_sync_ruleset
