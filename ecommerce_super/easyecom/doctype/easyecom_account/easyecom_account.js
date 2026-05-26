@@ -185,6 +185,139 @@ function _runChannelDiscovery(frm) {
     });
 }
 
+function _runProductDiscovery(frm) {
+    if (!_ensureSaved(frm, "Save the Account before discovering products.")) {
+        return;
+    }
+    const isErpnextMastered = frm.doc.item_master_mode === "erpnext_mastered";
+    const verb = isErpnextMastered
+        ? __("Drift Detection (§8d Pull post-flip)")
+        : __("Pulling /Products/GetProductMaster…");
+    frappe.show_alert({message: verb, indicator: "blue"});
+
+    frappe.call({
+        method: "ecommerce_super.easyecom.flows.item_pull.discover_products",
+        args: {account: frm.doc.name},
+        freeze: true,
+        freeze_message: verb,
+        callback(r) {
+            const result = r.message || {};
+            if (!result.ok) {
+                frappe.msgprint({
+                    title: __("Product Discovery Failed"),
+                    message: result.message || __("Unknown error."),
+                    indicator: "red",
+                });
+                return;
+            }
+            const lines = [
+                __(
+                    "Reported: {0} | Pages: {1} | Processed: {2}",
+                    [result.total_reported || "?", result.pages_walked, result.products_processed]
+                ),
+            ];
+            const byStatus = result.by_status || {};
+            const statusBits = Object.entries(byStatus)
+                .map(([k, v]) => `${frappe.utils.escape_html(k)}: ${v}`)
+                .join(" | ");
+            if (statusBits) {
+                lines.push(`<br>By status: ${statusBits}`);
+            }
+            if (result.more_to_walk) {
+                lines.push(`<br><b>Resume cursor still set — re-click to continue.</b>`);
+            }
+            if ((result.page_failures || []).length) {
+                lines.push(
+                    `<br><br><b>Page failures:</b><br>` +
+                    result.page_failures.map(f =>
+                        `<code>${frappe.utils.escape_html(f.ee_sku || "?")}</code>: ${frappe.utils.escape_html(f.error || "?")}`
+                    ).join("<br>")
+                );
+            }
+            // Worklist deep-links.
+            lines.push(
+                `<br><br><a href="/app/easyecom-item-map">Open EasyEcom Item Map list →</a>`
+            );
+            frappe.msgprint({
+                title: __("Product Discovery Complete"),
+                message: lines.join(""),
+                indicator: (result.page_failures || []).length ? "orange" : "green",
+            });
+        },
+        error() {
+            frappe.msgprint({
+                title: __("Product Discovery Failed"),
+                message: __("The Discover Products call itself failed (network or permission)."),
+                indicator: "red",
+            });
+        },
+    });
+}
+
+function _runPushAllPending(frm) {
+    if (!_ensureSaved(frm, "Save the Account before running the push sweep.")) {
+        return;
+    }
+    frappe.confirm(
+        __(
+            "<b>Push All Pending Items?</b><br><br>" +
+                "Pushes every ERPNext Item not yet on EasyEcom to <code>CreateMasterProduct</code> " +
+                "(bundles dispatch to combo push). The sweep is resumable — items already on EE are skipped. " +
+                "<b>This makes real EE writes</b>; ensure your credentials + tax rule maps are correct first."
+        ),
+        () => {
+            frappe.show_alert({
+                message: __("Sweeping ERPNext catalogue → EE…"),
+                indicator: "blue",
+            });
+            frappe.call({
+                method: "ecommerce_super.easyecom.flows.item_push.push_all_pending_products",
+                args: {account: frm.doc.name},
+                freeze: true,
+                freeze_message: __("Pushing items to EasyEcom…"),
+                callback(r) {
+                    const result = r.message || {};
+                    if (!result.ok) {
+                        frappe.msgprint({
+                            title: __("Push Sweep Failed"),
+                            message: result.message || __("Unknown error."),
+                            indicator: "red",
+                        });
+                        return;
+                    }
+                    const lines = [
+                        __(
+                            "Considered: {0} | Created: {1} | Updated: {2} | Skipped: {3} | Flagged: {4}",
+                            [result.total_considered, result.create_count, result.update_count,
+                                result.skipped_count, result.flagged_count]
+                        ),
+                    ];
+                    if ((result.failed_sample || []).length) {
+                        lines.push(
+                            `<br><br><b>Flagged sample:</b><br>` +
+                            result.failed_sample.map(f =>
+                                `<code>${frappe.utils.escape_html(f.item_code)}</code>: ${frappe.utils.escape_html(f.reason)}`
+                            ).join("<br>")
+                        );
+                    }
+                    frappe.msgprint({
+                        title: __("Push Sweep Complete"),
+                        message: lines.join(""),
+                        indicator: result.flagged_count > 0 ? "orange" : "green",
+                    });
+                },
+                error() {
+                    frappe.msgprint({
+                        title: __("Push Sweep Failed"),
+                        message: __("The Push All Pending call itself failed."),
+                        indicator: "red",
+                    });
+                },
+            });
+        }
+    );
+}
+
 frappe.ui.form.on("EasyEcom Account", {
     refresh(frm) {
         frm.trigger("update_connection_indicator");
@@ -196,7 +329,7 @@ frappe.ui.form.on("EasyEcom Account", {
             return;
         }
 
-        // Discover group — 8a Locations, 8b Channels, more later.
+        // Discover group — 8a Locations, 8b Channels, 8d Products.
         frm.add_custom_button(
             __("Locations"),
             () => _runLocationDiscovery(frm),
@@ -207,6 +340,26 @@ frappe.ui.form.on("EasyEcom Account", {
             () => _runChannelDiscovery(frm),
             __("Discover")
         );
+        frm.add_custom_button(
+            __("Products (§8d)"),
+            () => _runProductDiscovery(frm),
+            __("Discover")
+        );
+
+        // Push group — 8d batch sweep (Stage 6).
+        frm.add_custom_button(
+            __("Push All Pending Items"),
+            () => _runPushAllPending(frm),
+            __("Push")
+        );
+    },
+
+    discover_products_action(frm) {
+        _runProductDiscovery(frm);
+    },
+
+    push_all_pending_action(frm) {
+        _runPushAllPending(frm);
     },
 
     flip_to_erpnext_mastered_action(frm) {

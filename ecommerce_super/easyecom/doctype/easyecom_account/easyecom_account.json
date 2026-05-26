@@ -74,9 +74,13 @@
   "default_uom",
   "item_pull_cursor",
   "item_pull_cursor_at",
+  "discover_products_action",
   "item_pull_col_2",
   "item_pull_last_updated_at",
   "item_pull_total_seen",
+  "item_push_section",
+  "auto_push_on_save",
+  "push_all_pending_action",
   "internal_section",
   "last_full_sync_at"
  ],
@@ -563,6 +567,32 @@
    "label": "Total Products Seen (last successful pull)",
    "read_only": 1,
    "description": "From GetProductMastersCount at the start of the last full pull — used by the FDE to monitor whether the catalogue size is sane."
+  },
+  {
+   "fieldname": "discover_products_action",
+   "fieldtype": "Button",
+   "label": "Discover Products (§8d Pull)",
+   "description": "Trigger the §8d pull — cursor-walks GetProductMaster, creates/refreshes Items + Product Bundles, stamps multi-Company tax, surfaces flagged rows for the FDE. Post-flip (item_master_mode=erpnext_mastered), this same button runs in drift-detection mode (no mutations; EE-side changes land as Drift map rows)."
+  },
+  {
+   "fieldname": "item_push_section",
+   "fieldtype": "Section Break",
+   "label": "Item Push (§8d)",
+   "collapsible": 1,
+   "description": "ERPNext → EasyEcom push: the onboarding batch sweep + the auto-push hook that fires on every Item save when enabled. In steady state (after the flip), push is the authoritative direction for item changes."
+  },
+  {
+   "fieldname": "auto_push_on_save",
+   "fieldtype": "Check",
+   "label": "Auto-push Items to EasyEcom on save",
+   "default": "0",
+   "description": "When ON: every ERPNext Item create/edit (and every Product Bundle save) enqueues a §8d push to EasyEcom. Defaults OFF for safety — accidental enable on a fresh deployment would push every existing Item. Turn ON only when you've configured credentials and want steady-state push automation. The push is queued (non-blocking on save) and obeys the same flagging logic as the batch sweep — missing-mandatory fields → FNC map row, not a broken EE payload."
+  },
+  {
+   "fieldname": "push_all_pending_action",
+   "fieldtype": "Button",
+   "label": "Push All Pending Items (§8d Onboarding Sweep)",
+   "description": "Trigger the §8d batch push for every Item not yet pushed: is_stock_item=1, not disabled, has gst_hsn_code, NO existing map with ee_product_id. Bundle wrappers dispatch to combo push. Resumable — re-running picks up only still-pending items. Used for one-shot onboarding; steady-state changes flow via the auto-push hook."
   },
   {
    "fieldname": "internal_section",

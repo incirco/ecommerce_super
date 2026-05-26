@@ -688,6 +688,266 @@ def _upsert_bundle_map_row_flagged(
 # ============================================================
 
 
+# ============================================================
+# Auto-push hook (Stage 6 — doc_event wired in hooks.py)
+# ============================================================
+
+
+# Frappe doc-event handlers receive (doc, method) — `method` is the
+# event name ("after_insert" / "on_update"). We accept any kwargs to
+# stay forward-compatible if Frappe extends the signature.
+def enqueue_on_item_change(doc: Any, method: str | None = None, **_kwargs) -> None:
+    """doc_event handler for Item.after_insert / on_update.
+
+    Fires the §8d push for an ERPNext Item save IFF all of these hold:
+      1. An enabled EasyEcom Account exists with auto_push_on_save=1.
+         Default is 0 — accidental enable on a fresh deployment would
+         push every existing Item. FDE toggles ON when ready.
+      2. The current operation is NOT inside an EasyEcom pull
+         (frappe.flags.in_easyecom_pull). The Stage-2 pull saves Items
+         after translating EE payloads; without this gate the hook
+         would immediately re-push the just-pulled item back to EE,
+         causing a ping-pong (wasteful even though idempotent).
+      3. The Item is not a variant-template (`has_variants=1`) — those
+         aren't real products we push to EE.
+
+    The handler enqueues via frappe.enqueue (non-blocking on save).
+    Push failures land in Error Log + the Item's map row as FNC; the
+    Item save itself never fails because of a push problem.
+
+    Test safety: the auto_push_on_save flag defaults 0, so the test
+    suite's many Item saves don't trigger any enqueue. Tests of the
+    hook itself set the flag explicitly.
+    """
+    account_name = _account_with_auto_push_enabled()
+    if not account_name:
+        return
+    if frappe.flags.get("in_easyecom_pull"):
+        return
+    if getattr(doc, "has_variants", 0):
+        return
+    enqueue_item_push(doc.item_code, account_name=account_name)
+
+
+def enqueue_on_bundle_change(doc: Any, method: str | None = None, **_kwargs) -> None:
+    """doc_event handler for Product Bundle.after_insert / on_update.
+
+    A bundle save is a push trigger via its wrapper Item — push_one_item
+    auto-dispatches to push_one_bundle when it sees a Product Bundle
+    pointing at this item_code. Reuse the same enqueue function.
+    """
+    account_name = _account_with_auto_push_enabled()
+    if not account_name:
+        return
+    if frappe.flags.get("in_easyecom_pull"):
+        return
+    wrapper_code = doc.new_item_code
+    if not wrapper_code:
+        return
+    enqueue_item_push(wrapper_code, account_name=account_name)
+
+
+def _account_with_auto_push_enabled() -> str | None:
+    """The single enabled EasyEcom Account with auto_push_on_save=1.
+
+    §8.1 assumes one EasyEcom Account per deployment (account-wide
+    credentials, account-wide catalogue). If multiple are configured
+    with auto_push on, returns the first by name — but flag the
+    config as ambiguous via Error Log (FDE should disable one)."""
+    rows = frappe.db.get_all(
+        "EasyEcom Account",
+        filters={"enabled": 1, "auto_push_on_save": 1},
+        fields=["name"],
+        order_by="name asc",
+        limit=2,
+    )
+    if not rows:
+        return None
+    if len(rows) > 1:
+        frappe.log_error(
+            title="EasyEcom: multiple Accounts have auto_push_on_save=1",
+            message=(
+                f"Auto-push fires for the first by name: {rows[0].name}. "
+                "Disable auto_push on the others to remove ambiguity."
+            ),
+        )
+    return rows[0].name
+
+
+# ============================================================
+# Whitelist endpoints — manual FDE triggers (Stage 6)
+# ============================================================
+
+
+# Roles allowed to trigger a manual push (matches the pattern from
+# discover_locations / discover_channels / discover_products).
+_PUSH_ROLES: frozenset[str] = frozenset(
+    {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+)
+
+
+def _require_push_role() -> None:
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(_PUSH_ROLES):
+        frappe.throw(
+            frappe._(
+                "EasyEcom push actions require EasyEcom FDE or "
+                "System Manager privilege."
+            ),
+            frappe.PermissionError,
+        )
+
+
+def _resolve_account(account: str | None = None) -> str:
+    """Pick the EasyEcom Account name to use for the push.
+
+    If `account` is passed (from a button click on a specific Account
+    form), use it. Otherwise pick the single enabled Account — §8.1
+    assumes one per deployment. Refuses ambiguity (zero or multiple)
+    with a clean error rather than silently picking one."""
+    if account:
+        if not frappe.db.exists("EasyEcom Account", account):
+            frappe.throw(
+                frappe._("EasyEcom Account {0} not found.").format(account)
+            )
+        return account
+    rows = frappe.db.get_all(
+        "EasyEcom Account",
+        filters={"enabled": 1},
+        fields=["name"],
+        order_by="name asc",
+        limit=2,
+    )
+    if not rows:
+        frappe.throw(
+            frappe._("No enabled EasyEcom Account found.")
+        )
+    if len(rows) > 1:
+        frappe.throw(
+            frappe._(
+                "Multiple enabled EasyEcom Accounts; pass `account` to "
+                "disambiguate."
+            )
+        )
+    return rows[0].name
+
+
+@frappe.whitelist()
+def push_one_product(item_code: str, account: str | None = None) -> dict[str, Any]:
+    """FDE-facing wrapper around push_one_item / push_one_bundle.
+
+    Used by the Item form's "Push to EasyEcom" button. Detects bundle
+    wrappers and dispatches automatically (the underlying push_one_item
+    handles that). Returns a JS-friendly dict; never raises through
+    the whitelist boundary."""
+    _require_push_role()
+    if not item_code:
+        return {"ok": False, "message": "item_code required"}
+    if not frappe.db.exists("Item", item_code):
+        return {
+            "ok": False,
+            "message": frappe._("Item {0} not found.").format(item_code),
+        }
+    account_name = _resolve_account(account)
+    account_doc = frappe.get_doc("EasyEcom Account", account_name)
+    client = EasyEcomClient(account=account_doc)
+    try:
+        outcome = push_one_item(
+            item_code, client=client, account=account_doc
+        )
+    except Exception as exc:  # noqa: BLE001 — whitelist boundary
+        frappe.log_error(
+            title=f"EasyEcom push_one_product failed: {item_code}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {
+            "ok": False,
+            "item_code": item_code,
+            "message": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": True,
+        "item_code": item_code,
+        "pushed": outcome.pushed,
+        "operation": outcome.operation,
+        "ee_product_id": outcome.ee_product_id,
+        "flag_reasons": outcome.flag_reasons,
+    }
+
+
+@frappe.whitelist()
+def push_lifecycle_product(
+    item_code: str, account: str | None = None
+) -> dict[str, Any]:
+    """FDE-facing wrapper around push_lifecycle. For the "Sync
+    lifecycle to EasyEcom" button on the Item form — sends
+    ActivateDeactivateProduct based on current Item.disabled state."""
+    _require_push_role()
+    if not item_code:
+        return {"ok": False, "message": "item_code required"}
+    if not frappe.db.exists("Item", item_code):
+        return {
+            "ok": False,
+            "message": frappe._("Item {0} not found.").format(item_code),
+        }
+    account_name = _resolve_account(account)
+    account_doc = frappe.get_doc("EasyEcom Account", account_name)
+    client = EasyEcomClient(account=account_doc)
+    try:
+        outcome = push_lifecycle(
+            item_code, client=client, account=account_doc
+        )
+    except Exception as exc:  # noqa: BLE001
+        frappe.log_error(
+            title=f"EasyEcom push_lifecycle failed: {item_code}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+    return {
+        "ok": True,
+        "item_code": item_code,
+        "pushed": outcome.pushed,
+        "operation": outcome.operation,
+        "flag_reasons": outcome.flag_reasons,
+    }
+
+
+@frappe.whitelist()
+def push_all_pending_products(account: str) -> dict[str, Any]:
+    """FDE-facing batch sweep. The Push All Pending button on the
+    EasyEcom Account form. Reports counts back inline."""
+    _require_push_role()
+    if not account:
+        return {"ok": False, "message": "account required"}
+    try:
+        outcome = push_all_pending(account_name=account)
+    except Exception as exc:  # noqa: BLE001
+        frappe.log_error(
+            title="EasyEcom push_all_pending_products failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+    failed = [
+        {"item_code": o.item_code, "reason": " || ".join(o.flag_reasons)}
+        for o in outcome.outcomes
+        if o.operation in ("flagged", "error")
+    ]
+    return {
+        "ok": True,
+        "total_considered": outcome.total_considered,
+        "create_count": outcome.create_count,
+        "update_count": outcome.update_count,
+        "skipped_count": outcome.skipped_count,
+        "flagged_count": outcome.flagged_count,
+        "failed_sample": failed[:10],
+    }
+
+
+# ============================================================
+# Original Stage-3 queue worker
+# ============================================================
+
+
 def enqueue_item_push(item_code: str, *, account_name: str) -> None:
     """Queue-able worker entry for the individual-push trigger.
 

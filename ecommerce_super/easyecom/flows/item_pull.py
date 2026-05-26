@@ -478,11 +478,45 @@ def process_one_product(
     upsert → multi-Co tax. Exposed at module scope (not nested) so
     tests can drive single-product cases without standing up a whole
     cursor walk.
+
+    Sets `frappe.flags.in_easyecom_pull = True` for the duration so
+    that the auto-push hook (item_push.enqueue_on_item_change) skips
+    any Items / Product Bundles this function saves — without the
+    flag, a just-pulled item would immediately re-push back to EE
+    (pull→push ping-pong; wasteful, idempotent, but pollutes the
+    EE-side change log). The flag is restored in a finally block so
+    a raised exception doesn't leak the flag to the next iteration.
     """
     sku = (product or {}).get("sku")
     if not sku:
         raise ValueError("product payload has no sku — cannot proceed")
     product_type = (product or {}).get("product_type") or "<missing>"
+    prior_pull_flag = frappe.flags.get("in_easyecom_pull")
+    frappe.flags.in_easyecom_pull = True
+    try:
+        return _process_one_product_inner(
+            product, product_type=product_type, sku=sku,
+            account=account, executor=executor,
+            enabled_companies=enabled_companies,
+            is_stock_item=is_stock_item,
+        )
+    finally:
+        frappe.flags.in_easyecom_pull = prior_pull_flag
+
+
+def _process_one_product_inner(
+    product: dict,
+    *,
+    product_type: str,
+    sku: str,
+    account: Any,
+    executor: FieldMappingExecutor,
+    enabled_companies: list[str],
+    is_stock_item: int,
+) -> ProductOutcome:
+    """The actual per-product logic, called by process_one_product
+    under the in_easyecom_pull flag (which gates the auto-push hook
+    from re-pushing what we just pulled)."""
 
     # === Stage 5 gate: phase-governed routing (§8.1.1 / §8.1.8) ===
     # In erpnext_mastered mode, the pull is a DRIFT DETECTOR — it

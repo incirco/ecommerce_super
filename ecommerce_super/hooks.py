@@ -47,6 +47,22 @@ after_install = "ecommerce_super.install.after_install"
 
 
 # ============================================================
+# DocType JS overrides (form-script add-ons for stock DocTypes)
+# ============================================================
+#
+# Stock ERPNext / Frappe DocTypes that need EasyEcom buttons get their
+# JS injected here. Our own DocTypes ship their JS alongside their
+# JSON in the doctype/ folder — those don't need to be listed here.
+
+doctype_js = {
+    # §8d Stage 6: "Push to EasyEcom" + "Sync Lifecycle" buttons on
+    # the Item form. Auto-dispatches to bundle path when the Item is
+    # a Product Bundle wrapper.
+    "Item": "public/js/item_push_button.js",
+}
+
+
+# ============================================================
 # Fixtures
 # ============================================================
 #
@@ -167,6 +183,22 @@ fixtures = [
 # make the slot visible.
 
 doc_events: dict[str, dict[str, str]] = {
+    # §8d Stage 6: auto-push hook. Fires on every Item / Product Bundle
+    # save when EasyEcom Account.auto_push_on_save=1 (default 0 — safe
+    # by default). Handlers are gated by:
+    #   - account flag enabled
+    #   - frappe.flags.in_easyecom_pull is FALSE (avoid pull→push
+    #     ping-pong when the Stage-2 pull saves an Item)
+    #   - Item is not a variant template (has_variants=0)
+    # Failures are queued / logged, never block the save itself.
+    "Item": {
+        "after_insert": "ecommerce_super.easyecom.flows.item_push.enqueue_on_item_change",
+        "on_update": "ecommerce_super.easyecom.flows.item_push.enqueue_on_item_change",
+    },
+    "Product Bundle": {
+        "after_insert": "ecommerce_super.easyecom.flows.item_push.enqueue_on_bundle_change",
+        "on_update": "ecommerce_super.easyecom.flows.item_push.enqueue_on_bundle_change",
+    },
     # "Sales Order": {
     #     "validate": "ecommerce_super.easyecom.flows.b2b_sales.validate_pre_push",
     #     "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.on_submit_push",
