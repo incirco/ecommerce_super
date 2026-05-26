@@ -86,15 +86,36 @@ ITEM_PULL_RULESET: str = "EasyEcom-Item-Pull"
 # Default page size (EE allows up to 200 per §8.1.4).
 DEFAULT_PAGE_SIZE: int = 200
 
-# Item product types we know how to handle. The §8.1.4 spec lists
-# `normal_product` and `combo_product` as creatable, but Stage 2 only
-# creates Items — combos become Product Bundles in Stage 4. Everything
-# else (variant_parent / child_product / kit_bom / any future or
-# unknown type) is Flagged-Not-Created so an FDE sees a visible task
-# rather than silent skipping.
-CREATABLE_AS_ITEM: frozenset[str] = frozenset({"normal_product"})
+# Item product types we know how to handle.
+#
+# EE classifies products as:
+#   - normal_product   - standalone sellable item
+#   - combo_product    - "virtual combo" - sold as one SKU but
+#                        composed of multiple sub_products
+#   - child_product    - standalone sellable item that ALSO
+#                        appears as a sub_product inside one or
+#                        more combos. The seller can move the
+#                        SKU both ways: standalone AND as part
+#                        of a combo. Confirmed with the user
+#                        2026-05-26 against the Harmony sandbox.
+#                        Therefore we treat child_product the
+#                        same as normal_product on Stage 2 -
+#                        create the standalone Item; the §8.1.6
+#                        combo component resolver will then find
+#                        the Item Map row when the parent combo
+#                        is processed.
+#   - variant_parent / kit_bom / unknown - not yet supported;
+#     held FNC so the FDE sees a visible task.
+#
+# Stage 4 handles combo_product by building a Product Bundle
+# whose components point at the sub_products' standalone Items.
+CREATABLE_AS_ITEM: frozenset[str] = frozenset(
+    {"normal_product", "child_product"}
+)
 COMBO_TYPE: str = "combo_product"
-SUPPORTED_TYPES: frozenset[str] = frozenset({"normal_product", "combo_product"})
+SUPPORTED_TYPES: frozenset[str] = frozenset(
+    {"normal_product", "child_product", "combo_product"}
+)
 
 # Map row status values that the pull writes. Defined here so a typo
 # in flow code becomes an obvious type error rather than a silent
@@ -245,10 +266,23 @@ def pull_products(
             ),
         )
 
+    # `updated_after` is the delta-pull watermark - skip products
+    # whose EE-side modified timestamp is <= this value. On start_fresh
+    # we MUST NOT pass this; otherwise the previous run's bumped
+    # watermark (item_pull_last_updated_at) tells EE "give me only
+    # products updated AFTER the moment the prior pull finished",
+    # i.e. nothing, and the listing endpoint returns
+    # `{"data": "No Data Found"}` while the count endpoint still
+    # reports the full catalogue - confusing and indistinguishable
+    # from real empty pages. start_fresh by definition wants the
+    # whole catalogue, watermark or no watermark.
+    updated_after = (
+        None if start_fresh else account.get("item_pull_last_updated_at")
+    )
     for page in _iter_pages(
         client,
         starting_cursor=starting_cursor,
-        updated_after=account.get("item_pull_last_updated_at"),
+        updated_after=updated_after,
         max_pages=max_pages,
     ):
         products = _normalise_page_data(page.get("data"))
@@ -1407,8 +1441,21 @@ def _process_combo_product(
         "EasyEcom Item Map", {"ee_sku": sku}, "name"
     )
     bundle_existed = False
-    if map_name:
-        map_doc = frappe.get_doc("EasyEcom Item Map", map_name)
+    map_doc = frappe.get_doc("EasyEcom Item Map", map_name) if map_name else None
+    # An existing map row with erpnext_doctype/erpnext_name both blank
+    # came from a prior pull's FNC outcome (sub_products not yet
+    # mapped, etc.). On this re-pull the gating checks above passed,
+    # so we now have everything needed to build the Bundle - route to
+    # the create branch and ATTACH the existing row in place. Without
+    # this we'd FNC again with the unhelpful "unknown erpnext_doctype"
+    # reason.
+    map_is_unattached = (
+        map_doc is not None
+        and not map_doc.erpnext_doctype
+        and not map_doc.erpnext_name
+    )
+
+    if map_doc and not map_is_unattached:
         if map_doc.erpnext_doctype == "Product Bundle":
             wrapper_item, bundle = _load_or_refresh_bundle_from_map(
                 map_doc, erpnext_fields, components
@@ -1439,20 +1486,31 @@ def _process_combo_product(
                 product=product,
             )
     else:
-        # Fresh combo: create the wrapper Item, then the Product
-        # Bundle, then the map row.
+        # Fresh combo OR a re-pull of a previously-FNC combo whose
+        # sub_products are now mapped. Create the wrapper Item + the
+        # Product Bundle, then either insert a fresh map row or attach
+        # the existing unattached one.
         wrapper_item = _create_item(erpnext_fields, is_stock_item=0)
         bundle = _create_product_bundle(
             wrapper_item.item_code, components=components
         )
-        map_doc = _create_map_row(
-            sku=sku,
-            erpnext_doctype="Product Bundle",
-            erpnext_name=bundle.name,
-            ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
-            ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
-            status=STATUS_MAPPED,
-        )
+        if map_is_unattached:
+            map_doc = _attach_map_row(
+                map_doc,
+                erpnext_doctype="Product Bundle",
+                erpnext_name=bundle.name,
+                erpnext_fields=erpnext_fields,
+                status=STATUS_MAPPED,
+            )
+        else:
+            map_doc = _create_map_row(
+                sku=sku,
+                erpnext_doctype="Product Bundle",
+                erpnext_name=bundle.name,
+                ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
+                ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
+                status=STATUS_MAPPED,
+            )
 
     # === Step 6: lifecycle (active:0 → disable wrapper) ===
     if product.get("active") in (0, "0", False) and not wrapper_item.disabled:
