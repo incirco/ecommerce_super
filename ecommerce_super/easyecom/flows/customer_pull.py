@@ -63,6 +63,51 @@ from ecommerce_super.easyecom.flows._isolation import (
 CUSTOMER_PULL_RULESET: str = "EasyEcom-Customer-Pull"
 RESPONSE_DATA_KEY: str = "data"
 
+# Stage 5 — Map row status values + customer_master_mode constants.
+# Mirrors §8d Stage 5 (item_pull.py). STATUS_DRIFT is what the
+# post-flip pull writes when it detects EE-side divergence; ERPNext
+# is NOT touched in that case (§8.2 / §7.3 — divergence is not failure).
+STATUS_MAPPED: str = "Mapped"
+STATUS_DRIFT: str = "Drift"
+STATUS_FLAGGED_NOT_CREATED: str = "Flagged-Not-Created"
+
+MODE_ONBOARDING: str = "onboarding"
+MODE_ERPNEXT_MASTERED: str = "erpnext_mastered"
+
+# Stage 5 — fields the drift detector compares between the freshly-
+# translated EE payload and the existing ERPNext Customer + its linked
+# Addresses. Split into Customer-level and Address-level so the FDE
+# can tell from a drift_fields child row WHICH doc differed (the field
+# label carries the prefix).
+#
+# Internal IDs (ee_c_id / ee_customer_id, c_id, customerId) are
+# deliberately NOT compared — they're identity-management state, not
+# user-visible content. A change there would be a remap operation,
+# not drift in the §8.2 sense.
+CUSTOMER_DRIFT_COMPARABLE_CUSTOMER_FIELDS: tuple[str, ...] = (
+    "customer_name",
+    "email_id",
+    "mobile_no",
+    "gstin",
+    "default_currency",
+)
+
+# (drift label, payload_key from ruleset, ERPNext Address field).
+# "billing." / "dispatch." prefix on the label is what the FDE sees
+# in the drift_fields child table.
+CUSTOMER_DRIFT_COMPARABLE_ADDRESS_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("billing.street", "billing_street", "address_line1"),
+    ("billing.city", "billing_city", "city"),
+    ("billing.pincode", "billing_zipcode", "pincode"),
+    ("billing.state", "billing_state_name", "state"),
+    ("billing.country", "billing_country_name", "country"),
+    ("dispatch.street", "dispatch_street", "address_line1"),
+    ("dispatch.city", "dispatch_city", "city"),
+    ("dispatch.pincode", "dispatch_zipcode", "pincode"),
+    ("dispatch.state", "dispatch_state_name", "state"),
+    ("dispatch.country", "dispatch_country_name", "country"),
+)
+
 
 # ----- Outcome types -----
 
@@ -96,6 +141,7 @@ class PullOutcome:
     skipped: int = 0
     created_flagged: int = 0
     flagged_not_created: int = 0
+    drift_count: int = 0  # Stage 5: post-flip detection
     failed: int = 0
     outcomes: list[CustomerOutcome] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
@@ -140,6 +186,12 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
     is instantiated ONCE for the whole batch — compilation queries the
     DB, doing it per row would be wasted work.
 
+    **Phase-governed direction (Stage 5):** before dispatching, look up
+    customer_master_mode on the enabled EasyEcom Account. In
+    `erpnext_mastered` mode, every row routes to drift detection
+    instead of accept-and-create. The branch happens INSIDE
+    process_one_customer per the §8d pattern.
+
     Sets `frappe.flags.easyecom_customer_pull_in_flight=True` while
     processing — the Stage 4 push hook checks this flag to avoid
     re-pushing a customer that was just pulled (ping-pong guard).
@@ -148,10 +200,13 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
 
     executor = FieldMappingExecutor(CUSTOMER_PULL_RULESET)
     aggregate = PullOutcome(total=len(rows))
+    account_mode = _resolve_customer_master_mode()
     frappe.flags.__setattr__(PING_PONG_FLAG, True)
 
     def _handle(row: dict) -> None:
-        outcome = process_one_customer(row, executor=executor)
+        outcome = process_one_customer(
+            row, executor=executor, account_mode=account_mode
+        )
         aggregate.outcomes.append(outcome)
         if outcome.status == "Mapped" and outcome.operation == "created":
             aggregate.created += 1
@@ -161,6 +216,8 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
             aggregate.created_flagged += 1
         elif outcome.status == "Flagged-Not-Created":
             aggregate.flagged_not_created += 1
+        elif outcome.status == "Drift":
+            aggregate.drift_count += 1
 
     def _on_failure(row: dict, exc: BaseException) -> None:
         ee_c_id = str((row or {}).get("c_id") or "<unknown>")
@@ -203,7 +260,10 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
 
 
 def process_one_customer(
-    row: dict, *, executor: FieldMappingExecutor
+    row: dict,
+    *,
+    executor: FieldMappingExecutor,
+    account_mode: str = MODE_ONBOARDING,
 ) -> CustomerOutcome:
     """Translate one /Wholesale/v2/UserManagement row through the engine
     and create the ERPNext Customer + Billing/Shipping Address + Map.
@@ -239,6 +299,16 @@ def process_one_customer(
         raise ValueError(
             "Field Mapping engine returned no ee_c_id for /Wholesale row "
             "(check EasyEcom-Customer-Pull ruleset)."
+        )
+
+    # === Stage 5 phase gate: post-flip → drift detection only ===
+    # Mirrors §8d Stage 5: branch BEFORE GSTIN gating / address creation
+    # so post-flip pulls NEVER mutate ERPNext, regardless of what EE
+    # sent. (§8.2 contract: in steady state, ERPNext is the source of
+    # truth; EE-side change → Drift map row + Discrepancy SR.)
+    if account_mode == MODE_ERPNEXT_MASTERED:
+        return _detect_drift_one_customer(
+            row=row, erpnext_fields=erpnext_fields, ee_c_id=ee_c_id
         )
 
     # === 1) Map-row match (no natural-key auto-match) ===
@@ -533,6 +603,494 @@ def _write_pull_sync_record(
             ),
             message=f"{type(exc).__name__}: {exc}",
         )
+
+
+# ----- Stage 5 — drift detection -----
+
+
+def _resolve_customer_master_mode() -> str:
+    """Look up customer_master_mode on the first enabled EasyEcom
+    Account. Defaults to onboarding (pre-flip behavior) when no
+    account is configured. The pull flow is account-wide so this
+    works as a single read at the top of the batch."""
+    mode = frappe.db.get_value(
+        "EasyEcom Account",
+        {"enabled": 1},
+        "customer_master_mode",
+        order_by="creation asc",
+    )
+    return mode or MODE_ONBOARDING
+
+
+def _detect_drift_one_customer(
+    *, row: dict, erpnext_fields: dict, ee_c_id: str
+) -> CustomerOutcome:
+    """Post-flip pull — DETECTS drift, never accepts or overwrites.
+
+    Three outcomes (mirror §8d Stage 5):
+      1. EE-origin NEW customer (no Customer Map row for the c_id):
+         Drift map row is created so the c_id is FDE-visible; NO
+         Customer / Address rows are created. In steady state ERPNext
+         owns the customer master; EE novelty is flagged, not adopted.
+      2. EE-side EDIT to a mapped customer (existing map → existing
+         Customer; payload differs from Customer + linked Addresses
+         on a comparable field): Drift; structured per-field diffs
+         in drift_fields child table. Nothing on ERPNext is touched.
+      3. NO drift (EE payload matches): map row left as-is; any prior
+         drift_fields child rows cleared (the divergence was resolved
+         upstream). Status stays Mapped — no flap.
+
+    Lifecycle: EE exposes NO active/disabled signal on customers (the
+    captured Harmony fixture only has `is_b2b_new` and it's false on
+    all 23 records). So there's no pull-side lifecycle drift entry
+    to emit (unlike §8d Item which flags EE active→0 disable).
+    """
+    map_row = frappe.db.get_value(
+        "EasyEcom Customer Map",
+        {"ee_c_id": ee_c_id},
+        ["name", "erpnext_name", "status"],
+        as_dict=True,
+    )
+
+    # === Case 1: EE-origin new customer post-flip ===
+    if not map_row:
+        reason = (
+            f"EE-origin new customer c_id={ee_c_id} appeared post-flip "
+            f"(customer_master_mode=erpnext_mastered); not created in "
+            "ERPNext because ERPNext is the source of truth in steady "
+            "state. FDE: (a) create the Customer in ERPNext and push it "
+            "(Stage 4 — but no auto-map exists for Customer; the FDE "
+            "must explicitly create a map row to link), or (b) ignore "
+            "EE-side novelty by marking this row Disabled."
+        )
+        map_name = _upsert_drift_map_row(
+            ee_c_id=ee_c_id,
+            erpnext_name=None,
+            reason=reason,
+        )
+        _write_pull_sync_record(
+            entity_name=None,  # no Customer to link to
+            ee_c_id=ee_c_id,
+            status=STATUS_DISCREPANCY,
+            last_error=reason,
+        )
+        return CustomerOutcome(
+            ee_c_id=ee_c_id,
+            customer_docname=None,
+            status="Drift",
+            operation="flagged",
+            flag_reasons=[reason],
+        )
+
+    # === Case 2/3: existing mapping — diff payload vs Customer + Addresses ===
+    if not map_row.erpnext_name or not frappe.db.exists(
+        "Customer", map_row.erpnext_name
+    ):
+        reason = (
+            f"Map row {map_row.name} has no linked Customer (or the "
+            "Customer was deleted); cannot compare for drift. FDE: "
+            "investigate the map row's link target."
+        )
+        _mark_existing_map_drift(map_row.name, reasons=[reason])
+        _write_pull_sync_record(
+            entity_name=None,
+            ee_c_id=ee_c_id,
+            status=STATUS_DISCREPANCY,
+            last_error=reason,
+        )
+        return CustomerOutcome(
+            ee_c_id=ee_c_id,
+            customer_docname=map_row.erpnext_name,
+            status="Drift",
+            operation="flagged",
+            flag_reasons=[reason],
+        )
+
+    customer = frappe.get_doc("Customer", map_row.erpnext_name)
+    excluded_fields = _load_excluded_fields(map_row.name)
+    diffs = _diff_customer_payload_vs_docs(
+        erpnext_fields=erpnext_fields,
+        customer=customer,
+        excluded_fields=excluded_fields,
+    )
+
+    if not diffs:
+        # Clean re-pull — clear any stale drift child rows AND auto-heal
+        # status (Drift → Mapped). The post-clear status is always
+        # Mapped on this path (the row is clean either way).
+        _clear_drift_state(map_row.name)
+        _write_pull_sync_record(
+            entity_name=customer.name,
+            ee_c_id=ee_c_id,
+            status=STATUS_SUCCESS,
+            last_error=None,
+        )
+        return CustomerOutcome(
+            ee_c_id=ee_c_id,
+            customer_docname=customer.name,
+            status="Mapped",
+            operation="skipped",
+        )
+
+    _record_drift_with_table(map_row.name, diffs=diffs)
+    reason_strings = [
+        f"{d['field']}: ERPNext={d['erpnext_value']!r} EE→{d['ee_value']!r}"
+        for d in diffs
+    ]
+    _write_pull_sync_record(
+        entity_name=customer.name,
+        ee_c_id=ee_c_id,
+        status=STATUS_DISCREPANCY,
+        last_error=" || ".join(reason_strings),
+    )
+    return CustomerOutcome(
+        ee_c_id=ee_c_id,
+        customer_docname=customer.name,
+        status="Drift",
+        operation="flagged",
+        flag_reasons=reason_strings,
+    )
+
+
+def _diff_customer_payload_vs_docs(
+    *, erpnext_fields: dict, customer: Any, excluded_fields: set[str]
+) -> list[dict]:
+    """Compare translated EE payload against the existing Customer +
+    its linked Billing/Shipping Addresses. Returns structured diff
+    dicts shaped like EasyEcom Item Map Drift Field child rows
+    (field/erpnext_value/ee_value)."""
+    diffs: list[dict] = []
+
+    # Customer-level fields.
+    for fld in CUSTOMER_DRIFT_COMPARABLE_CUSTOMER_FIELDS:
+        if fld in excluded_fields:
+            continue
+        if fld not in erpnext_fields:
+            continue
+        ee_value = erpnext_fields.get(fld)
+        en_value = customer.get(fld)
+        if _values_differ(ee_value, en_value):
+            diffs.append(
+                {
+                    "field": fld,
+                    "erpnext_value": _stringify(en_value),
+                    "ee_value": _stringify(ee_value),
+                }
+            )
+
+    # Address-level fields. We look up both Billing and Shipping
+    # Addresses once and reuse for all rows under each side.
+    billing = _find_address_for_drift(customer.name, address_type="Billing")
+    shipping = _find_address_for_drift(customer.name, address_type="Shipping")
+    for label, payload_key, address_field in CUSTOMER_DRIFT_COMPARABLE_ADDRESS_FIELDS:
+        if label in excluded_fields:
+            continue
+        if payload_key not in erpnext_fields:
+            continue
+        ee_value = erpnext_fields.get(payload_key)
+        address_doc = billing if label.startswith("billing.") else shipping
+        en_value = (address_doc or {}).get(address_field) if address_doc else None
+        if _values_differ(ee_value, en_value):
+            diffs.append(
+                {
+                    "field": label,
+                    "erpnext_value": _stringify(en_value),
+                    "ee_value": _stringify(ee_value),
+                }
+            )
+
+    return diffs
+
+
+def _find_address_for_drift(
+    customer_docname: str, *, address_type: str
+) -> dict | None:
+    """Read-only Address lookup for drift comparison. Mirrors the
+    push-flow helper but with a different field list (drift cares
+    about the user-visible fields)."""
+    rows = frappe.db.sql(
+        """
+        SELECT a.name, a.address_line1, a.city, a.pincode, a.state, a.country
+        FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl ON dl.parent = a.name
+        WHERE dl.parenttype = 'Address'
+          AND dl.link_doctype = 'Customer'
+          AND dl.link_name = %s
+          AND a.address_type = %s
+        ORDER BY a.creation ASC
+        LIMIT 1
+        """,
+        (customer_docname, address_type),
+        as_dict=True,
+    )
+    return rows[0] if rows else None
+
+
+def _values_differ(a: Any, b: Any) -> bool:
+    """Drift comparison with None / "" / 0 leniency. Identical to
+    §8d's _values_differ — copied (not imported) to keep the
+    Customer flow's drift logic self-contained."""
+
+    def _norm(v: Any) -> Any:
+        if v in (None, ""):
+            return None
+        if isinstance(v, str):
+            return v.strip() or None
+        return v
+
+    na, nb = _norm(a), _norm(b)
+    if na is None and nb is None:
+        return False
+    if na is None or nb is None:
+        return True
+    try:
+        return abs(float(na) - float(nb)) > 0.0001
+    except (TypeError, ValueError):
+        return na != nb
+
+
+def _stringify(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v)
+    return s if len(s) <= 200 else (s[:197] + "...")
+
+
+def _load_excluded_fields(map_name: str) -> set[str]:
+    """Read FDE-marked exclude list off the Customer Map row. Reuses
+    §8d's EasyEcom Item Map Exclude Field child DocType (the child
+    schema is entity-agnostic — see Stage 1 inventory finding)."""
+    rows = frappe.db.get_all(
+        "EasyEcom Item Map Exclude Field",
+        filters={"parent": map_name, "parenttype": "EasyEcom Customer Map"},
+        fields=["field"],
+    )
+    return {r.field for r in rows if r.field}
+
+
+def _upsert_drift_map_row(
+    *,
+    ee_c_id: str,
+    erpnext_name: str | None,
+    reason: str,
+) -> str:
+    """Create or update a Customer Map row in Drift status. Used for
+    the EE-origin-new-customer case (no prior map row)."""
+    existing = frappe.db.get_value(
+        "EasyEcom Customer Map", {"ee_c_id": ee_c_id}, "name"
+    )
+    if existing:
+        frappe.db.set_value(
+            "EasyEcom Customer Map",
+            existing,
+            {"status": STATUS_DRIFT, "flag_reason": reason[:140]},
+            update_modified=True,
+        )
+        return existing
+    doc = frappe.new_doc("EasyEcom Customer Map")
+    doc.update(
+        {
+            "ee_c_id": ee_c_id,
+            "ee_customer_id": ee_c_id,
+            "erpnext_doctype": "Customer" if erpnext_name else None,
+            "erpnext_name": erpnext_name,
+            "status": STATUS_DRIFT,
+            "flag_reason": reason[:140],
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return doc.name
+
+
+def _mark_existing_map_drift(map_name: str, *, reasons: list[str]) -> None:
+    """Flip an existing map row to Drift status with the diff list as
+    the reason. NEVER mutates the linked Customer — drift is read-only
+    on the ERPNext side."""
+    reason = " || ".join(reasons) if reasons else ""
+    frappe.db.set_value(
+        "EasyEcom Customer Map",
+        map_name,
+        {"status": STATUS_DRIFT, "flag_reason": reason[:140]},
+        update_modified=True,
+    )
+
+
+def _record_drift_with_table(map_name: str, *, diffs: list[dict]) -> None:
+    """Write the structured diff to the Customer Map's drift_fields
+    child table + set status=Drift + drift_detected_at=now."""
+    map_doc = frappe.get_doc("EasyEcom Customer Map", map_name)
+    map_doc.set("drift_fields", [])
+    now = frappe.utils.now_datetime()
+    for d in diffs:
+        map_doc.append(
+            "drift_fields",
+            {
+                "field": d["field"],
+                "erpnext_value": d["erpnext_value"],
+                "ee_value": d["ee_value"],
+                "detected_at": now,
+            },
+        )
+    map_doc.status = STATUS_DRIFT
+    map_doc.drift_detected_at = now
+    map_doc.flag_reason = (
+        f"{len(diffs)} field(s) drifted — see Drift Fields table below"
+    )
+    map_doc.save(ignore_permissions=True)
+
+
+def _clear_drift_state(map_name: str) -> None:
+    """Clean re-pull — clear the drift table + drift_detected_at so
+    historical diffs don't linger when the EE-side state has been
+    fixed upstream. Auto-heal status: if the row was Drift, reset to
+    Mapped (FDE no longer needs to manually Dismiss stale drift). This
+    diverges from §8d Item where the FDE owns the status reset; for
+    Customer we prefer auto-recovery on no-diff to keep the worklist
+    clean."""
+    map_doc = frappe.get_doc("EasyEcom Customer Map", map_name)
+    was_drift = map_doc.status == STATUS_DRIFT
+    if not map_doc.get("drift_fields") and not was_drift:
+        return
+    map_doc.set("drift_fields", [])
+    map_doc.drift_detected_at = None
+    if was_drift:
+        map_doc.status = STATUS_MAPPED
+        map_doc.flag_reason = None
+    map_doc.save(ignore_permissions=True)
+
+
+# Sync Record Discrepancy status — for the post-flip drift outcomes.
+# §7.3: divergence is NOT failure; Drift outcome → Discrepancy SR.
+from ecommerce_super.easyecom.flows._customer_sync_records import (  # noqa: E402
+    STATUS_DISCREPANCY,
+)
+
+
+# ----- Drift resolution actions (whitelisted) -----
+
+
+@frappe.whitelist()
+def dismiss_drift(customer_map_name: str) -> dict[str, Any]:
+    """FDE acknowledges the EE-side change is wrong or already-handled
+    upstream. Returns the row to Mapped, clears the Drift Fields table,
+    leaves the underlying Customer + Addresses untouched.
+
+    The next pull will re-detect if the divergence still exists; to
+    silence persistent intentional divergence, the FDE adds the field
+    to ecs_drift_exclude_fields (audit #10) instead.
+
+    Mirror of §8d's dismiss_drift (item_pull.py).
+    """
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Dismiss Drift requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not customer_map_name:
+        return {"ok": False, "message": "customer_map_name required"}
+    if not frappe.db.exists("EasyEcom Customer Map", customer_map_name):
+        return {
+            "ok": False,
+            "message": f"Customer Map {customer_map_name!r} not found.",
+        }
+    doc = frappe.get_doc("EasyEcom Customer Map", customer_map_name)
+    if doc.status != STATUS_DRIFT:
+        return {
+            "ok": False,
+            "message": (
+                f"Customer Map {customer_map_name!r} is not in Drift "
+                f"status (current: {doc.status}); nothing to dismiss."
+            ),
+        }
+    doc.status = STATUS_MAPPED
+    doc.flag_reason = None
+    doc.drift_detected_at = None
+    doc.set("drift_fields", [])
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "customer_map_name": customer_map_name,
+        "status": STATUS_MAPPED,
+    }
+
+
+@frappe.whitelist()
+def push_to_ee_for_drift(customer_map_name: str) -> dict[str, Any]:
+    """FDE re-asserts ERPNext as SoT by pushing the current Customer
+    state to EE, overwriting the EE-side divergence. Dispatches to the
+    Stage 4 push (push_one_customer).
+
+    On success the push flow writes a fresh snapshot + sets the map
+    row to Mapped; the next pull will see no drift.
+
+    NO 'Accept EE Value' counterpart — §8.2 post-flip contract is
+    'ERPNext wins; EE-side novelty/edits are not adopted'. The only
+    paths out of Drift are dismiss-and-wait or push-to-overwrite.
+    """
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Push to EasyEcom requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not customer_map_name:
+        return {"ok": False, "message": "customer_map_name required"}
+    if not frappe.db.exists("EasyEcom Customer Map", customer_map_name):
+        return {
+            "ok": False,
+            "message": f"Customer Map {customer_map_name!r} not found.",
+        }
+    doc = frappe.get_doc("EasyEcom Customer Map", customer_map_name)
+    if doc.status != STATUS_DRIFT:
+        return {
+            "ok": False,
+            "message": (
+                f"Customer Map {customer_map_name!r} is not in Drift "
+                f"status (current: {doc.status}); use the Customer-form "
+                "Push button for non-drift pushes."
+            ),
+        }
+    if not doc.erpnext_name:
+        return {
+            "ok": False,
+            "message": (
+                f"Customer Map {customer_map_name!r} has no linked "
+                "Customer; create one in ERPNext first, then re-pull "
+                "to set the link."
+            ),
+        }
+
+    from ecommerce_super.easyecom.flows.customer_push import (
+        push_one_customer,
+    )
+
+    try:
+        outcome = push_one_customer(doc.erpnext_name)
+    except Exception as exc:  # noqa: BLE001
+        frappe.log_error(
+            title=f"push_to_ee_for_drift failed: {customer_map_name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "ok": True,
+        "customer_map_name": customer_map_name,
+        "operation": outcome.operation,
+        "pushed": outcome.pushed,
+        "ee_customer_id": outcome.ee_customer_id,
+        "flag_reasons": outcome.flag_reasons,
+    }
 
 
 # ----- Customer Group / Territory defaults -----
