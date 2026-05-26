@@ -1,0 +1,3565 @@
+{
+  "code": 200,
+  "states": [
+    {
+      "id": 1556,
+      "name": "Abruzzo",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1557,
+      "name": "Basilicata",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1558,
+      "name": "Calabria",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1559,
+      "name": "Campania",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1560,
+      "name": "Emilia-Romagna",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1561,
+      "name": "Friuli Venezia Giulia",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1562,
+      "name": "Lazio",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1563,
+      "name": "Liguria",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1564,
+      "name": "Lombardia",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1565,
+      "name": "Marche",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1566,
+      "name": "Molise",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1567,
+      "name": "Piemonte",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1568,
+      "name": "Puglia",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1569,
+      "name": "Regione Autonoma Valle d'Aosta",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1570,
+      "name": "Sardegna",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1571,
+      "name": "Sicilia",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1572,
+      "name": "Toscana",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1573,
+      "name": "Trentino-Alto Adige",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1574,
+      "name": "Umbria",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 1575,
+      "name": "Veneto",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17415,
+      "name": "Abbateggio - Abruzzo(Abbateggio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17421,
+      "name": "Abriola - Basilicata(Abriola - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17424,
+      "name": "Accettura - Basilicata(Accettura - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17425,
+      "name": "Acciano - Abruzzo(Acciano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17426,
+      "name": "Acerenza - Basilicata(Acerenza - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17457,
+      "name": "Aielli - Abruzzo(Aielli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17474,
+      "name": "Alanno - Abruzzo(Alanno - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17478,
+      "name": "Alba Adriatica - Abruzzo(Alba Adriatica - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17485,
+      "name": "Albano di Lucania - Basilicata(Albano di Lucania - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17532,
+      "name": "Alfedena - Abruzzo(Alfedena - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17539,
+      "name": "Aliano - Basilicata(Aliano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17582,
+      "name": "Altino - Abruzzo(Altino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17614,
+      "name": "Ancarano - Abruzzo(Ancarano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17638,
+      "name": "Antey-Saint-Andr\u00e9 - Aosta Valley(Antey-Saint-Andr\u00e9 - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17646,
+      "name": "Anversa degli Abruzzi - Abruzzo(Anversa degli Abruzzi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17648,
+      "name": "Anzi - Basilicata(Anzi - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17665,
+      "name": "Archi - Abruzzo(Archi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17680,
+      "name": "Ari - Abruzzo(Ari - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17681,
+      "name": "Arielli - Abruzzo(Arielli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17691,
+      "name": "Armento - Basilicata(Armento - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17693,
+      "name": "Arnad - Aosta Valley(Arnad - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17704,
+      "name": "Arsita - Abruzzo(Arsita - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17719,
+      "name": "Ateleta - Abruzzo(Ateleta - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17720,
+      "name": "Atella - Basilicata(Atella - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17721,
+      "name": "Atessa - Abruzzo(Atessa - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17725,
+      "name": "Atri - Abruzzo(Atri - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17737,
+      "name": "Avezzano - Abruzzo(Avezzano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17738,
+      "name": "Avigliano - Basilicata(Avigliano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17743,
+      "name": "Ayas - Aosta Valley(Ayas - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17745,
+      "name": "Aymavilles - Aosta Valley(Aymavilles - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17785,
+      "name": "Balsorano - Abruzzo(Balsorano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17786,
+      "name": "Balvano - Basilicata(Balvano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17795,
+      "name": "Banzi - Basilicata(Banzi - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17796,
+      "name": "Baragiano - Basilicata(Baragiano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17805,
+      "name": "Bard - Aosta Valley(Bard - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17809,
+      "name": "Barete - Abruzzo(Barete - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17810,
+      "name": "Barile - Basilicata(Barile - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17811,
+      "name": "Barisciano - Abruzzo(Barisciano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17816,
+      "name": "Barrea - Abruzzo(Barrea - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17818,
+      "name": "Basciano - Abruzzo(Basciano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17860,
+      "name": "Bella - Basilicata(Bella - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17861,
+      "name": "Bellante - Abruzzo(Bellante - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17904,
+      "name": "Bernalda - Basilicata(Bernalda - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17939,
+      "name": "Bisegna - Abruzzo(Bisegna - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17940,
+      "name": "Bisenti - Abruzzo(Bisenti - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17984,
+      "name": "Bolognano - Abruzzo(Bolognano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 17986,
+      "name": "Bomba - Abruzzo(Bomba - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18012,
+      "name": "Borrello - Abruzzo(Borrello - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18053,
+      "name": "Brienza - Basilicata(Brienza - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18054,
+      "name": "Brindisi Montagna - Basilicata(Brindisi Montagna - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18055,
+      "name": "Brissogne - Aosta Valley(Brissogne - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18056,
+      "name": "Brittoli - Abruzzo(Brittoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18078,
+      "name": "Brusson - Aosta Valley(Brusson - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18081,
+      "name": "Bucchianico - Abruzzo(Bucchianico - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18086,
+      "name": "Bugnara - Abruzzo(Bugnara - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18099,
+      "name": "Bussi sul Tirino - Abruzzo(Bussi sul Tirino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18118,
+      "name": "Cagnano Amiterno - Abruzzo(Cagnano Amiterno - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18129,
+      "name": "Calascio - Abruzzo(Calascio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18130,
+      "name": "Calciano - Basilicata(Calciano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18137,
+      "name": "Calvello - Basilicata(Calvello - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18138,
+      "name": "Calvera - Basilicata(Calvera - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18149,
+      "name": "Campli - Abruzzo(Campli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18151,
+      "name": "Campo di Giove - Abruzzo(Campo di Giove - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18154,
+      "name": "Campomaggiore - Basilicata(Campomaggiore - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18156,
+      "name": "Campotosto - Abruzzo(Campotosto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18163,
+      "name": "Cancellara - Basilicata(Cancellara - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18168,
+      "name": "Canistro - Abruzzo(Canistro - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18172,
+      "name": "Canosa Sannita - Abruzzo(Canosa Sannita - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18173,
+      "name": "Cansano - Abruzzo(Cansano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18177,
+      "name": "Canzano - Abruzzo(Canzano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18181,
+      "name": "Capestrano - Abruzzo(Capestrano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18182,
+      "name": "Capistrello - Abruzzo(Capistrello - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18183,
+      "name": "Capitignano - Abruzzo(Capitignano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18184,
+      "name": "Caporciano - Abruzzo(Caporciano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18185,
+      "name": "Cappadocia - Abruzzo(Cappadocia - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18186,
+      "name": "Cappelle sul Tavo - Abruzzo(Cappelle sul Tavo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18188,
+      "name": "Caramanico Terme - Abruzzo(Caramanico Terme - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18190,
+      "name": "Carapelle Calvisio - Abruzzo(Carapelle Calvisio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18191,
+      "name": "Carbone - Basilicata(Carbone - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18199,
+      "name": "Carpineto della Nora - Abruzzo(Carpineto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18200,
+      "name": "Carpineto Sinello - Abruzzo(Carpineto Sinello - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18204,
+      "name": "Carsoli - Abruzzo(Carsoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18206,
+      "name": "Carunchio - Abruzzo(Carunchio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18207,
+      "name": "Casacanditella - Abruzzo(Casacanditella - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18208,
+      "name": "Casalanguida - Abruzzo(Casalanguida - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18209,
+      "name": "Casalbordino - Abruzzo(Casalbordino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18210,
+      "name": "Casalincontrada - Abruzzo(Casalincontrada - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18215,
+      "name": "Casoli - Abruzzo(Casoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18220,
+      "name": "Castel Castagna - Abruzzo(Castel Castagna - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18222,
+      "name": "Castel del Monte - Abruzzo(Castel del Monte - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18223,
+      "name": "Castel di Ieri - Abruzzo(Castel di Ieri - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18224,
+      "name": "Castel di Sangro - Abruzzo(Castel di Sangro - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18225,
+      "name": "Castel Frentano - Abruzzo(Castel Frentano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18227,
+      "name": "Castelgrande - Basilicata(Castelgrande - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18228,
+      "name": "Castelguidone - Abruzzo(Castelguidone - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18229,
+      "name": "Castellafiume - Abruzzo(Castellafiume - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18230,
+      "name": "Castellalto - Abruzzo(Castellalto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18234,
+      "name": "Castelli - Abruzzo(Castelli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18236,
+      "name": "Castelluccio Inferiore - Basilicata(Castelluccio Inferiore - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18237,
+      "name": "Castelluccio Superiore - Basilicata(Castelluccio Superiore - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18238,
+      "name": "Castelmezzano - Basilicata(Castelmezzano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18244,
+      "name": "Castelsaraceno - Basilicata(Castelsaraceno - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18245,
+      "name": "Castelvecchio Calvisio - Abruzzo(Castelvecchio Calvisio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18246,
+      "name": "Castelvecchio Subequo - Abruzzo(Castelvecchio Subequo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18249,
+      "name": "Castiglione a Casauria - Abruzzo(Castiglione a Casauria - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18250,
+      "name": "Castiglione Messer Marino - Abruzzo(Castiglione Messer Marino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18251,
+      "name": "Castiglione Messer Raimondo - Abruzzo(Castiglione Messer Raimondo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18252,
+      "name": "Castilenti - Abruzzo(Castilenti - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18263,
+      "name": "Castronuovo di SantAndrea - Basilicata(Castronuovo di SantAndrea - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18264,
+      "name": "Catignano - Abruzzo(Catignano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18270,
+      "name": "Celano - Abruzzo(Celano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18271,
+      "name": "Celenza sul Trigno - Abruzzo(Celenza sul Trigno - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18275,
+      "name": "Cellino Attanasio - Abruzzo(Cellino Attanasio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18280,
+      "name": "Cepagatti - Abruzzo(Cepagatti - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18282,
+      "name": "Cerchio - Abruzzo(Cerchio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18287,
+      "name": "Cermignano - Abruzzo(Cermignano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18291,
+      "name": "Cersosimo - Basilicata(Cersosimo - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18306,
+      "name": "Chambave - Aosta Valley(Chambave - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18310,
+      "name": "Ch\u00e2tillon - Aosta Valley(Ch\u00e2tillon - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18319,
+      "name": "Chiaromonte - Basilicata(Chiaromonte - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18322,
+      "name": "Chieti - Abruzzo(Chieti - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18342,
+      "name": "Cirigliano - Basilicata(Cirigliano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18343,
+      "name": "Citt\u00e0 SantAngelo - Abruzzo(Citt\u00e0 SantAngelo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18345,
+      "name": "Civita dAntino - Abruzzo(Civita dAntino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18346,
+      "name": "Civitaluparella - Abruzzo(Civitaluparella - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18347,
+      "name": "Civitaquana - Abruzzo(Civitaquana - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18348,
+      "name": "Civitella Alfedena - Abruzzo(Civitella Alfedena - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18349,
+      "name": "Civitella Casanova - Abruzzo(Civitella Casanova - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18350,
+      "name": "Civitella del Tronto - Abruzzo(Civitella del Tronto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18351,
+      "name": "Civitella Messer Raimondo - Abruzzo(Civitella Messer Raimondo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18352,
+      "name": "Civitella Roveto - Abruzzo(Civitella Roveto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18358,
+      "name": "Cocullo - Abruzzo(Cocullo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18365,
+      "name": "Collarmele - Abruzzo(Collarmele - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18366,
+      "name": "Collecorvino - Abruzzo(Collecorvino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18367,
+      "name": "Colledara - Abruzzo(Colledara - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18368,
+      "name": "Colledimacine - Abruzzo(Colledimacine - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18369,
+      "name": "Colledimezzo - Abruzzo(Colledimezzo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18370,
+      "name": "Collelongo - Abruzzo(Collelongo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18371,
+      "name": "Collepietro - Abruzzo(Collepietro - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18373,
+      "name": "Colobraro - Basilicata(Colobraro - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18374,
+      "name": "Colonnella - Abruzzo(Colonnella - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18384,
+      "name": "Controguerra - Abruzzo(Controguerra - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18388,
+      "name": "Corfinio - Abruzzo(Corfinio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18391,
+      "name": "Corleto Perticara - Basilicata(Corleto Perticara - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18392,
+      "name": "Corropoli - Abruzzo(Corropoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18397,
+      "name": "Cortino - Abruzzo(Cortino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18398,
+      "name": "Corvara - Abruzzo(Corvara - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18406,
+      "name": "Craco - Basilicata(Craco - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18410,
+      "name": "Crecchio - Abruzzo(Crecchio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18419,
+      "name": "Crognaleto - Abruzzo(Crognaleto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18428,
+      "name": "Cugnoli - Abruzzo(Cugnoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18435,
+      "name": "Cupello - Abruzzo(Cupello - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18522,
+      "name": "Dogliola - Abruzzo(Dogliola - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18537,
+      "name": "Donnas - Aosta Valley(Donnas - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18545,
+      "name": "Doues - Aosta Valley(Doues - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18628,
+      "name": "Elice - Abruzzo(Elice - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18652,
+      "name": "Episcopia - Basilicata(Episcopia - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18694,
+      "name": "\u00c9troubles - Aosta Valley(\u00c9troubles - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18710,
+      "name": "Fagnano Alto - Abruzzo(Fagnano Alto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18716,
+      "name": "Fallo - Abruzzo(Fallo - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18721,
+      "name": "Fano Adriano - Abruzzo(Fano Adriano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18722,
+      "name": "Fara Filiorum Petri - Abruzzo(Fara Filiorum Petri - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18723,
+      "name": "Fara San Martino - Abruzzo(Fara San Martino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18725,
+      "name": "Fardella - Basilicata(Fardella - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18727,
+      "name": "Farindola - Abruzzo(Farindola - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18737,
+      "name": "F\u00e9nis - Aosta Valley(F\u00e9nis - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18740,
+      "name": "Ferrandina - Basilicata(Ferrandina - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18753,
+      "name": "Filetto - Abruzzo(Filetto - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18754,
+      "name": "Filiano - Basilicata(Filiano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18783,
+      "name": "Fontecchio - Abruzzo(Fontecchio - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18787,
+      "name": "Forenza - Basilicata(Forenza - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18795,
+      "name": "Fossa - Abruzzo(Fossa - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18796,
+      "name": "Fossacesia - Abruzzo(Fossacesia - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18801,
+      "name": "Fraine - Abruzzo(Fraine - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18803,
+      "name": "Francavilla al Mare - Abruzzo(Francavilla al Mare - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18804,
+      "name": "Francavilla in Sinni - Basilicata(Francavilla in Sinni - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18811,
+      "name": "Fresagrandinaria - Abruzzo(Fresagrandinaria - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18813,
+      "name": "Frisa - Abruzzo(Frisa - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18833,
+      "name": "Furci - Abruzzo(Furci - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18839,
+      "name": "Gagliano Aterno - Abruzzo(Gagliano Aterno - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18844,
+      "name": "Gallicchio - Basilicata(Gallicchio - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18850,
+      "name": "Gamberale - Abruzzo(Gamberale - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18852,
+      "name": "Garaguso - Basilicata(Garaguso - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18881,
+      "name": "Genzano di Lucania - Basilicata(Genzano di Lucania - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18884,
+      "name": "Gessopalena - Abruzzo(Gessopalena - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18895,
+      "name": "Gignod - Aosta Valley(Gignod - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18897,
+      "name": "Ginestra - Basilicata(Ginestra - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18899,
+      "name": "Gioia dei Marsi - Abruzzo(Gioia dei Marsi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18902,
+      "name": "Gissi - Abruzzo(Gissi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18905,
+      "name": "Giuliano Teatino - Abruzzo(Giuliano Teatino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18906,
+      "name": "Giulianova - Abruzzo(Giulianova - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18929,
+      "name": "Gorgoglione - Basilicata(Gorgoglione - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18930,
+      "name": "Goriano Sicoli - Abruzzo(Goriano Sicoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18954,
+      "name": "Grassano - Basilicata(Grassano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18959,
+      "name": "Gressan - Aosta Valley(Gressan - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18960,
+      "name": "Gressoney-La-Trinit\u00e9 - Aosta Valley(Gressoney-La-Trinit\u00e9 - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18961,
+      "name": "Gressoney-Saint-Jean - Aosta Valley(Gressoney-Saint-Jean - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18970,
+      "name": "Grottole - Basilicata(Grottole - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18972,
+      "name": "Grumento Nova - Basilicata(Grumento Nova - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18976,
+      "name": "Guardia Perticara - Basilicata(Guardia Perticara - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18977,
+      "name": "Guardiagrele - Abruzzo(Guardiagrele - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 18980,
+      "name": "Guilmi - Abruzzo(Guilmi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19126,
+      "name": "H\u00f4ne - Aosta Valley(H\u00f4ne - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19223,
+      "name": "Introdacqua - Abruzzo(Introdacqua - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19228,
+      "name": "Irsina - Basilicata(Irsina - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19234,
+      "name": "Isola del Gran Sasso dItalia - Abruzzo(Isola del Gran Sasso dItalia - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19236,
+      "name": "Issime - Aosta Valley(Issime - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19237,
+      "name": "Issogne - Aosta Valley(Issogne - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19300,
+      "name": "Jovencan - Aosta Valley(Joven\u00e7an - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19632,
+      "name": "La Magdeleine - Aosta Valley(La Magdeleine - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19655,
+      "name": "Lagonegro - Basilicata(Lagonegro - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19670,
+      "name": "Lama dei Peligni - Abruzzo(Lama dei Peligni - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19676,
+      "name": "Lanciano - Abruzzo(Lanciano - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19692,
+      "name": "LAquila - Abruzzo(LAquila - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19705,
+      "name": "Latronico - Basilicata(Latronico - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19709,
+      "name": "Laurenzana - Basilicata(Laurenzana - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19710,
+      "name": "Lauria - Basilicata(Lauria - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19711,
+      "name": "Lavello - Basilicata(Lavello - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19717,
+      "name": "Lecce nei Marsi - Abruzzo(Lecce nei Marsi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19742,
+      "name": "Lentella - Abruzzo(Lentella - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19754,
+      "name": "Lettomanoppello - Abruzzo(Lettomanoppello - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19755,
+      "name": "Lettopalena - Abruzzo(Lettopalena - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19808,
+      "name": "Liscia - Abruzzo(Liscia - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19849,
+      "name": "Loreto Aprutino - Abruzzo(Loreto Aprutino - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19880,
+      "name": "Luco dei Marsi - Abruzzo(Luco dei Marsi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19881,
+      "name": "Lucoli - Abruzzo(Lucoli - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19922,
+      "name": "Magliano de Marsi - Abruzzo(Magliano de Marsi - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19956,
+      "name": "Manoppello - Abruzzo(Manoppello - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19964,
+      "name": "Maratea - Basilicata(Maratea - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19985,
+      "name": "Marsico Nuovo - Basilicata(Marsico Nuovo - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19986,
+      "name": "Marsicovetere - Basilicata(Marsicovetere - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19991,
+      "name": "Martinsicuro - Abruzzo(Martinsicuro - Abruzzo)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 19999,
+      "name": "Maschito - Basilicata(Maschito - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20002,
+      "name": "Matera - Basilicata(Matera - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20031,
+      "name": "Melfi - Basilicata(Melfi - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20069,
+      "name": "Miglionico - Basilicata(Miglionico - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20086,
+      "name": "Missanello - Basilicata(Missanello - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20109,
+      "name": "Moliterno - Basilicata(Moliterno - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20129,
+      "name": "Montalbano Jonico - Basilicata(Montalbano Jonico - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20134,
+      "name": "Montemilone - Basilicata(Montemilone - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20138,
+      "name": "Montemurro - Basilicata(Montemurro - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20139,
+      "name": "Montescaglioso - Basilicata(Montescaglioso - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20145,
+      "name": "Montjovet - Aosta Valley(Montjovet - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20159,
+      "name": "Morgex - Aosta Valley(Morgex - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20189,
+      "name": "Muro Lucano - Basilicata(Muro Lucano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20242,
+      "name": "Nemoli - Basilicata(Nemoli - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20270,
+      "name": "Noepoli - Basilicata(Noepoli - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20295,
+      "name": "Nova Siri - Basilicata(Nova Siri - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20322,
+      "name": "Nus - Aosta Valley(Nus - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20374,
+      "name": "Oliveto Lucano - Basilicata(Oliveto Lucano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20375,
+      "name": "Ollomont - Aosta Valley(Ollomont - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20400,
+      "name": "Oppido Lucano - Basilicata(Oppido Lucano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20467,
+      "name": "Oyace - Aosta Valley(Oyace - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20482,
+      "name": "Palazzo San Gervasio - Basilicata(Palazzo San Gervasio - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20526,
+      "name": "Paterno - Basilicata(Paterno - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20575,
+      "name": "Perloz - Aosta Valley(Perloz - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20585,
+      "name": "Pescopagano - Basilicata(Pescopagano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20601,
+      "name": "Picerno - Basilicata(Picerno - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20607,
+      "name": "Pietragalla - Basilicata(Pietragalla - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20608,
+      "name": "Pietrapertosa - Basilicata(Pietrapertosa - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20609,
+      "name": "Pignola - Basilicata(Pignola - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20618,
+      "name": "Pisticci - Basilicata(Pisticci - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20649,
+      "name": "Policoro - Basilicata(Policoro - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20651,
+      "name": "Pollein - Aosta Valley(Pollein - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20658,
+      "name": "Pomarico - Basilicata(Pomarico - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20665,
+      "name": "Pontboset - Aosta Valley(Pontboset - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20669,
+      "name": "Pontey - Aosta Valley(Pontey - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20670,
+      "name": "Pont-Saint-Martin - Aosta Valley(Pont-Saint-Martin - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20689,
+      "name": "Potenza - Basilicata(Potenza - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20716,
+      "name": "Pr\u00e9-Saint-Didier - Aosta Valley(Pr\u00e9-Saint-Didier - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20785,
+      "name": "Quart - Aosta Valley(Quart - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20833,
+      "name": "Rapolla - Basilicata(Rapolla - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20834,
+      "name": "Rapone - Basilicata(Rapone - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20877,
+      "name": "Rh\u00eames-Notre-Dame - Aosta Valley(Rh\u00eames-Notre-Dame - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20878,
+      "name": "Rh\u00eames-Saint-Georges - Aosta Valley(Rh\u00eames-Saint-Georges - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20898,
+      "name": "Rionero in Vulture - Basilicata(Rionero in Vulture - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20899,
+      "name": "Ripacandida - Basilicata(Ripacandida - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20901,
+      "name": "Rivello - Basilicata(Rivello - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20904,
+      "name": "Roccanova - Basilicata(Roccanova - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20905,
+      "name": "Roccanova - Basilicata(Roccanova - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20916,
+      "name": "Roisan - Aosta Valley(Roisan - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20936,
+      "name": "Rotondella - Basilicata(Rotondella - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20958,
+      "name": "Ruoti - Basilicata(Ruoti - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20966,
+      "name": "Ruvo del Monte - Basilicata(Ruvo del Monte - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20986,
+      "name": "Saint-Christophe - Aosta Valley(Saint-Christophe - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20987,
+      "name": "Saint-Denis - Aosta Valley(Saint-Denis - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20996,
+      "name": "Saint-Marcel - Aosta Valley(Saint-Marcel - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20997,
+      "name": "Saint-Nicolas - Aosta Valley(Saint-Nicolas - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20998,
+      "name": "Saint-Oyen - Aosta Valley(Saint-Oyen - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 20999,
+      "name": "Saint-Pierre - Aosta Valley(Saint-Pierre - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21000,
+      "name": "Saint-Rh\u00e9my-en-Bosses - Aosta Valley(Saint-Rh\u00e9my-en-Bosses - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21001,
+      "name": "Saint-Vincent - Aosta Valley(Saint-Vincent - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21008,
+      "name": "Salandra - Basilicata(Salandra - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21029,
+      "name": "San Chirico Nuovo - Basilicata(San Chirico Nuovo - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21030,
+      "name": "San Chirico Raparo - Basilicata(San Chirico Raparo - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21031,
+      "name": "San Costantino Albanese - Basilicata(San Costantino Albanese - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21033,
+      "name": "San Fele - Basilicata(San Fele - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21035,
+      "name": "San Giorgio Lucano - Basilicata(San Giorgio Lucano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21042,
+      "name": "San Martino dAgri - Basilicata(San Martino dAgri - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21043,
+      "name": "San Mauro Forte - Basilicata(San Mauro Forte - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21047,
+      "name": "San Severino Lucano - Basilicata(San Severino Lucano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21082,
+      "name": "SantAngelo Le Fratte - Basilicata(SantAngelo Le Fratte - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21083,
+      "name": "SantArcangelo - Basilicata(SantArcangelo - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21101,
+      "name": "Sarre - Aosta Valley(Sarre - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21102,
+      "name": "Sasso di Castalda - Basilicata(Sasso di Castalda - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21108,
+      "name": "Satriano di Lucania - Basilicata(Satriano di Lucania - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21116,
+      "name": "Savoia di Lucania - Basilicata(Savoia di Lucania - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21121,
+      "name": "Scanzano Jonico - Basilicata(Scanzano Jonico - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21157,
+      "name": "Senise - Basilicata(Senise - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21354,
+      "name": "Spinoso - Basilicata(Spinoso - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21400,
+      "name": "Stigliano - Basilicata(Stigliano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21516,
+      "name": "Teana - Basilicata(Teana - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21534,
+      "name": "Terranova di Pollino - Basilicata(Terranova di Pollino - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21586,
+      "name": "Tito - Basilicata(Tito - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21595,
+      "name": "Tolve - Basilicata(Tolve - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21609,
+      "name": "Torgnon - Aosta Valley(Torgnon - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21637,
+      "name": "Tramutola - Basilicata(Tramutola - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21647,
+      "name": "Trecchina - Basilicata(Trecchina - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21652,
+      "name": "Tricarico - Basilicata(Tricarico - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21657,
+      "name": "Trivigno - Basilicata(Trivigno - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21686,
+      "name": "Tursi - Basilicata(Tursi - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21755,
+      "name": "Valgrisenche - Aosta Valley(Valgrisenche - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21770,
+      "name": "Valpelline - Aosta Valley(Valpelline - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21771,
+      "name": "Valsavarenche - Aosta Valley(Valsavarenche - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21773,
+      "name": "Valsinni - Basilicata(Valsinni - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21774,
+      "name": "Valsinni - Basilicata(Valsinni - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21775,
+      "name": "Valtournenche - Aosta Valley(Valtournenche - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21835,
+      "name": "Venosa - Basilicata(Venosa - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21846,
+      "name": "Verrayes - Aosta Valley(Verrayes - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21847,
+      "name": "Verr\u00e8s - Aosta Valley(Verr\u00e8s - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21875,
+      "name": "Vietri di Potenza - Basilicata(Vietri di Potenza - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21876,
+      "name": "Viggianello - Basilicata(Viggianello - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21877,
+      "name": "Viggiano - Basilicata(Viggiano - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21907,
+      "name": "Villa dAgri - Basilicata(Villa dAgri (part of Marsicovetere) - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 21929,
+      "name": "Villeneuve - Aosta Valley(Villeneuve - Valle dAosta)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    },
+    {
+      "id": 22004,
+      "name": "Vulture - Basilicata(Vulture (territorial name, not a comune) - Basilicata)",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 114,
+      "Zone": null
+    }
+  ]
+}

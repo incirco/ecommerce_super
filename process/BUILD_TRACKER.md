@@ -143,3 +143,26 @@ Before Section 3 can be built, the local environment must exist: Frappe bench (v
 **Pattern note:** §8e is the 2nd entity-sync flow, mirrors §8d Sync Record pattern. §8f Supplier mirrors §8e next.
 
 **Next:** §8f Supplier (§8.3) — closes §8 masters. Then operational flows §9–§13.
+
+
+---
+
+## §8f Supplier / Vendor (§8.3) — IN PROGRESS
+
+**Status:** Stage 1 complete (substrate + drift-child rename). 31/31 new tests green; §8d/§8e substrate + lifecycle suites green except one pre-existing failure (see Standing items).
+
+**Build sequence (local):**
+- Stage 1 substrate — EasyEcom Supplier Map (autoname ECS-SUPP-{ee_vendor_c_id}; two-identifier split — ee_vendor_c_id unique-reqd read key, ee_vendor_id non-unique write key), supplier_master_mode flag + independent flip endpoint, drift-child rename (EasyEcom Item Map Drift/Exclude Field → EasyEcom Drift/Exclude Field, pre-model-sync patch, 14 rows preserved, controllers + parent options + flow + test references repointed) — 4c6b700
+
+**Standing items / carry-forward:**
+- **§8d test_item_lifecycle_drift_stage5 has a PRE-EXISTING standing failure** (2 fail + 1 err): test_flip_explicitly_changes_pull_behavior (error), test_erpnext_disable_sends_deactivate_status_zero (fail), test_erpnext_enable_sends_activate_status_one (fail). Confirmed unrelated to the §8f drift-child rename by git-stashing §8f and re-running on the pre-§8f tree — same failures occur there. Push outcome shows `item has no ecs_ee_cp_id — never pushed`, suggesting test-setup brittleness around the cp_id seed, not the rename. **Fix before §8 closeout** — do not let this carry into operational flows §9–§13.
+- Stale `EasyEcom-Supplier-Sync` (Bidirectional) ruleset in the fixture — 4 fields, conflates name↔vendor_id (no read-key separation); to be replaced by EasyEcom-Supplier-Pull + EasyEcom-Supplier-Push in Stage 3/4 (mirror §8e Customer-Sync soft-retire).
+- `EasyEcom-PO-Push` / `EasyEcom-GRN-Pull` map `supplier ↔ vendor_id` directly — switch to `EasyEcom Supplier Map.ee_vendor_id` lookup once the map is populated (don't assume `supplier.name == vendor_id`).
+- IC `validate_party` auto-extracts PAN from GSTIN[2:12]; Indian suppliers need country=India + valid GSTIN, foreign suppliers need country set BEFORE validate runs so `guess_gst_category` returns "Overseas".
+
+**Open decisions (carried from packet):**
+1. UpdateVendor `data.vendorId: 58614` — confirm what it is live (Stage 4).
+2. getVendors `nextUrl` pagination — verify shape (Stage 3).
+3. Push-side deactivate endpoint exists? (Stage 5).
+
+**Next:** Stage 2 — eager multi-country state/country caching (extend §8e Stage 2 from India-only to all ~247 countries).

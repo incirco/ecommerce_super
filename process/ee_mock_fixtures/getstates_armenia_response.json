@@ -1,0 +1,115 @@
+{
+  "code": 200,
+  "states": [
+    {
+      "id": 384,
+      "name": "Aragatsotni Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 385,
+      "name": "Ararati Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 386,
+      "name": "Armaviri Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 387,
+      "name": "Geghark'unik'i Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 388,
+      "name": "Kotayk'i Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 389,
+      "name": "Lorru Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 390,
+      "name": "Shiraki Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 391,
+      "name": "Syunik'i Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 392,
+      "name": "Tavushi Marz",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 393,
+      "name": "Vayots' Dzor",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    },
+    {
+      "id": 394,
+      "name": "Yerevan",
+      "is_union_territory": 0,
+      "zip_start_range": null,
+      "zip_end_range": null,
+      "postal_code": null,
+      "country_id": 15,
+      "Zone": null
+    }
+  ]
+}
