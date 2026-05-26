@@ -100,5 +100,15 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
 
 
 def is_foundational(endpoint: str) -> bool:
-    """True for token acquisition and location-discovery calls (§7.7)."""
-    return endpoint in FOUNDATIONAL_ENDPOINTS
+    """True for token acquisition and location-discovery calls (§7.7),
+    and for account-wide §8d Item Pull/Push catalogue endpoints.
+
+    Strip the query string before membership check. Cursor follow-up
+    calls pass `endpoint="/Products/GetProductMaster?cursor=..."`; the
+    exact-string match would miss those and split observability for
+    the same logical endpoint across foundational and non-foundational
+    buckets. (Also: a non-foundational classification for the cursor
+    follow would mean no JWT is set — see client._request — and the
+    call would 401. Strip keeps the same foundational policy across
+    every page of a cursor walk.)"""
+    return endpoint.split("?", 1)[0] in FOUNDATIONAL_ENDPOINTS
