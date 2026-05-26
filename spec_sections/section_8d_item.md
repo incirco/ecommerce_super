@@ -139,12 +139,16 @@ The pull is the **inbound onboarding** flow, and after the flip becomes **drift 
 - **Job shape:** the catalogue is large (counts in the tens of thousands). The pull is a **cursor-paginated, count-aware, resumable background job**: read the count, then walk the `nextUrl` cursor page by page (≤200/page), **savepoint-isolated per product** (one bad product does not abort the page or the walk; the job resumes from the last cursor if interrupted). It is **not** a single synchronous call (which would time out).
 - **Incremental:** full pull on onboarding; `updated_after` deltas on the daily schedule.
 - **Field translation via the Field Mapping engine** (the `EasyEcom-Item-Pull` ruleset, reconciled to the real `GetProductMaster` payload — the shipped ruleset is stale, §8.0 policy). Maps `sku`, `product_name`, `description`, `brand`, `colour`, `size`, dimensions (with unit handling), `mrp`, `cost`, `hsn_code` → `gst_hsn_code`, `accounting_unit` → `stock_uom` (with a **default-UOM** transform for missing/garbage values — EE supplies no clean stock UOM), `active` → `disabled`, `custom_fields`.
-- **Tax:** calls **8c's `resolve_and_stamp_tax(item, product)`** per item (the product carries `tax_rule_name`, `tax_rate`, `cess`). Unmapped tax rule → 8c auto-creates a To-Configure Tax Rule Map + flags FDE.
+- **Tax (stamped for ALL enabled Companies):** because an item is account-wide/shared but tax is per-Company, after each Item upsert the pull **loops the Account's enabled EasyEcom Company Settings and calls 8c's `resolve_and_stamp_tax(item, ee_product, company)` once per Company.** Each call stamps *that company's* Item Tax rows (its company-specific templates + Min/Max Net Rate bands). **All companies' rows coexist on the one shared item's Taxes table** (ERPNext resolves the correct row per transaction by matching the template's company natively — this is the intended ERPNext one-item-many-companies tax model). The product carries `tax_rule_name`, `tax_rate`, `cess`. The per-Company stamping must be **append (companies never clobber each other) and idempotent (a re-pull does not duplicate a company's rows)**. Unmapped (tax_rule_name, company) → 8c auto-creates a To-Configure Tax Rule Map + flags FDE for that company.
 - **product_type branching** (on the **response string** value; the doc's integer enums are inconsistent across endpoints and are a push-side concern only):
   - `normal_product` → ERPNext **Item**
   - `combo_product` → ERPNext **Product Bundle** (its `sub_products` become bundle components, each resolved to an ERPNext item via its own map row)
   - `variant_parent` / `child_product` / `kit_bom` / **any unknown or future type (e.g. a future "digital" type)** → **flag, do NOT create.** Variants, variant children, and kits/BOMs should not exist in an EasyEcom↔ERPNext item integration (manufacturing/variant modelling stays ERPNext-side); their appearance in the EE pull is an exception for the FDE, not a creation target. Unknown types fall through to the same flag (forward-safe).
-- **Content gating (create + flag):** a creatable product (normal/combo) that is missing HSN, has an unmapped tax rule, or has a dirty UOM is **created and flagged** (so the SKU exists for downstream orders) and surfaced in the review queue — never silently defaulted, never held.
+- **Content gating** splits by whether the problem blocks ERPNext Item creation:
+  - **Missing HSN → flag-not-created (held).** India Compliance enforces `gst_hsn_code` as mandatory on Item, so an item with no HSN **cannot be created** — it is **flagged (Flagged-Not-Created), not created** (we do not supply a placeholder HSN, which would risk a wrong HSN flowing into a real transaction, and we do not override India Compliance's validation). This is the one content problem that holds rather than creates.
+  - **Unmapped tax rule or dirty/missing UOM → create + flag (Created-Flagged).** These do **not** block Item creation, so the item is **created and flagged** (the SKU exists for downstream orders) and surfaced in the review queue — never silently defaulted.
+  - Nothing is ever silently defaulted; the only thing that holds is missing HSN (because the platform makes it un-createable).
+- **`is_stock_item` is set per product nature, not hardcoded.** Normal products are stock items (`is_stock_item=1`); Product Bundle wrapper items are non-stock (`is_stock_item=0`, §8.1.6); a future "digital" product type will also be non-stock (`is_stock_item=0`). The item-creation path takes `is_stock_item` as an input (default 1) so bundles and future non-physical types set it without rework.
 - `active: 0` in the payload → the ERPNext item is **disabled** (never deleted).
 
 ### 8.1.5 ERPNext → EE (push)
@@ -183,8 +187,8 @@ Once `item_master_mode = erpnext_mastered`:
 
 - Onboarding reconciliation is **FDE-supervised**: after pulling EE products and pushing ERPNext items, duplicates (same physical product reached from both sides with non-matching identifiers) and conflicts are surfaced; the FDE resolves them; then the FDE flips to `erpnext_mastered`.
 - The **review/exception state** holds three kinds of items, all visible to the FDE:
-  - **Created-Flagged** — created but with a content problem (missing HSN, unmapped tax, dirty UOM) to fix.
-  - **Flagged-Not-Created** — an unsupported type (variant_parent / child_product / kit_bom / unknown) that was not created.
+  - **Created-Flagged** — created but with a content problem that does not block creation (unmapped tax, dirty/missing UOM) to fix.
+  - **Flagged-Not-Created** — not created: either an unsupported type (variant_parent / child_product / kit_bom / unknown) **or** a product missing HSN (India Compliance makes an HSN-less Item un-createable, §8.1.4).
   - **Drift** — (post-flip) an unexpected EE-side change or EE-origin product.
 
 ### 8.1.10 Build sequence (one packet, internally sequential)
