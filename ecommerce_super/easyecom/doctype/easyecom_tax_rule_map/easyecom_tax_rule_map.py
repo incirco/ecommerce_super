@@ -314,7 +314,7 @@ def resolve_and_stamp_tax(item: Any, product: dict, company: str) -> TaxResoluti
             discrepancies=[preview.empty_reason or ""],
         )
 
-    stamped = _stamp_preview_onto_item(item, preview)
+    stamped = _stamp_preview_onto_item(item, preview, company=company)
     reconciled, discrepancies = reconcile_rate(
         resolved_rate=product.get("tax_rate"),
         preview=preview,
@@ -336,60 +336,84 @@ def resolve_and_stamp_tax(item: Any, product: dict, company: str) -> TaxResoluti
 # ----- Helpers -----
 
 
-def _stamp_preview_onto_item(item: Any, preview: StampPreview) -> int:
-    """Apply the preview's rows onto item.taxes — append + idempotent.
+def _stamp_preview_onto_item(
+    item: Any, preview: StampPreview, *, company: str
+) -> int:
+    """Apply the preview's rows onto item.taxes — per-Company REPLACE.
 
-    Append semantics (changed from clear-then-write in 8d Stage 2):
-    one item is shared across Companies but Item Tax Template names
-    are Company-scoped (India Compliance ships per-Company GST templates).
-    Calling this resolver once per Company on the same item (the 8d pull
-    pattern) must NOT clobber a sibling Company's already-stamped rows.
+    Why per-Company REPLACE (and not append-with-dedupe or
+    clear-then-write):
 
-    Idempotency: a re-pull (or a second resolver call for the same
-    Company in the same job) must NOT duplicate rows. The dedupe key is
-    the full 5-tuple (item_tax_template, tax_category, valid_from,
-    minimum_net_rate, maximum_net_rate) — banded templates legitimately
-    produce multiple rows per template, so template-name alone is not
-    enough, but the full tuple is unique-by-construction.
+    - clear-then-write (the original 8c contract): correct for one
+      Company; in the 8d multi-Company pull, stamping Company B would
+      WIPE Company A's rows.
+    - append-with-dedupe (the §8d Stage-2 first cut): protected
+      siblings, but if an FDE later edited a map's bands/rate the
+      next stamp APPENDED the corrected rows and LEFT the stale ones,
+      leaving ERPNext free to resolve a wrong row at invoice time
+      (silent wrong-GST). That was a real Stage-2-followup bug.
+    - **per-Company REPLACE**: scope the stamp's destructive write to
+      THIS Company's rows only — delete only rows whose
+      Item Tax Template belongs to this Company, then write the
+      preview's rows. Siblings are byte-untouched; THIS Company's
+      stale rows are gone. Both properties hold simultaneously.
 
-    Single-Company behaviour (the 8c original contract) is preserved
-    end-to-end: an item with empty `taxes` followed by one resolver
-    call ends up with exactly the preview's rows — the same final
-    state as the old clear-then-write. The 8c test suite (which
-    starts every test from an empty item) is unaffected.
+    Ownership test is ROBUST, not name-string: a row belongs to
+    Company A iff `frappe.db.get_value("Item Tax Template",
+    row.item_tax_template, "company") == company`. Template names
+    can collide across Companies in some configurations (Company-A
+    "GST 18% - A" / Company-B "GST 18% - B" — different names, fine,
+    but Companies that share a template-name pattern aren't safe to
+    rely on); the explicit Company link on the template is the
+    authority.
 
-    Returns the number of rows actually stamped (excludes dedupe-skipped
-    rows). Callers using this count to decide "did anything happen?"
-    should treat 0 as "all preview rows already present" — not "nothing
-    to stamp" — when the map itself is non-empty.
+    Edge cases:
+    - A row pointing to a template that no longer exists
+      (`get_value` returns None) is PRESERVED. We won't wipe a
+      sibling row just because its template was deleted out from
+      under it; surface it via the resolver's flag stream if it
+      becomes important, but don't make ownership ambiguity into
+      data loss.
+    - A row with no `item_tax_template` (defensive — Frappe shouldn't
+      allow this, but tests may construct it) is also preserved.
 
-    Updating a map's bands (FDE edits) leaves stale rows on items
-    until §8.1.8 drift-detection ships in Stage 5; that's a known
-    limitation of append semantics. The Stage-2 trade-off: bounded
-    accuracy with multi-Company correctness vs. unbounded clobber with
-    single-Company correctness only. We pick the former.
+    Single-Company contract preserved end-to-end: an item with empty
+    `taxes` followed by one resolver call ends up with exactly the
+    preview's rows — same final state as the old clear-then-write.
+
+    Idempotent re-stamp: re-stamping the same Company with the same
+    preview deletes this Company's old rows (which were that very
+    preview) and writes the same preview again. Net: zero change to
+    persisted state.
+
+    Returns the number of rows in the new preview (i.e. the rows
+    written for this Company on this call).
     """
-    existing_keys = {
-        _row_dedupe_key(
-            r.item_tax_template,
-            r.tax_category,
-            r.valid_from,
-            r.minimum_net_rate,
-            r.maximum_net_rate,
-        )
-        for r in (item.get("taxes") or [])
-    }
-    stamped = 0
-    for row in preview.rows_to_stamp:
-        key = _row_dedupe_key(
-            row["item_tax_template"],
-            row["tax_category"],
-            row["valid_from"],
-            row["minimum_net_rate"],
-            row["maximum_net_rate"],
-        )
-        if key in existing_keys:
+    # Partition the item's existing rows by Company ownership.
+    sibling_rows: list[dict] = []
+    for r in item.get("taxes") or []:
+        owner = _template_company(r.item_tax_template)
+        if owner == company:
+            # Belongs to THIS Company — drop it; the preview is the
+            # fresh truth for this Company.
             continue
+        # Sibling Company (owner is some other Company name) OR
+        # ambiguous (owner is None — preserve defensively).
+        sibling_rows.append(
+            {
+                "item_tax_template": r.item_tax_template,
+                "tax_category": r.tax_category,
+                "valid_from": r.valid_from,
+                "minimum_net_rate": r.minimum_net_rate,
+                "maximum_net_rate": r.maximum_net_rate,
+            }
+        )
+
+    # Rebuild: siblings (untouched) + preview (this Company's fresh rows).
+    item.set("taxes", [])
+    for kr in sibling_rows:
+        item.append("taxes", kr)
+    for row in preview.rows_to_stamp:
         item.append(
             "taxes",
             {
@@ -400,37 +424,24 @@ def _stamp_preview_onto_item(item: Any, preview: StampPreview) -> int:
                 "maximum_net_rate": row["maximum_net_rate"],
             },
         )
-        existing_keys.add(key)
-        stamped += 1
-    return stamped
+    return len(preview.rows_to_stamp)
 
 
-def _row_dedupe_key(
-    template: str | None,
-    tax_category: str | None,
-    valid_from: Any,
-    min_rate: Any,
-    max_rate: Any,
-) -> tuple:
-    """Normalise a row's key for dedupe across append calls.
+def _template_company(template_name: str | None) -> str | None:
+    """Robust Company-ownership check for an Item Tax Template row.
 
-    None / 0 / "" are treated as equivalent for the optional band/category
-    fields (Frappe sometimes round-trips an empty Currency as 0 vs None
-    depending on insert path); template name and valid_from are required
-    to match verbatim."""
+    Reads the template's `company` Link field — NOT a string match on
+    the name. Returns None when:
+      - template_name is empty / None
+      - the template doesn't exist (deleted out from under existing rows)
+      - the template has no company set (shouldn't happen for India
+        Compliance shipped templates, but defensively handled)
 
-    def _norm(v: Any) -> Any:
-        if v in (None, "", 0):
-            return None
-        return v
-
-    return (
-        template or None,
-        _norm(tax_category),
-        _norm(valid_from),
-        _norm(min_rate),
-        _norm(max_rate),
-    )
+    Callers treat None as "ambiguous ownership; preserve the row."
+    """
+    if not template_name:
+        return None
+    return frappe.db.get_value("Item Tax Template", template_name, "company")
 
 
 def _effective_rate_for_template(template_name: str | None) -> float | None:

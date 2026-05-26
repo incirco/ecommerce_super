@@ -724,6 +724,152 @@ class TestMultiCompanyTaxStamp(FrappeTestCase):
         item = frappe.get_doc("Item", payload["sku"])
         self.assertEqual(len(item.taxes), 0)
 
+    def test_company_edit_propagates_no_stale_rows(self) -> None:
+        """The stale-row window that closing this Stage-2 follow-up is
+        about: an FDE edits Company A's Tax Rule Map after the first
+        pull (swaps template1 → template2). The next pull must end
+        with ONLY template2 on the item — no template1 ghost row.
+
+        Under the old append+dedupe (the §8d first cut), template1
+        would have lingered; ERPNext would have been free to resolve
+        it at invoice time. Under per-Company REPLACE, template1's
+        row is identified as Company A's (via Item Tax Template's
+        `company` link), deleted, and replaced by template2."""
+        template1 = self._first_gst_template(self.company_a)
+        template2 = self._second_gst_template(self.company_a, exclude=template1)
+        map_name = self._seed_tax_map(self.company_a, template1)
+
+        payload = {
+            "sku": f"{PREFIX}edit-prop",
+            "product_type": "normal_product",
+            "product_name": "edit-prop",
+            "hsn_code": "85171000",
+            "accounting_unit": "Nos",
+            "active": 1,
+            "tax_rule_name": f"{PREFIX}TaxRule",
+            "tax_rate": 0.18,
+        }
+        # First pull — Company A stamps template1.
+        process_one_product(
+            payload, account=self.account, executor=self.executor,
+            enabled_companies=[self.company_a],
+        )
+        item = frappe.get_doc("Item", payload["sku"])
+        templates_after_first = {t.item_tax_template for t in item.taxes}
+        self.assertEqual(templates_after_first, {template1})
+
+        # FDE edits Company A's Tax Rule Map: template1 → template2.
+        map_doc = frappe.get_doc("EasyEcom Tax Rule Map", map_name)
+        map_doc.set("taxes", [])
+        map_doc.append(
+            "taxes",
+            {"item_tax_template": template2, "tax_category": None,
+             "valid_from": None, "minimum_net_rate": 0, "maximum_net_rate": 0},
+        )
+        map_doc.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        # Re-pull. Per-Company REPLACE wipes template1 (Company A's
+        # stale row) and writes template2 (Company A's new fresh row).
+        process_one_product(
+            payload, account=self.account, executor=self.executor,
+            enabled_companies=[self.company_a],
+        )
+        item = frappe.get_doc("Item", payload["sku"])
+        templates_after_second = {t.item_tax_template for t in item.taxes}
+        self.assertEqual(
+            templates_after_second,
+            {template2},
+            "Stale template1 should be GONE after the map edit; "
+            f"got {templates_after_second}",
+        )
+        self.assertNotIn(template1, templates_after_second)
+
+    def test_per_company_replace_leaves_other_companies_intact(self) -> None:
+        """Stamp A and B; edit A; re-stamp A; assert B's rows are
+        byte-for-byte the same. Proves the per-Company REPLACE is
+        scoped — only Company A's rows are touched, never B's."""
+        template_a1 = self._first_gst_template(self.company_a)
+        template_a2 = self._second_gst_template(self.company_a, exclude=template_a1)
+        template_b = self._first_gst_template(self.company_b)
+        map_a = self._seed_tax_map(self.company_a, template_a1)
+        self._seed_tax_map(self.company_b, template_b)
+
+        payload = {
+            "sku": f"{PREFIX}b-untouched",
+            "product_type": "normal_product",
+            "product_name": "b-untouched",
+            "hsn_code": "85171000",
+            "accounting_unit": "Nos",
+            "active": 1,
+            "tax_rule_name": f"{PREFIX}TaxRule",
+            "tax_rate": 0.18,
+        }
+        # First pull — A and B both stamp.
+        process_one_product(
+            payload, account=self.account, executor=self.executor,
+            enabled_companies=[self.company_a, self.company_b],
+        )
+        item_before = frappe.get_doc("Item", payload["sku"])
+        # Capture B's rows as a sorted-tuple snapshot, BEFORE A's edit.
+        b_rows_before = sorted(
+            (
+                t.item_tax_template,
+                t.tax_category or "",
+                str(t.valid_from or ""),
+                float(t.minimum_net_rate or 0),
+                float(t.maximum_net_rate or 0),
+            )
+            for t in item_before.taxes
+            if t.item_tax_template == template_b
+        )
+        self.assertEqual(len(b_rows_before), 1)
+
+        # Edit A only.
+        map_a_doc = frappe.get_doc("EasyEcom Tax Rule Map", map_a)
+        map_a_doc.set("taxes", [])
+        map_a_doc.append(
+            "taxes",
+            {"item_tax_template": template_a2, "tax_category": None,
+             "valid_from": None, "minimum_net_rate": 0, "maximum_net_rate": 0},
+        )
+        map_a_doc.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        # Re-pull — A re-stamps with template_a2; B is NOT re-stamped
+        # here (the loop calls A then B, but we only loop A in this
+        # call to isolate the property). We must explicitly call with
+        # only A to prove the per-Company scoping: if B's rows survive
+        # an A-only re-stamp, the scoping is correct.
+        process_one_product(
+            payload, account=self.account, executor=self.executor,
+            enabled_companies=[self.company_a],
+        )
+        item_after = frappe.get_doc("Item", payload["sku"])
+
+        # A's rows: only template_a2 (template_a1 gone).
+        a_after = {t.item_tax_template for t in item_after.taxes
+                   if t.item_tax_template in {template_a1, template_a2}}
+        self.assertEqual(a_after, {template_a2})
+
+        # B's rows: byte-for-byte unchanged from before.
+        b_rows_after = sorted(
+            (
+                t.item_tax_template,
+                t.tax_category or "",
+                str(t.valid_from or ""),
+                float(t.minimum_net_rate or 0),
+                float(t.maximum_net_rate or 0),
+            )
+            for t in item_after.taxes
+            if t.item_tax_template == template_b
+        )
+        self.assertEqual(
+            b_rows_after,
+            b_rows_before,
+            "Company B's rows must be untouched by an A-only re-stamp",
+        )
+
     # --- helpers ---
 
     def _first_gst_template(self, company: str) -> str:
@@ -739,6 +885,24 @@ class TestMultiCompanyTaxStamp(FrappeTestCase):
                 "Compliance fixtures."
             )
         return row
+
+    def _second_gst_template(self, company: str, *, exclude: str) -> str:
+        """A DIFFERENT GST template for the same Company — used to
+        simulate an FDE rate-change edit. India Compliance ships
+        several per-Company; pick the first one that isn't `exclude`."""
+        rows = frappe.db.get_all(
+            "Item Tax Template",
+            filters={"company": company, "disabled": 0, "name": ("!=", exclude)},
+            fields=["name"],
+            order_by="name asc",
+            limit=1,
+        )
+        if not rows:
+            raise RuntimeError(
+                f"Need a second Item Tax Template for {company} to test "
+                "stale-row replacement; only one exists."
+            )
+        return rows[0].name
 
 
 # ============================================================
