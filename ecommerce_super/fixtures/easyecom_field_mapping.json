@@ -420,23 +420,32 @@
    {
     "erpnext_path": "ecs_length_cm",
     "easyecom_path": "Length",
-    "transform_push": "float_to_int",
+    "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Integer (cm). Float-to-int truncates; pre-round in ERPNext for half-up."
+    "notes": "EE contract: Length is Integer (cm). Item.ecs_length_cm is a read-only Float populated by the pull (already in cm). The expression below reads an optional source_doc.ecs_dim_uom and converts to cm; if no such field exists or it's empty, value is treated as cm (default). FDE: to enable non-cm input, add an 'ecs_dim_uom' custom field on Item (Data or Link to UOM) - the rule already reads it. Multiplier table is shared by Length/Height/Width.",
+    "transform_args": {
+     "expression": "int(round((value or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
+    }
    },
    {
     "erpnext_path": "ecs_height_cm",
     "easyecom_path": "Height",
-    "transform_push": "float_to_int",
+    "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Integer (cm). Float-to-int truncates; pre-round in ERPNext for half-up."
+    "notes": "EE contract: Height is Integer (cm). Same UOM-aware conversion as Length/Width (see Length rule's notes for the FDE extension story).",
+    "transform_args": {
+     "expression": "int(round((value or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
+    }
    },
    {
     "erpnext_path": "ecs_width_cm",
     "easyecom_path": "Width",
-    "transform_push": "float_to_int",
+    "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Integer (cm). Float-to-int truncates; pre-round in ERPNext for half-up."
+    "notes": "EE contract: Width is Integer (cm). Same UOM-aware conversion as Length/Height (see Length rule's notes for the FDE extension story).",
+    "transform_args": {
+     "expression": "int(round((value or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
+    }
    },
    {
     "erpnext_path": "ecs_ee_cost",
