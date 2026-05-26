@@ -148,6 +148,19 @@
    "fieldtype": "Table",
    "label": "Excluded Fields",
    "options": "EasyEcom Item Map Exclude Field"
+  },
+  {
+   "fieldname": "push_snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Push Snapshot",
+   "collapsible": 1,
+   "description": "Last successful push payload, used to diff against current ERPNext state so the NEXT update sends only the changed fields (per EE contract: with productId, send only the field(s) being updated). Refreshed automatically on every successful push."
+  },
+  {
+   "fieldname": "ecs_last_pushed_payload",
+   "fieldtype": "Long Text",
+   "label": "Last Pushed Payload (JSON)",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

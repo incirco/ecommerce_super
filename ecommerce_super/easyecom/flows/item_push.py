@@ -1380,37 +1380,141 @@ def _do_update(
     ee_product_id: str,
     enabled_companies: list[str],
 ) -> PushOutcome:
-    """UpdateMasterProduct keyed on productId. EE's update is partial-
-    update-friendly; we send the full payload anyway because:
-      - Partial-update semantics let EE no-op fields it already has;
-      - Sending the full set keeps Create vs Update divergence to
-        just the endpoint+key, not the payload shape — simpler test
-        surface.
+    """UpdateMasterProduct keyed on productId. Sends a SPARSE payload:
+    productId (identity, always present) + only the fields whose
+    values changed since the last successful push.
+
+    EE's contract for partial updates: "with productId, only that field
+    has to be sent which has to be updated" (user-confirmed against
+    Harmony sandbox 2026-05-26). Sending unchanged fields is wasteful
+    and risks overwriting EE-side values where the ERPNext side may
+    have grown stale.
+
+    Diff baseline: ecs_last_pushed_payload on the Item Map row stores
+    the full payload last sent successfully. First-ever update of a
+    pulled product has no baseline -> we treat that as "every field
+    is new" and send the full payload. After every success the
+    baseline is refreshed to the just-sent full payload (not the
+    sparse delta) so subsequent diffs are computed against the true
+    current EE state, not against a previous delta.
     """
-    payload = dict(payload)
+    full_payload = dict(payload)
     # EE's WRITE contract for UpdateMasterProduct expects `productId`
     # to be the value EE's READ contract (GetProductMaster) returns
     # in the `cp_id` field - NOT the `product_id` field. This is an
     # EE-side naming inconsistency confirmed live 2026-05-26 in the
-    # Harmony sandbox: the user shared a working Postman call sending
-    # `"productId": 125293829` for HPC-APC-002, and that integer is
-    # exactly what our pull captured as `cp_id` for the primary
-    # location. The `product_id` (25766043) is informational only on
-    # updates - sending it produces EE body code 400 "product/sku
-    # doest not exist".
-    #
-    # Also: cast to int per EE's contract (their example payload uses
-    # integer literals).
+    # Harmony sandbox.
     write_id = item.get("ecs_ee_cp_id")
-    payload["productId"] = int(write_id) if write_id else write_id
-    idem_key = _idempotency_key(item, payload, account)
-    client.post(PRODUCT_MASTER_UPDATE, payload=payload, idempotency_key=idem_key)
+    full_payload["productId"] = (
+        int(write_id) if write_id else write_id
+    )
+
+    # Build the sparse payload: productId + changed fields only.
+    sparse_payload = _build_sparse_update_payload(
+        full_payload=full_payload, item_code=item.item_code,
+    )
+
+    idem_key = _idempotency_key(item, sparse_payload, account)
+    client.post(
+        PRODUCT_MASTER_UPDATE, payload=sparse_payload,
+        idempotency_key=idem_key,
+    )
+
+    # After success: persist the FULL payload as the new baseline.
+    # Storing the full (not sparse) snapshot is important - the next
+    # diff needs the complete known-EE state, not just the last delta.
+    _save_push_snapshot(item_code=item.item_code, payload=full_payload)
+
     return PushOutcome(
         item_code=item.item_code,
         pushed=True,
         operation="update",
         ee_product_id=ee_product_id,
-        ee_payload=payload,
+        ee_payload=sparse_payload,
+    )
+
+
+def _build_sparse_update_payload(
+    *, full_payload: dict, item_code: str
+) -> dict:
+    """Compute the partial-update payload: productId + changed fields.
+
+    Reads the prior push snapshot from the Item Map; if missing
+    (first push of this SKU as Update, e.g. pulled item being pushed
+    for the first time), returns the full payload so EE has a
+    complete view to validate against.
+    """
+    import json as _json
+
+    snapshot_text = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"erpnext_doctype": "Item", "erpnext_name": item_code},
+        "ecs_last_pushed_payload",
+    )
+    if not snapshot_text:
+        # Bundle wrapper case: look up via the Bundle row.
+        bundle_name = frappe.db.get_value(
+            "Product Bundle", {"new_item_code": item_code}, "name"
+        )
+        if bundle_name:
+            snapshot_text = frappe.db.get_value(
+                "EasyEcom Item Map",
+                {"erpnext_doctype": "Product Bundle",
+                 "erpnext_name": bundle_name},
+                "ecs_last_pushed_payload",
+            )
+    if not snapshot_text:
+        # No baseline yet - send full payload. EE accepts both shapes.
+        return dict(full_payload)
+    try:
+        prior = _json.loads(snapshot_text)
+    except Exception:
+        return dict(full_payload)
+    if not isinstance(prior, dict):
+        return dict(full_payload)
+
+    delta = {"productId": full_payload.get("productId")}
+    for k, v in full_payload.items():
+        if k == "productId":
+            continue
+        # Treat None and missing as "no value". Send field only when
+        # the canonical comparison differs.
+        if prior.get(k) != v:
+            delta[k] = v
+    return delta
+
+
+def _save_push_snapshot(*, item_code: str, payload: dict) -> None:
+    """Persist the just-sent full payload on the Item Map (or the
+    Bundle's map row) so subsequent updates diff against it."""
+    import json as _json
+
+    # Try Item-typed map first, then Product Bundle map (wrapper
+    # item_code identifies a bundle).
+    map_name = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"erpnext_doctype": "Item", "erpnext_name": item_code},
+        "name",
+    )
+    if not map_name:
+        bundle_name = frappe.db.get_value(
+            "Product Bundle", {"new_item_code": item_code}, "name"
+        )
+        if bundle_name:
+            map_name = frappe.db.get_value(
+                "EasyEcom Item Map",
+                {"erpnext_doctype": "Product Bundle",
+                 "erpnext_name": bundle_name},
+                "name",
+            )
+    if not map_name:
+        return
+    frappe.db.set_value(
+        "EasyEcom Item Map",
+        map_name,
+        "ecs_last_pushed_payload",
+        _json.dumps(payload, sort_keys=True, default=str),
+        update_modified=False,
     )
 
 

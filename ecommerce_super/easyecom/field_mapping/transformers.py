@@ -91,6 +91,16 @@ def _t_identity(value: Any, *, args: dict | None, context: TransformContext) -> 
     return value
 
 
+def _t_noop(value: Any, *, args: dict | None, context: TransformContext) -> Any:
+    """Explicit "skip this direction" - returns None so the executor's
+    None-output filter drops the rule from this direction's output.
+    Use case: a field that's read-only in EE's write contract (e.g.
+    cpId on UpdateMasterProduct). The rule still exists for the OTHER
+    direction (pull), keeping field-mapping symmetric and visible to
+    the FDE while ensuring nothing leaks the other way."""
+    return None
+
+
 def _t_bool_to_yn(value: Any, *, args: dict | None, context: TransformContext) -> str:
     if value is None:
         return "N"
@@ -597,6 +607,7 @@ TRANSFORMERS: dict[str, tuple[Callable, Callable[[str, dict | None], None]]] = {
     "identity": (_t_identity, _validate_no_args),
     "bool_to_yn": (_t_bool_to_yn, _validate_no_args),
     "yn_to_bool": (_t_yn_to_bool, _validate_no_args),
+    "noop": (_t_noop, _validate_no_args),
     "str_lower": (_t_str_lower, _validate_no_args),
     "str_upper": (_t_str_upper, _validate_no_args),
     "str_strip": (_t_str_strip, _validate_no_args),
