@@ -685,6 +685,16 @@ def _do_create_bundle(
     _upsert_bundle_map_row_after_create(
         bundle, ee_product_id=product_id_str, existing_map=existing_map
     )
+    # Stamp the wrapper Item too so a follow-up auto-push of the
+    # wrapper finds a non-null cp_id and routes UPDATE correctly.
+    if wrapper_item.get("ecs_ee_product_id") != product_id_str:
+        wrapper_item.db_set(
+            "ecs_ee_product_id", product_id_str, update_modified=False
+        )
+    if wrapper_item.get("ecs_ee_cp_id") != product_id_str:
+        wrapper_item.db_set(
+            "ecs_ee_cp_id", product_id_str, update_modified=False
+        )
     return PushOutcome(
         item_code=wrapper_item.item_code,
         pushed=True,
@@ -727,13 +737,15 @@ def _upsert_bundle_map_row_after_create(
 ) -> str:
     """Write back the bundle's EE product_id to its OWN map row
     (erpnext_doctype='Product Bundle'). Mirrors
-    _upsert_map_row_after_create but for the bundle dual-object link."""
+    _upsert_map_row_after_create but for the bundle dual-object link.
+    Same dual-write of cp_id - see _upsert_map_row_after_create's note."""
     if existing_map and existing_map.get("name"):
         frappe.db.set_value(
             "EasyEcom Item Map",
             existing_map["name"],
             {
                 "ee_product_id": ee_product_id,
+                "ee_cp_id": ee_product_id,
                 "status": STATUS_MAPPED,
                 "flag_reason": None,
             },
@@ -748,6 +760,7 @@ def _upsert_bundle_map_row_after_create(
             "erpnext_doctype": "Product Bundle",
             "erpnext_name": bundle.name,
             "ee_product_id": ee_product_id,
+            "ee_cp_id": ee_product_id,  # see Item-side note
             "status": STATUS_MAPPED,
         }
     )
@@ -1357,10 +1370,18 @@ def _do_create(
         ee_product_id=product_id_str,
         existing_map=existing_map,
     )
-    # Stamp on the Item too for FDE visibility (Stage-2-style: same
-    # field that the pull writes to).
+    # Stamp on the Item too. Store the same value as BOTH product_id
+    # AND cp_id on the Item - see _upsert_map_row_after_create's note
+    # for the EE-naming rationale (CreateMasterProduct returns one
+    # identifier that doubles as the cp_id for subsequent updates).
+    # Without ecs_ee_cp_id set here, the immediately-following UPDATE
+    # (if any auto-push triggers due to a near-simultaneous Item save)
+    # would send productId=None and EE rejects with
+    # "product/sku field missing".
     if item.get("ecs_ee_product_id") != product_id_str:
         item.db_set("ecs_ee_product_id", product_id_str, update_modified=False)
+    if item.get("ecs_ee_cp_id") != product_id_str:
+        item.db_set("ecs_ee_cp_id", product_id_str, update_modified=False)
 
     return PushOutcome(
         item_code=item.item_code,
@@ -1536,12 +1557,22 @@ def _upsert_map_row_after_create(
         path (we route to Update), but defensively just refresh the id.
     """
     sku = item_code  # Stage 3: sku == item_code (ERPNext is the source)
+    # CreateMasterProduct's response carries one identifier under
+    # `data.product_id` (e.g. 206544002). User-confirmed against the
+    # Harmony sandbox 2026-05-26: this same integer is what EE expects
+    # as `productId` on subsequent UpdateMasterProduct calls - i.e. it
+    # is semantically the value GetProductMaster returns in `cp_id` on
+    # the primary location's record. Store it on BOTH ee_product_id
+    # AND ee_cp_id so the post-Create UPDATE path can find a non-null
+    # cp_id (which the update code reads to build the productId
+    # field).
     if existing_map and existing_map.get("name"):
         frappe.db.set_value(
             "EasyEcom Item Map",
             existing_map["name"],
             {
                 "ee_product_id": ee_product_id,
+                "ee_cp_id": ee_product_id,
                 "status": STATUS_MAPPED,
                 "flag_reason": None,
             },
@@ -1556,6 +1587,7 @@ def _upsert_map_row_after_create(
             "erpnext_doctype": "Item",
             "erpnext_name": item_code,
             "ee_product_id": ee_product_id,
+            "ee_cp_id": ee_product_id,  # see note above
             "status": STATUS_MAPPED,
         }
     )
