@@ -1177,6 +1177,27 @@ class TestCursorAndIsolation(FrappeTestCase):
             f"got {client.absolute_flags}",
         )
 
+    def test_data_string_no_data_found_treated_as_empty(self) -> None:
+        """Regression: EE returns `{"data": "No Data Found"}` (string,
+        not list) when a cursor walks past the last product page.
+        Without normalisation, the caller iterates the string char by
+        char - each char becomes a "record" - and downstream
+        `.get(...)` calls on a str raise AttributeError. Observed
+        live in the Harmony sandbox 2026-05-26: 13 chars of
+        "No Data Found" -> 13 spurious AttributeError failures."""
+        client = MockClient(
+            count=0,
+            # MockClient.get will return whatever is in pages[0]; use
+            # the EE-shape string-data response to mimic the wire.
+            pages=[{"data": "No Data Found", "nextUrl": None}],
+        )
+        result = pull_products(
+            account_name=self.account_name, client=client, start_fresh=True
+        )
+        self.assertEqual(result.products_processed, 0)
+        self.assertEqual(result.pages_walked, 1)
+        self.assertEqual(result.page_failures, [])
+
     def test_savepoint_isolation_one_bad_product(self) -> None:
         """A product whose payload makes the executor raise should not
         abort siblings on the same page. Use one with required-field

@@ -29,11 +29,29 @@ def make_account(
     if frappe.db.exists("EasyEcom Account", name):
         return name
     if enabled:
-        # Disable any other currently-enabled account via db.set_value
+        # Disable any other currently-enabled TEST account via db.set_value
         # (bypasses validate so we don't recurse into the constraint).
-        for other in frappe.db.get_all(
-            "EasyEcom Account", filters={"enabled": 1}, pluck="name"
-        ):
+        #
+        # SAFETY: filter to test-pattern names only. The previous
+        # implementation disabled every enabled account, including
+        # user-created ones - on a shared dev/site that caused the live
+        # Harmony account to flip to disabled mid-session and produced
+        # auth-less calls to EE ("api_token is required"). Tests must
+        # never modify enabled-state on user data.
+        other_test_accounts: list[str] = []
+        for pattern in ("test-%", "TEST-%", "acc-%"):
+            other_test_accounts.extend(
+                frappe.db.get_all(
+                    "EasyEcom Account",
+                    filters=[
+                        ["enabled", "=", 1],
+                        ["name", "like", pattern],
+                        ["name", "!=", name],
+                    ],
+                    pluck="name",
+                )
+            )
+        for other in other_test_accounts:
             frappe.db.set_value(
                 "EasyEcom Account", other, "enabled", 0, update_modified=False
             )

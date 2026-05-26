@@ -251,7 +251,7 @@ def pull_products(
         updated_after=account.get("item_pull_last_updated_at"),
         max_pages=max_pages,
     ):
-        products = page.get("data") or []
+        products = _normalise_page_data(page.get("data"))
         page_outcome = _process_page(
             products,
             account=account,
@@ -475,6 +475,22 @@ def _resolve_starting_cursor(
     if start_fresh:
         return None
     return account.get("item_pull_cursor") or None
+
+
+def _normalise_page_data(data: Any) -> list:
+    """Coerce a GetProductMaster page's `data` field to a list.
+
+    EE returns `{"data": [<products>]}` for non-empty pages but
+    `{"data": "No Data Found"}` (a STRING) when a page is empty -
+    observed live in the Harmony sandbox 2026-05-26 when the cursor
+    walked past the last product. Without coercion the caller
+    iterates the string character-by-character, each char becomes a
+    "record", and downstream `.get(...)` calls on a str raise
+    AttributeError - 13 chars of "No Data Found" -> 13 spurious
+    failures per page. Treat any non-list shape as empty."""
+    if isinstance(data, list):
+        return data
+    return []
 
 
 def _iter_pages(
