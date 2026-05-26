@@ -70,6 +70,11 @@
   "item_master_flipped_at",
   "item_master_mode_col_2",
   "flip_to_erpnext_mastered_action",
+  "customer_master_mode_section",
+  "customer_master_mode",
+  "customer_master_flipped_at",
+  "customer_master_mode_col_2",
+  "flip_to_erpnext_mastered_customers_action",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -521,6 +526,40 @@
    "fieldtype": "Button",
    "label": "Flip → ERPNext-Mastered",
    "description": "One-way flip: marks onboarding complete and switches the §8d pull from accept-and-create to drift-detection-only. The FDE confirms in a dialog before the flip lands. Reverse flips (back to onboarding) require manual intervention — design intent is one flip per client lifecycle."
+  },
+  {
+   "fieldname": "customer_master_mode_section",
+   "fieldtype": "Section Break",
+   "label": "Customer Master Mode",
+   "description": "Controls the §8.2 Customer master flow. Mirrors Item Master Mode exactly: Onboarding (default) is bidirectional and FDE-supervised; ERPNext-Mastered is the steady state where ERPNext owns the customer master and EE-side changes show up as Drift flags rather than auto-overwriting. The flip is explicit and one-way (until manually reverted). Independent of the Item flip — accounts can flip Customer master while still in Item onboarding (or vice versa)."
+  },
+  {
+   "fieldname": "customer_master_mode",
+   "fieldtype": "Select",
+   "label": "Customer Master Mode",
+   "options": "onboarding\nerpnext_mastered",
+   "default": "onboarding",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "§8.2. `onboarding` = bidirectional pull + push, supervised; `erpnext_mastered` = ERPNext is source of truth, pull becomes drift-detection only. Read-only on the form — the FDE flips via the Flip action below (with confirmation)."
+  },
+  {
+   "fieldname": "customer_master_flipped_at",
+   "fieldtype": "Datetime",
+   "label": "Customer Master Flipped to ERPNext-Mastered At",
+   "read_only": 1,
+   "description": "Audit timestamp of when the FDE flipped Customer master to ERPNext-mastered. Empty during onboarding."
+  },
+  {
+   "fieldname": "customer_master_mode_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "flip_to_erpnext_mastered_customers_action",
+   "fieldtype": "Button",
+   "label": "Flip Customers → ERPNext-Mastered",
+   "description": "One-way flip for Customer master: marks onboarding complete and switches the §8.2 pull from accept-and-create to drift-detection-only. The FDE confirms in a dialog before the flip lands. Reverse flips require manual intervention."
   },
   {
    "fieldname": "item_pull_section",

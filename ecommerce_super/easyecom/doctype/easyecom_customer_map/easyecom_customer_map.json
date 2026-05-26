@@ -1,0 +1,209 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-CUST-{ee_c_id}",
+ "creation": "2026-05-26 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ee_c_id",
+  "status",
+  "link_section",
+  "erpnext_doctype",
+  "erpnext_name",
+  "ee_ids_section",
+  "ee_customer_id",
+  "flag_section",
+  "flag_reason",
+  "drift_section",
+  "drift_detected_at",
+  "drift_fields",
+  "drift_actions_col",
+  "dismiss_drift_action",
+  "push_to_ee_action",
+  "exclude_section",
+  "ecs_drift_exclude_fields",
+  "push_snapshot_section",
+  "ecs_last_pushed_payload"
+ ],
+ "fields": [
+  {
+   "fieldname": "ee_c_id",
+   "fieldtype": "Data",
+   "label": "EE c_id",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "EasyEcom customer identifier — the read-side `c_id` returned by /Wholesale/v2/UserManagement. The join key for this row. Direction-agnostic: the row exists whether the customer was born in EE (pulled in) or in ERPNext (pushed out). UNIQUE at the DB level (§8.2)."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Mapped\nCreated-Flagged\nFlagged-Not-Created\nDrift\nDisabled",
+   "default": "Mapped",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "§8.2 review/exception state. Mapped = clean; Created-Flagged = created but with a content problem (e.g. state/pincode mismatch, dirty optional fields); Flagged-Not-Created = unresolvable on the ERPNext side (e.g. India Compliance rejected the GSTIN); Drift = (post-flip) unexpected EE-side change; Disabled = lifecycle-deactivated. Drives the FDE worklist filter."
+  },
+  {
+   "fieldname": "link_section",
+   "fieldtype": "Section Break",
+   "label": "Linked ERPNext Object"
+  },
+  {
+   "fieldname": "erpnext_doctype",
+   "fieldtype": "Link",
+   "label": "ERPNext DocType",
+   "options": "DocType",
+   "in_list_view": 1,
+   "description": "Restricted to 'Customer' (§8.2 wholesale population). The form's set_query filters the dropdown; the controller's validate refuses anything else. Dynamic-Link pattern: the doctype controls the options for erpnext_name. (Future entity-sync flows for Supplier / Address would each get their own Map DocType.)"
+  },
+  {
+   "fieldname": "erpnext_name",
+   "fieldtype": "Dynamic Link",
+   "label": "ERPNext Name",
+   "options": "erpnext_doctype",
+   "in_list_view": 1,
+   "description": "The Customer docname. Dynamic Link resolves the FK target from erpnext_doctype. The pull/push flows write here when they create the corresponding ERPNext Customer. (Linked Billing / Shipping Address records hang off Customer via Frappe's standard Dynamic Link from Address.party_name.)"
+  },
+  {
+   "fieldname": "ee_ids_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Internal IDs",
+   "collapsible": 1,
+   "description": "EE's write-side identifier. Per the packet, `c_id` (read) is expected to equal `customerId` (write) — to be confirmed live during Stage 3. Both are stored: ee_c_id is the join key (unique); ee_customer_id is what the push UpdateCustomer call keys on. The packet notes parity is expected but not yet verified."
+  },
+  {
+   "fieldname": "ee_customer_id",
+   "fieldtype": "Data",
+   "label": "EE customerId",
+   "description": "EasyEcom internal customerId (returned by CreateCustomer; used by UpdateCustomer). Per the packet's design conversation, this equals ee_c_id — both are stored regardless until parity is confirmed live in Stage 3. Read-only after creation in normal flow; FDE can edit if remapping."
+  },
+  {
+   "fieldname": "flag_section",
+   "fieldtype": "Section Break",
+   "label": "Flag Details",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "flag_reason",
+   "fieldtype": "Small Text",
+   "label": "Flag Reason",
+   "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: a plain-English explanation the FDE can act on (e.g. 'state name unresolvable in EE getStates cache', 'state/pincode mismatch (state=Arunachal Pradesh, pincode=560035)', 'India Compliance rejected GSTIN format'). For Drift rows, the structured per-field diff lives in the Drift Fields table below; flag_reason summarises (e.g. '3 fields drifted')."
+  },
+  {
+   "fieldname": "drift_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Details",
+   "collapsible": 1,
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "Populated by the §8.2 post-flip drift detector (Stage 5). One row per field where the incoming EE payload differs from the current ERPNext Customer / Address state. Cleared when the FDE dismisses (status → Mapped) or pushes ERPNext to EE."
+  },
+  {
+   "fieldname": "drift_detected_at",
+   "fieldtype": "Datetime",
+   "label": "Drift Detected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drift_fields",
+   "fieldtype": "Table",
+   "label": "Drift Fields",
+   "options": "EasyEcom Item Map Drift Field",
+   "description": "Per-field divergence. field=ERPNext field name (e.g. 'gstin', 'customer_name', 'billing_address.city'), erpnext_value=current ERPNext value, ee_value=what EE asserts (NOT accepted). Reuses §8d's generic drift-field child DocType (field+value pairs are entity-agnostic)."
+  },
+  {
+   "fieldname": "drift_actions_col",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "dismiss_drift_action",
+   "fieldtype": "Button",
+   "label": "Dismiss Drift (Mark Reviewed)",
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "FDE: the EE-side change is wrong / already-handled-upstream. Returns the row to Mapped and clears the Drift table; the underlying ERPNext Customer is NOT touched."
+  },
+  {
+   "fieldname": "push_to_ee_action",
+   "fieldtype": "Button",
+   "label": "Push ERPNext → EE (Re-assert SoT)",
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "FDE: ERPNext is the source of truth (per the post-flip contract); push current ERPNext Customer + Addresses to EE via the §8.2 push, overwriting the EE-side divergence."
+  },
+  {
+   "fieldname": "exclude_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Exclusions",
+   "collapsible": 1,
+   "description": "Fields the drift detector should IGNORE on this Customer. Reuses §8d's generic exclude-field child DocType. Empty list = compare every field (default Stage-5 behaviour)."
+  },
+  {
+   "fieldname": "ecs_drift_exclude_fields",
+   "fieldtype": "Table",
+   "label": "Excluded Fields",
+   "options": "EasyEcom Item Map Exclude Field"
+  },
+  {
+   "fieldname": "push_snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Push Snapshot",
+   "collapsible": 1,
+   "description": "Last successful push payload, used to diff against current ERPNext state so the NEXT UpdateCustomer sends only the changed fields. Refreshed automatically on every successful push."
+  },
+  {
+   "fieldname": "ecs_last_pushed_payload",
+   "fieldtype": "Long Text",
+   "label": "Last Pushed Payload (JSON)",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-26 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Customer Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
