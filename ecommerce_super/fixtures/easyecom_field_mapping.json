@@ -351,6 +351,152 @@
  },
  {
   "doctype": "EasyEcom Field Mapping",
+  "name": "EasyEcom-Item-Push",
+  "mapping_name": "EasyEcom-Item-Push",
+  "entity_type": "Item",
+  "direction": "Push",
+  "active": 1,
+  "missing_field_policy": "Permissive",
+  "version": 2,
+  "last_modified_by": "Administrator",
+  "last_modified_at": "2026-05-26 12:00:00",
+  "change_reason": "\u00a78d Stage 3 \u2014 ERPNext Item \u2192 EasyEcom CreateMasterProduct / UpdateMasterProduct payload. Holds the REAL-DATA-FROM-ITEM mappings only (Sku, ItemName, ProductTaxCode, dimensions, Cost, productId for updates). The MANUFACTURED EE-mandatory fields ERPNext doesn't carry (materialType=1 Finished Good, itemType=0 normal in Stage 3, Brand/Category/ModelNumber fallbacks, TaxRate snapped to EE's allowed {0,3,5,12,18,28} set) are injected by the FLOW (item_push.py) after the engine produces this payload \u2014 they're flow decisions, not translations, and don't belong in the ruleset per the \u00a78.0 engine-as-translator policy. Stage 3 covers normal products only; bundles (combo_product) are Stage 4's job and use itemType=1 + subProducts. | v2 (FDE-configurability refactor per user direction): the manufactured constants (materialType=1, itemType=0, Brand fallback, Cost fallback chain, ModelNumber=item_code) are now ruleset rules instead of flow-code constants. FDE edits them via the desk EasyEcom Field Mapping > EasyEcom-Item-Push > Rules child table \u2014 no code deploy needed to change defaults or add company-conditional logic. TaxRate stays in the flow (it's a DB lookup + snap-to-set, not a constant or simple derivation).",
+  "rules": [
+   {
+    "erpnext_path": "item_code",
+    "easyecom_path": "Sku",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "required": 1,
+    "notes": "EE's Sku is its primary key for products (per its FAQ). ERPNext's item_code is the byte-for-byte source \u2014 the \u00a78d pull also uses sku==item_code for auto-mapping."
+   },
+   {
+    "erpnext_path": "item_name",
+    "easyecom_path": "ItemName",
+    "transform_push": "str_strip",
+    "transform_pull": "str_strip"
+   },
+   {
+    "erpnext_path": "description",
+    "easyecom_path": "Description",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "gst_hsn_code",
+    "easyecom_path": "ProductTaxCode",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "Item.gst_hsn_code is required on Item save (India Compliance), so a successfully-saved Item always has it. The flow doesn't need to re-check; an item without HSN would never reach push."
+   },
+   {
+    "erpnext_path": "brand",
+    "easyecom_path": "Brand",
+    "transform_push": "custom_python",
+    "transform_pull": "identity",
+    "notes": "EE requires Brand on Create. If Item.brand is set (Link to Brand DocType), push its name; otherwise fall back to 'Unbranded'. FDE: edit transform_args.expression in this rule's row to change the fallback string (e.g. 'House Brand') or add company-conditional logic. The pull direction is identity \u2014 EE-side brand strings land on Item.brand and a Brand row gets auto-created later by a Stage-5 cleanup if needed.",
+    "transform_args": {
+     "expression": "value if value else 'Unbranded'"
+    }
+   },
+   {
+    "erpnext_path": "item_group",
+    "easyecom_path": "Category",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "ERPNext Item.item_group is required, so this always has a value. Pushed as Category \u2014 EE will create/lookup its own side category from the string."
+   },
+   {
+    "erpnext_path": "weight_per_unit",
+    "easyecom_path": "Weight",
+    "transform_push": "float_to_str",
+    "transform_pull": "str_to_float",
+    "notes": "Grams. Flow flags item Not-Pushed if missing."
+   },
+   {
+    "erpnext_path": "ecs_length_cm",
+    "easyecom_path": "Length",
+    "transform_push": "float_to_str",
+    "transform_pull": "str_to_float"
+   },
+   {
+    "erpnext_path": "ecs_height_cm",
+    "easyecom_path": "Height",
+    "transform_push": "float_to_str",
+    "transform_pull": "str_to_float"
+   },
+   {
+    "erpnext_path": "ecs_width_cm",
+    "easyecom_path": "Width",
+    "transform_push": "float_to_str",
+    "transform_pull": "str_to_float"
+   },
+   {
+    "erpnext_path": "ecs_ee_cost",
+    "easyecom_path": "Cost",
+    "transform_push": "custom_python",
+    "transform_pull": "str_to_float",
+    "notes": "Prefer the EE-origin cost captured at pull time (ecs_ee_cost). Fall back to Item.valuation_rate when the item was ERPNext-originated (never pulled). Final fallback: 0 (EE accepts). FDE: edit transform_args.expression to change the fallback chain \u2014 e.g. add 'last_purchase_rate' if your sourcing prefers the most recent PO.",
+    "transform_args": {
+     "expression": "value if value else (source_doc.valuation_rate or 0)"
+    }
+   },
+   {
+    "erpnext_path": "ecs_ee_product_id",
+    "easyecom_path": "productId",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "Only meaningful on Update calls (UpdateMasterProduct keys on sku OR productId). On Create the field is absent on the Item until EE returns the product_id and the flow writes it back to the map row + Item.ecs_ee_product_id."
+   },
+   {
+    "erpnext_path": "ecs_ee_cp_id",
+    "easyecom_path": "cpId",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "item_code",
+    "easyecom_path": "ModelNumber",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "ERPNext Item has no native model_no field; we use item_code as ModelNumber for EE (uniquely identifying, always present). FDE: change transform_push to 'custom_python' with a different expression if your client maintains a separate model-number custom field (e.g. \"source_doc.ecs_model_no or source_doc.item_code\")."
+   },
+   {
+    "erpnext_path": "item_code",
+    "easyecom_path": "materialType",
+    "transform_push": "conditional_constant",
+    "transform_pull": "identity",
+    "transform_args": {
+     "conditions": [
+      {
+       "when": "True",
+       "then": 1
+      }
+     ],
+     "default": 1
+    },
+    "notes": "EE-mandatory on Create; absent from ERPNext Item. Default 1 (Finished Good) \u2014 per \u00a78.1.5 / packet's stated default. The rule's erpnext_path is item_code as a trigger source (the transform ignores the value and returns the constant); EE-side is materialType.\nFDE: edit transform_args.default (or add a condition) to change the value \u2014 e.g. raw materials = 2, or company-specific via 'source_doc.item_group in (\"Raw\", ...)' \u2192 2. No code deploy needed."
+   },
+   {
+    "erpnext_path": "item_code",
+    "easyecom_path": "itemType",
+    "transform_push": "conditional_constant",
+    "transform_pull": "identity",
+    "transform_args": {
+     "conditions": [
+      {
+       "when": "True",
+       "then": 0
+      }
+     ],
+     "default": 0
+    },
+    "notes": "EE itemType: Child=0 (normal), Combo=1, Kit=2. Stage 3 ships 0 for normal products; Stage 4 (bundles) will swap this rule to a conditional that returns 1 when source_doc is a Product Bundle wrapper. FDE: only change manually if your data has non-standard semantics \u2014 Stage 4 will land the proper Bundle-aware condition."
+   }
+  ]
+ },
+ {
+  "doctype": "EasyEcom Field Mapping",
   "name": "EasyEcom-Customer-Sync",
   "mapping_name": "EasyEcom-Customer-Sync",
   "entity_type": "Customer",

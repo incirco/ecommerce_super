@@ -35,6 +35,15 @@ CHANNELS_GET: str = "/current-channel-status"  # GET — per-location (§8.6.3, 
 PRODUCT_MASTER_GET: str = "/Products/GetProductMaster"  # GET (bulk; nextUrl)
 PRODUCT_MASTER_COUNT_GET: str = "/Products/GetProductMastersCount"  # GET
 
+# §8d Item Master (Push, §8.1.5). Create / Update / lifecycle.
+# Create: returns {data: {product_id}} — we write the product_id back to
+# the EasyEcom Item Map row. Update: keys on sku OR productId, supports
+# partial updates. ActivateDeactivate: keys on product_id, status 1/0.
+# All three are account-wide writes — foundational.
+PRODUCT_MASTER_CREATE: str = "/Products/CreateMasterProduct"  # POST
+PRODUCT_MASTER_UPDATE: str = "/Products/UpdateMasterProduct"  # POST
+PRODUCT_MASTER_ACTIVATE_DEACTIVATE: str = "/Products/ActivateDeactivateProduct"  # POST
+
 
 # ----- Buying flow endpoints (§31.3.3) -----
 
@@ -82,6 +91,10 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
         # §8d Item Pull is account-wide (includeLocations=1).
         PRODUCT_MASTER_GET,
         PRODUCT_MASTER_COUNT_GET,
+        # §8d Item Push — account-wide catalogue writes (no per-location).
+        PRODUCT_MASTER_CREATE,
+        PRODUCT_MASTER_UPDATE,
+        PRODUCT_MASTER_ACTIVATE_DEACTIVATE,
     }
 )
 
