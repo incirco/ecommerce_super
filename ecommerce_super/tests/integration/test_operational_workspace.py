@@ -143,7 +143,7 @@ class TestWorkspaceSidebarMirrorsWorkspace(FrappeTestCase):
         items = frappe.db.get_all(
             "Workspace Sidebar Item",
             filters={"parent": self.SIDEBAR_NAME, "type": "Link"},
-            fields=["label", "link_type", "link_to", "url"],
+            fields=["label", "link_type", "link_to", "route_options"],
         )
         worklist_labels = {
             i.label for i in items
@@ -152,29 +152,46 @@ class TestWorkspaceSidebarMirrorsWorkspace(FrappeTestCase):
         self.assertEqual(
             worklist_labels,
             EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS,
-            "Sidebar missing one of the 6 FDE worklist URL items.",
+            "Sidebar missing one of the 6 FDE worklist items.",
         )
-        # Each worklist link is link_type=URL with the destination in
-        # the `url` field — Frappe v16's sidebar_item.js reads
-        # this.item.url for URL-typed items (NOT link_to). Putting
-        # the URL string in link_to leaves the rendered item with no
-        # navigation path → not clickable. This test pins that bug.
+        # Each worklist link must be link_type=DocType with a
+        # `route_options` JSON filter. NOT link_type=URL — Frappe's
+        # sidebar_item.html line 26 hardcodes target="_blank" for
+        # URL-type items, which forces filtered-list-view links to
+        # open in a NEW TAB instead of in-tab navigation. The
+        # DocType + route_options pattern renders an in-tab route
+        # via frappe.utils.generate_route. This test pins that
+        # contract (regression caught after the workspace ship).
         worklist_items = [i for i in items
                           if i.label in EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS]
         for w in worklist_items:
             self.assertEqual(
-                w.link_type, "URL",
-                f"FDE worklist sidebar link {w.label!r} should be a URL "
-                f"(filtered list view), not {w.link_type!r}",
+                w.link_type, "DocType",
+                f"FDE worklist sidebar link {w.label!r} must use "
+                f"link_type=DocType (in-tab), not {w.link_type!r}. "
+                "URL link_type hardcodes target=_blank, opening a "
+                "new tab — wrong UX for an in-app navigation.",
             )
             self.assertTrue(
-                w.url,
-                f"{w.label}: URL value must live in the `url` field, "
-                "not `link_to` (Frappe v16 sidebar_item.js reads "
-                "this.item.url for URL-typed items).",
+                w.link_to,
+                f"{w.label}: DocType target missing from link_to.",
             )
-            self.assertIn("?", w.url or "",
-                          f"{w.label}: URL should carry a filter (?...)")
+            self.assertTrue(
+                w.route_options,
+                f"{w.label}: route_options (JSON filter) missing — "
+                "without it the link lands on the unfiltered list "
+                "view, defeating the worklist purpose.",
+            )
+            # route_options parses as JSON.
+            import json as _json
+            try:
+                ro = _json.loads(w.route_options)
+            except _json.JSONDecodeError:
+                self.fail(f"{w.label}: route_options not valid JSON")
+            self.assertTrue(
+                ro,
+                f"{w.label}: route_options dict is empty.",
+            )
 
 
 # ============================================================

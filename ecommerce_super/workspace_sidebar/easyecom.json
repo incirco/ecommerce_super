@@ -145,11 +145,12 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "Locations - To Map",
-   "link_to": null,
-   "link_type": "URL",
+   "link_to": "EasyEcom Location",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
-   "url": "/app/easyecom-location/view/list?workflow_state=To%20Map"
+   "url": null,
+   "route_options": "{\"workflow_state\": \"To Map\"}"
   },
   {
    "child": 1,
@@ -157,11 +158,12 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "Channels - Unclassified",
-   "link_to": null,
-   "link_type": "URL",
+   "link_to": "Marketplace",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
-   "url": "/app/marketplace/view/list?workflow_state=Unclassified"
+   "url": null,
+   "route_options": "{\"workflow_state\": \"Unclassified\"}"
   },
   {
    "child": 1,
@@ -169,11 +171,12 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "Tax Rules - To Configure",
-   "link_to": null,
-   "link_type": "URL",
+   "link_to": "EasyEcom Tax Rule Map",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
-   "url": "/app/easyecom-tax-rule-map/view/list?workflow_state=To%20Configure"
+   "url": null,
+   "route_options": "{\"workflow_state\": \"To Configure\"}"
   },
   {
    "child": 1,
@@ -181,11 +184,12 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "Items - Drift",
-   "link_to": null,
-   "link_type": "URL",
+   "link_to": "EasyEcom Item Map",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
-   "url": "/app/easyecom-item-map/view/list?status=Drift"
+   "url": null,
+   "route_options": "{\"status\": \"Drift\"}"
   },
   {
    "child": 1,
@@ -193,11 +197,12 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "Items - Created-Flagged",
-   "link_to": null,
-   "link_type": "URL",
+   "link_to": "EasyEcom Item Map",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
-   "url": "/app/easyecom-item-map/view/list?status=Created-Flagged"
+   "url": null,
+   "route_options": "{\"status\": \"Created-Flagged\"}"
   },
   {
    "child": 1,
@@ -205,11 +210,12 @@
    "indent": 0,
    "keep_closed": 0,
    "label": "Items - Flagged-Not-Created",
-   "link_to": null,
-   "link_type": "URL",
+   "link_to": "EasyEcom Item Map",
+   "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
-   "url": "/app/easyecom-item-map/view/list?status=Flagged-Not-Created"
+   "url": null,
+   "route_options": "{\"status\": \"Flagged-Not-Created\"}"
   },
   {
    "child": 0,
