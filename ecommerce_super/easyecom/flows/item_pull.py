@@ -286,6 +286,12 @@ def pull_products(
         max_pages=max_pages,
     ):
         products = _normalise_page_data(page.get("data"))
+        # Defensive dedupe in case EE still returns multiple records
+        # per SKU despite includeLocations=0 - keep the primary
+        # location's record per SKU.
+        products = _dedupe_to_primary_location(
+            products, primary_location_name=_primary_location_name(),
+        )
         page_outcome = _process_page(
             products,
             account=account,
@@ -527,6 +533,63 @@ def _normalise_page_data(data: Any) -> list:
     return []
 
 
+def _dedupe_to_primary_location(
+    records: list[dict], *, primary_location_name: str | None
+) -> list[dict]:
+    """Pick one record per SKU, preferring the primary location.
+
+    Backstop for the case where EE returns multiple records per SKU -
+    one per (SKU, location) - even though §8d wants a single master
+    record per SKU. Observed live 2026-05-26 in the Harmony sandbox:
+    HPC-APC-002 appeared 7 times in a single page (one per warehouse),
+    each carrying its own per-channel `cp_id` (per-location partner
+    ID). Without dedupe the per-product upsert ran 7 times for the
+    same SKU and whichever record came last won non-deterministically.
+
+    Strategy:
+      1. If a record's `company_name` matches the EasyEcom Location
+         marked `is_primary=1`, take it. That's the master/HQ record;
+         its cp_id is the one EE expects on UpdateMasterProduct.
+      2. Otherwise take the first occurrence (preserves source order).
+
+    The first-occurrence fallback exists for sandboxes where the
+    primary location's record isn't present in a page (mid-walk
+    cursor positioning, etc.) - better to take SOMETHING than skip
+    the SKU entirely.
+    """
+    if not primary_location_name:
+        # No primary configured - dedupe by first occurrence only.
+        seen: dict[str, dict] = {}
+        for r in records:
+            sku = (r or {}).get("sku")
+            if sku and sku not in seen:
+                seen[sku] = r
+        return list(seen.values())
+
+    by_sku: dict[str, dict] = {}
+    primary_seen: set[str] = set()
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        sku = r.get("sku")
+        if not sku:
+            continue
+        if r.get("company_name") == primary_location_name:
+            by_sku[sku] = r
+            primary_seen.add(sku)
+        elif sku not in primary_seen and sku not in by_sku:
+            by_sku[sku] = r  # first non-primary fallback
+    return list(by_sku.values())
+
+
+def _primary_location_name() -> str | None:
+    """The EasyEcom Location row marked is_primary=1, by its
+    location_name (matches EE record's `company_name` field)."""
+    return frappe.db.get_value(
+        "EasyEcom Location", {"is_primary": 1}, "location_name"
+    )
+
+
 def _iter_pages(
     client: EasyEcomClient,
     *,
@@ -561,8 +624,18 @@ def _iter_pages(
                 _is_absolute_url=is_absolute,
             )
         else:
+            # §8d is a MASTER product sync - we want one record per SKU,
+            # not one per (SKU, location). Pass includeLocations=0 so EE
+            # returns the master-only listing. Inventory (per-location
+            # stock) is §8e/§8f territory. Observed live 2026-05-26: with
+            # includeLocations=1 EE returned 7 records for HPC-APC-002
+            # (one per warehouse), each with a different per-channel
+            # cp_id, and the pull's repeated upserts left a
+            # non-deterministic cp_id stored locally. The first push then
+            # sent a stale per-channel cp_id, which EE rejected with the
+            # business error "product/sku doest not exist".
             params: dict[str, Any] = {
-                "includeLocations": 1,
+                "includeLocations": 0,
                 "limit": DEFAULT_PAGE_SIZE,
             }
             if updated_after:
@@ -1692,7 +1765,11 @@ def _refresh_existing_item(item: Any, erpnext_fields: dict) -> None:
 
 def _load_or_refresh_item_from_map(map_doc: Any, erpnext_fields: dict) -> Any:
     """Resolve the Item the map row points to and refresh it from the
-    incoming EE payload (additive)."""
+    incoming EE payload (additive). Also re-syncs the map row's own
+    EE identity fields (ee_product_id, ee_cp_id) - those must track
+    EE's primary-location values, not stay frozen at first-pull state.
+    Without this re-sync the Item's ecs_ee_cp_id drifts away from
+    Item Map's ee_cp_id and observability breaks."""
     if not map_doc.erpnext_doctype or not map_doc.erpnext_name:
         raise ValueError(
             f"Item Map {map_doc.name} has no erpnext target — "
@@ -1705,6 +1782,18 @@ def _load_or_refresh_item_from_map(map_doc: Any, erpnext_fields: dict) -> Any:
         )
     item = frappe.get_doc("Item", map_doc.erpnext_name)
     _refresh_existing_item(item, erpnext_fields)
+
+    # Re-sync the map row's EE identity to match what was just
+    # written onto the Item. Identity fields drift if pull preserves
+    # the original ones forever - confirmed live 2026-05-26 when
+    # Item.ecs_ee_cp_id updated to the primary's 125293829 but
+    # Item Map.ee_cp_id stayed at the stale 125293825 from earlier.
+    new_pid = erpnext_fields.get("ecs_ee_product_id")
+    new_cpid = erpnext_fields.get("ecs_ee_cp_id")
+    if new_pid != map_doc.ee_product_id or new_cpid != map_doc.ee_cp_id:
+        map_doc.ee_product_id = new_pid
+        map_doc.ee_cp_id = new_cpid
+        map_doc.save(ignore_permissions=True)
     return item
 
 
