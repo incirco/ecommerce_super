@@ -760,33 +760,58 @@ def _process_one_product_inner(
     map_name = frappe.db.get_value(
         "EasyEcom Item Map", {"ee_sku": sku}, "name"
     )
-    if map_name:
-        map_doc = frappe.get_doc("EasyEcom Item Map", map_name)
+    map_doc = (
+        frappe.get_doc("EasyEcom Item Map", map_name) if map_name else None
+    )
+
+    # An existing map row from a prior pull's FNC outcome has no
+    # erpnext target (status='Flagged-Not-Created', erpnext_doctype/
+    # erpnext_name both blank). If we're now reaching this step on a
+    # re-pull, the gating checks above (product_type, HSN, etc.)
+    # passed THIS time - the EE-side data has been fixed. Don't bail
+    # via _load_or_refresh_item_from_map ("no erpnext target"); take
+    # the create-or-auto-map path and reuse the existing map row in
+    # place so the FNC -> CF transition lands without duplicating.
+    map_is_unattached = map_doc and not map_doc.erpnext_name
+
+    if map_doc and not map_is_unattached:
         item = _load_or_refresh_item_from_map(map_doc, erpnext_fields)
         created = False
     elif frappe.db.exists("Item", sku):
         # Auto-map: existing ERPNext item with byte-equal item_code.
         item = frappe.get_doc("Item", sku)
         _refresh_existing_item(item, erpnext_fields)
-        map_doc = _create_map_row(
-            sku=sku,
-            erpnext_doctype="Item",
-            erpnext_name=item.name,
-            ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
-            ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
-            status=STATUS_MAPPED,
-        )
+        if map_is_unattached:
+            map_doc = _attach_map_row(
+                map_doc, erpnext_doctype="Item", erpnext_name=item.name,
+                erpnext_fields=erpnext_fields, status=STATUS_MAPPED,
+            )
+        else:
+            map_doc = _create_map_row(
+                sku=sku,
+                erpnext_doctype="Item",
+                erpnext_name=item.name,
+                ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
+                ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
+                status=STATUS_MAPPED,
+            )
         created = False
     else:
         item = _create_item(erpnext_fields, is_stock_item=is_stock_item)
-        map_doc = _create_map_row(
-            sku=sku,
-            erpnext_doctype="Item",
-            erpnext_name=item.name,
-            ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
-            ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
-            status=STATUS_MAPPED,
-        )
+        if map_is_unattached:
+            map_doc = _attach_map_row(
+                map_doc, erpnext_doctype="Item", erpnext_name=item.name,
+                erpnext_fields=erpnext_fields, status=STATUS_MAPPED,
+            )
+        else:
+            map_doc = _create_map_row(
+                sku=sku,
+                erpnext_doctype="Item",
+                erpnext_name=item.name,
+                ee_product_id=erpnext_fields.get("ecs_ee_product_id"),
+                ee_cp_id=erpnext_fields.get("ecs_ee_cp_id"),
+                status=STATUS_MAPPED,
+            )
         created = True
 
     # === Step 6: lifecycle (active:0 → disabled) ===
@@ -1636,6 +1661,34 @@ def _create_map_row(
     )
     doc.insert(ignore_permissions=True)
     return doc
+
+
+def _attach_map_row(
+    map_doc: Any,
+    *,
+    erpnext_doctype: str,
+    erpnext_name: str,
+    erpnext_fields: dict,
+    status: str,
+) -> Any:
+    """Attach a previously unattached (FNC) map row to a now-existing
+    ERPNext target. Used when a re-pull of a SKU whose prior pull was
+    Flagged-Not-Created (no Item / Bundle created) succeeds on this
+    pass because the EE-side data was fixed (e.g. HSN updated).
+    Reuses the existing row instead of creating a duplicate, which
+    would violate the UNIQUE constraint on ee_sku."""
+    map_doc.erpnext_doctype = erpnext_doctype
+    map_doc.erpnext_name = erpnext_name
+    map_doc.ee_product_id = (
+        erpnext_fields.get("ecs_ee_product_id") or map_doc.ee_product_id
+    )
+    map_doc.ee_cp_id = (
+        erpnext_fields.get("ecs_ee_cp_id") or map_doc.ee_cp_id
+    )
+    map_doc.status = status
+    map_doc.flag_reason = None
+    map_doc.save(ignore_permissions=True)
+    return map_doc
 
 
 def _flag_not_created(
