@@ -27,9 +27,9 @@ from frappe.tests.utils import FrappeTestCase
 WORKSPACE = "EasyEcom"
 
 EXPECTED_WORKLIST_CARDS = {
-    "Locations — To Map",
-    "Channels — Unclassified",
-    "Tax Rules — To Configure",
+    "Locations - To Map",
+    "Channels - Unclassified",
+    "Tax Rules - To Configure",
     "Items in Drift",
     "Items Created-Flagged",
     "Items Flagged-Not-Created",
@@ -62,12 +62,12 @@ EXPECTED_NAV_CARD_BREAKS = {
 EXPECTED_SIDEBAR_SECTIONS = EXPECTED_NAV_CARD_BREAKS
 
 EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS = {
-    "Locations — To Map",
-    "Channels — Unclassified",
-    "Tax Rules — To Configure",
-    "Items — Drift",
-    "Items — Created-Flagged",
-    "Items — Flagged-Not-Created",
+    "Locations - To Map",
+    "Channels - Unclassified",
+    "Tax Rules - To Configure",
+    "Items - Drift",
+    "Items - Created-Flagged",
+    "Items - Flagged-Not-Created",
 }
 
 

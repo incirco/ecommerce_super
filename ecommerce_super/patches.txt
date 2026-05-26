@@ -18,4 +18,5 @@ ecommerce_super.patches.v0_1.add_ecs_item_pull_fields
 ecommerce_super.patches.v0_1.drop_item_sync_ruleset
 ecommerce_super.patches.v0_1.install_easyecom_top_strip_block
 ecommerce_super.patches.v0_1.refresh_easyecom_workspace_s17
+ecommerce_super.patches.v0_1.rename_emdash_worklist_cards
 ecommerce_super.patches.v0_1.refresh_easyecom_workspace_sidebar
