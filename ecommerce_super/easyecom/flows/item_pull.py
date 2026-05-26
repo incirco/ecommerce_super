@@ -921,6 +921,15 @@ def _process_one_product_inner(
             )
         created = True
 
+    # === Step 5b: EANUPC sync to Item.barcodes (typed EAN row) ===
+    # EE's EANUPC is a scalar string; ERPNext stores barcodes as a
+    # typed child table. Append the EE value as a barcode_type='EAN'
+    # row only if it isn't already present. Mismatched-type rows for
+    # the same value are left alone (FDE intent should win). Done
+    # here in code because the field-mapping engine's sandbox doesn't
+    # express child-row dedupe cleanly.
+    _sync_ean_barcode(item, product.get("EANUPC"))
+
     # === Step 6: lifecycle (active:0 → disabled) ===
     if product.get("active") in (0, "0", False) and not item.disabled:
         item.disabled = 1
@@ -1599,6 +1608,11 @@ def _process_combo_product(
                 status=STATUS_MAPPED,
             )
 
+    # === Step 5b: EANUPC sync on the wrapper Item (typed EAN row) ===
+    # Combos can also carry an EANUPC on EE side. Apply the same
+    # typed-barcode sync as the normal-product path.
+    _sync_ean_barcode(wrapper_item, product.get("EANUPC"))
+
     # === Step 6: lifecycle (active:0 → disable wrapper) ===
     if product.get("active") in (0, "0", False) and not wrapper_item.disabled:
         wrapper_item.disabled = 1
@@ -1748,6 +1762,50 @@ def _create_item(erpnext_fields: dict, *, is_stock_item: int) -> Any:
         doc.item_group = _default_item_group()
     doc.insert(ignore_permissions=True)
     return doc
+
+
+def _sync_ean_barcode(item: Any, ee_eanupc: Any) -> None:
+    """Append the EE-provided EANUPC value to Item.barcodes as an
+    EAN-typed row, with dedupe semantics.
+
+    EE's EANUPC field is a scalar string carrying an EAN-format
+    barcode. ERPNext's Item.barcodes is a typed child table
+    (barcode + barcode_type). The pull mirrors the push: only the
+    EAN type is touched.
+
+    Dedupe rules:
+      - If a row already exists with this barcode AND type='EAN',
+        no-op (already in the desired state).
+      - If a row exists with this barcode but a DIFFERENT type
+        (UPC, ISBN), leave it alone - the FDE's typing wins; we
+        do NOT silently re-classify a UPC as an EAN just because
+        EE returned it under EANUPC.
+      - Else, append a new row with type=EAN.
+
+    No-op for None / empty incoming values.
+    """
+    if not ee_eanupc:
+        return
+    eanupc = str(ee_eanupc).strip()
+    if not eanupc:
+        return
+    # Junk placeholder values EE sends when the seller hasn't entered
+    # a real EAN. Treat as "no barcode" so ERPNext's barcode validator
+    # doesn't reject the entire Item save. Observed live 2026-05-26
+    # in the Harmony sandbox: 3 products carrying EANUPC='NA' produced
+    # InvalidBarcode page_failures. The case-insensitive set covers
+    # the common shapes; FDE can clean up EE-side data when convenient.
+    if eanupc.upper() in {"NA", "N/A", "-", "0", "NIL", "NONE", "NULL"}:
+        return
+
+    existing = list(item.get("barcodes") or [])
+    for row in existing:
+        if (row.barcode or "") == eanupc:
+            # Already present (any type) - respect FDE typing.
+            return
+
+    item.append("barcodes", {"barcode": eanupc, "barcode_type": "EAN"})
+    item.save(ignore_permissions=True)
 
 
 def _refresh_existing_item(item: Any, erpnext_fields: dict) -> None:

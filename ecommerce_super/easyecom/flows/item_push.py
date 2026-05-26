@@ -1215,6 +1215,17 @@ def build_push_payload(
     # 1) All field-by-field translation lives in the ruleset.
     payload = executor.push(item)
 
+    # 2a) EANUPC - filter Item.barcodes to the EAN-typed row.
+    # EE's EANUPC field accepts only EAN-format barcodes; ERPNext's
+    # Item.barcodes child table can hold EAN/UPC/ISBN/etc. discriminated
+    # by barcode_type. A non-EAN barcode (e.g. UPC-only) is NOT pushed.
+    # This isn't in the ruleset because the field-mapping engine's
+    # sandbox forbids loop-variable name references (no `[b.barcode for
+    # b in ...]`); the EAN selection is one-liner code instead.
+    ean = _ean_barcode(item)
+    if ean:
+        payload["EANUPC"] = ean
+
     # 2) TaxRate — computed; if None, FLAG (hard mandatory, no defensible default).
     tax_rate = _resolve_tax_rate(item, enabled_companies=enabled_companies)
     if tax_rate is None:
@@ -1246,6 +1257,35 @@ def build_push_payload(
     payload = {k: v for k, v in payload.items() if v not in (None, "")}
 
     return payload, flag_reasons
+
+
+def _ean_barcode(item: Any) -> str | None:
+    """Return the first EAN-typed barcode on the Item, or None.
+
+    ERPNext's Item.barcodes is a child table where each row has a
+    `barcode_type` discriminator (EAN / UPC / ISBN / etc.) plus the
+    raw `barcode` string. EE's EANUPC field expects the EAN format
+    specifically - a UPC or ISBN value would be sent as the wrong
+    identifier. Per FDE direction (Harmony onboarding 2026-05-26),
+    only barcode_type='EAN' rows are eligible for the EANUPC push.
+
+    If multiple EAN rows exist, the first (ordered by Frappe idx)
+    is used. If none exist, returns None and the caller omits the
+    EANUPC field from the payload (it's optional per EE's contract)."""
+    rows = (item.get("barcodes") if item else None) or []
+    for row in rows:
+        # row may be a Frappe Document (live save) or a dict (raw payload).
+        btype = (
+            row.get("barcode_type") if isinstance(row, dict)
+            else getattr(row, "barcode_type", None)
+        )
+        barcode = (
+            row.get("barcode") if isinstance(row, dict)
+            else getattr(row, "barcode", None)
+        )
+        if btype == "EAN" and barcode:
+            return barcode
+    return None
 
 
 def _erpnext_dim_field(ee_field: str) -> str:
