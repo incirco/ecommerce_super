@@ -174,3 +174,64 @@ Before Section 3 can be built, the local environment must exist: Frappe bench (v
 ### Pre-§8-closeout BLOCKERS (fix before §8 truly closed)
 - **§8d test_item_pull_stage2: 29/32 (2 fail + 1 err) — PRE-EXISTING, unrelated to 8f (verified via git stash). Needs fix.**
 - **§8d test_item_lifecycle_drift_stage5: 7/10 (2 fail + 1 err) — PRE-EXISTING. Needs fix.**
+
+
+---
+
+## Round 2 — Post-§8 hardening · COMPLETE · ON main
+
+**Status:** Seven commits shipped after §8f closeout `cd6020d`, all pushed to `origin/main`. Documents the operational hardening surfaced during FrappeCloud-staging bring-up (Incirco Ventures LLP) + the operational levers needed for go-live ceremonies.
+
+**Commits (oldest → newest):**
+- `fb5465d` fix: two FrappeCloud-staging bugs — `EasyEcom API Call` `before_insert` strips company when `is_foundational=1` (Frappe v15/v16 auto-fills user-default-Company before validate, tripping §7.7); regression `test_token_call_survives_user_default_company`. The second bug fix is bundled here.
+- `9280d58` fix: Discover {Products, Customers, Suppliers} async-by-default — enqueue into `long` queue (3600s) via `frappe.enqueue`, return immediately with RQ job_id. Fixes the misleading "(network or permission)" desk error on real-client catalogues that exceed the 120s desk-whitelist budget.
+- `6d97179` fix(ui): top-bar Discover / Push-All-Pending dropdowns now include Customer (§8e) + Supplier (§8f) + States-Countries; previously the section-level buttons existed but the top-bar didn't expose them (Stage 6 oversight).
+- `a70a30b` fix: `EasyEcomAccount.after_insert` force-encrypts all 4 Password fields via `set_encrypted_password()` — Frappe v15/v16's auto-encrypt-on-insert pass skips Password fields named `email` (reserved-name collision); programmatic creates would fail with "Password not found for EasyEcom Account ... email". Idempotent. Also: Supplier dup-name resilience on create (parity with Customer dup-name from `4108048`).
+- `c79eaa5` feat(8d): product images, Option A URL-only. `product_image_url` → native `Item.image`; `additional_images[]` → new custom field `Item.ecs_additional_image_urls` (Long Text, JSON array, patch `v0_1.add_ecs_item_image_fields` `post_model_sync` idempotent). Helper `_populate_image_fields` inline during pull.
+- `4108048` feat: per-Item re-evaluate (`re_evaluate_one_product`) + Mark Mapped override (`mark_mapped_override`, FDE/SM only confirm-required) + Customer dup-name resilience on create.
+- `3c33c58` feat: Go Live + Pause auto-push controls — `easyecom.api.auto_push_controls.go_live_enable_auto_push` + `pause_all_auto_push`. Role-gated (FDE / SM / EE SM; Operator refused). Confirm-required. Audit Comment on Account doc. Also bundled: threshold-validation refactor on `EasyEcom Company Settings` (`_to_float()` helper + `_validate_thresholds()` rewrite, 0–100 range consistent across all threshold fields).
+
+**SPEC.md amendments (folded into patch notes):**
+- §3.7.2 — encryption-guard hook (`a70a30b`) — applied inline to SPEC.md.
+- §4.2.1 — `ecs_additional_image_urls` custom field (`c79eaa5`) — applied inline to SPEC.md.
+- §8.1.4 — images pull (`c79eaa5`); §8.1.9 — per-row FDE actions (`4108048`) — applied inline to SPEC.md.
+- `SPEC_8d_patch_notes.md` — async discover, per-row FDE actions, images.
+- `SPEC_8e_patch_notes.md` — Customer dup-name resilience, async discover.
+- `SPEC_8f_patch_notes.md` — Supplier dup-name resilience, async discover.
+- `SPEC_round2_patch_notes.md` — cross-cutting: ops levers (Go Live / Pause), thresholds validation, company-strip hook, discover-async (cross-cutting summary), top-bar dropdowns.
+
+**Live findings (FrappeCloud staging — Incirco Ventures LLP):**
+- Multi-Company sites trip §7.7 invariant via Frappe default-fill (fb5465d).
+- Real-client catalogues exceed 120s desk budget (9280d58).
+- Password field name collisions in Frappe v15/v16 cause encryption gap (a70a30b).
+- Real EE customer/vendor data has same-name distinct records (justifies dup-name retry).
+
+**Standing items / carry-forward:**
+- The §8d pre-existing test failures **still open** (test_item_pull_stage2 29/32, test_item_lifecycle_drift_stage5 7/10) — not touched by round-2.
+
+
+---
+
+## §9 Buying / GRN (§9) — DESIGN COMPLETE · BUILD PENDING
+
+**Status:** Design grounded against real Harmony CreatePurchaseOrder / updatePoStatus / Grn/V2/getGrnDetails payloads. Build packet at `spec_sections/section_9_buying_packet.md`. Stage 1 prompt drafted, awaiting execution.
+
+**Settled design (in the packet):**
+- **Gate 0 (lifecycle-wide):** warehouse opt-in via §8a location_key; non-EE warehouse POs and GRNs silently inert.
+- **Two channels, two keys:** CreatePurchaseOrder (content, keyed `referenceCode`=PO name) + updatePoStatus (status, keyed `po_id`=EE-returned int). `isCancel` on content channel unused; cancel via po_status=7. PO Map stores both keys.
+- **GRN pull endpoint corrected:** `/Grn/V2/getGrnDetails` (NOT the stale `/wms/getGrnDetails` in SPEC.md §9.5.1). Cursor pagination `nextUrl`, delta watermark `created_after`, limit 5/10.
+- **No accepted/rejected pair in GRN payload (SPEC.md §9.6.2 wrong).** Real model: `received_quantity` (PR received_qty) + `qc_fail` (PR rejected_qty) + derived accepted_qty. Bucket fields (`available, sold, …`) READ-NOT-POSTED — they drift after inward.
+- **Receipt trigger configurable:** `grn_receipt_trigger_status` setting, default 3 (QC Complete), QC-conditional reject split.
+- **Self-GRN routing:** `vendor_c_id == inwarded_warehouse_c_id` → §10 STN-inward, not §9 PR. Explicit §9↔§10 boundary.
+- **8f dependency lands in Stage 1:** EasyEcom-PO-Push → Supplier Map.ee_vendor_id (write key); EasyEcom-GRN-Pull → Supplier Map.ee_vendor_c_id (read key).
+- **Sync Record Line child (NEW shared DocType):** §7.1 amendment's first concrete consumer; entity-agnostic; §11/§12/§13 will reuse.
+
+**Stages:** 4 stages — (1) substrate (DocTypes + repoints), (2) PO push both channels, (3) GRN pull → PR + status reconciliation, (4) UI/workspace/scheduler.
+
+**Open decisions (resolve during stages):** PO Map autoname behaviour on PO rename; Sync Record Line linked_discrepancy → §23 Discrepancy DocType (build §23 first or use Data placeholder?); EE→ERPNext po_status echo (we just pushed it, EE confirms — no Discrepancy); out-of-order GRN for EE-born PO (create-PR + Discrepancy lean); `easyecom/tax/place_of_supply.py` shared module for §9/§11/§12.
+
+**Repoints carried in from §8f:** EasyEcom-PO-Push (currently supplier↔vendor_id direct); EasyEcom-GRN-Pull (same). Both repoint in §9 Stage 1.
+
+**Carry-forwards to §10:** §10 STN-inward must handle valued self-GRNs (real payload grn 141936: 49990 against self-vendor 26564 with real apparel SKU AW21ANDMCS834-Beige-XXL-Casual Regular). Not safe to assume zero-value internal transfers.
+
+**Next:** Stage 1 build (substrate). Then 2 → 3 → 4. Live-verify on Harmony with mock GRN injection.

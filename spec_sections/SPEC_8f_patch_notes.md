@@ -47,3 +47,9 @@ EasyEcom Item Map Drift Field / Exclude Field → **EasyEcom Drift Field / Exclu
 
 ## §8.3.x — Parked
 License fields (dl/fssai/msme), paymentTerm/deliveryTerm → custom fields / later stage.
+
+## §8.3.x — Dup-name resilience on create (NEW, commit `a70a30b`)
+Mirrors §8.2.x customer dup-name resilience. Real EE vendor data has same-name distinct records (`vendor_name` is heavily duplicated). The create path wraps insert and on `DuplicateEntryError` appends a short disambiguator (`-2`, `-3`, …) — bounded at 5 attempts. Final name recorded on the Supplier Map row. Identity keyed on Map row's `ee_vendor_c_id`; disambiguator is cosmetic.
+
+## §8.3.x — Discover-Suppliers async-by-default (NEW, commit `9280d58`)
+Same as §8.2.x — Discover-Suppliers desk button enqueues into the `long` queue (3600s) and returns immediately with the RQ job_id. Sync path tripped Frappe's 120s desk budget on >2000-vendor real-client setups; the misleading "(network or permission)" client error is gone. Async-by-default is now the only pathway.

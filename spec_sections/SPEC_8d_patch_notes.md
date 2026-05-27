@@ -54,3 +54,13 @@ Flip → drift → dismiss confirmed live: drift detected, ERPNext preserved (no
 ## Cross-cutting — operational safety note (add to §17 or §7.7 ops)
 
 **Never run `bench run-tests` against a live site.** The test-factory cleanup wiped a live account's EE config once during build. Cleanup is now restricted to explicit test-name prefixes (regression: `test_cleanup_safety.py`). Live work uses `bench execute` only.
+
+## §8.1.x — Discover-Products async-by-default (NEW, commit `9280d58`)
+Discover Products enqueues into the `long` queue (3600s timeout) via `frappe.enqueue` and returns immediately with the RQ job_id. The synchronous path tripped Frappe's 120s desk-whitelist budget on real-client catalogues (>2000 products); the server pull continued in the worker but the browser disconnected, surfacing a misleading "(network or permission)" error. Async-by-default is now the only pathway. Progress visible via Account-form refresh + Item Map list. Same fix applied to Discover-Customers (§8.2.x) and Discover-Suppliers (§8.3.x).
+
+## §8.1.9 — Per-row FDE actions on Item Map (NEW, commit `4108048`)
+- **Re-evaluate from EE** (`re_evaluate_one_product` whitelist; depends_on `status==Created-Flagged`). Walks GetProductMaster (≤200 pages) for the row's `ee_sku`, runs standard `process_one_product` on the match. Use case: FDE fixed the source of a flag (set `tax_rule_name` in EE, corrected UOM) and wants this single row re-evaluated NOW. Cleanly surfaces "SKU not found in EE" if the product was deleted upstream.
+- **Mark Mapped (override flags)** (`mark_mapped_override` whitelist; FDE/SM only, confirm-required, audit Comment). Flips Created-Flagged → Mapped without fixing the source. Escape hatch for benign flags. Per-row only, never bulk.
+
+## §8.1.x — Product images (NEW, commit `c79eaa5`, Option A URL-only)
+EE `GetProductMaster` returns image URLs we previously dropped. Now: `product_image_url` → native `Item.image` (URL string; Attach Image accepts URLs and renders inline in list/SI/portal); `additional_images[]` → `Item.ecs_additional_image_urls` (Long Text JSON array, new custom field via patch `v0_1.add_ecs_item_image_fields` in `post_model_sync`, idempotent). URLs only — no download, no Frappe File records. Helper `_populate_image_fields` runs inline during the pull.

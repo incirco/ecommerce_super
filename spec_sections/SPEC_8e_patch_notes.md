@@ -38,3 +38,9 @@ getCountries + getStates discover-and-cache (EasyEcom Country / EasyEcom State D
 
 ## §8.2.x — Out of scope / parked
 Pricing & discounts (b2bDiscountScheme, pricingGroupCode, invoiceSeriesCode, salesmanUserId, customerAttributes) — later stage. Marketplace anon buyers — §11/§12.
+
+## §8.2.x — Dup-name resilience on create (NEW, commit `4108048`)
+Real EE data has heavily-duplicated customer display names (per the matching policy — map-row-only, no natural-key match). When the pull creates a new ERPNext Customer for a never-seen `c_id`, the desired display name may already exist on a *distinct* ERPNext Customer (linked to a different `c_id`). The create path wraps `frappe.get_doc({...}).insert()` and on `DuplicateEntryError` appends a short disambiguator (`-2`, `-3`, …) and retries — bounded at 5 attempts. The final name is recorded on the Customer Map row for traceability. Identity is keyed on the Map row (`c_id`), so the disambiguator is cosmetic, not identity-bearing.
+
+## §8.2.x — Discover-Customers async-by-default (NEW, commit `9280d58`)
+The Discover-Customers desk button (Account form + top-bar dropdown) **enqueues into the `long` queue (3600s timeout) via `frappe.enqueue` and returns immediately with the RQ job_id**. The synchronous path tripped Frappe's 120s desk-whitelist budget on real-client catalogues (>2000 customers); the server-side pull continued in the worker but the browser had already disconnected, surfacing a misleading "(network or permission)" error to the FDE. Async-by-default is now the only pathway; progress visible via Account-form refresh + Customer Map list.

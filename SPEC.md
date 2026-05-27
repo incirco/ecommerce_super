@@ -459,6 +459,7 @@ The following are credential fields and are governed by every rule in this secti
 
 - Every credential field is a Frappe **Password** fieldtype (the cached `jwt_token`, being long, is stored encrypted at rest by the controller). Frappe encrypts Password fields in the database with the site `encryption_key`; the raw database row holds ciphertext, never plaintext.
 - The site `encryption_key` lives in site config, outside the database, so a database dump alone cannot decrypt the credentials.
+- **Insert-time encryption guard.** Frappe v15/v16's auto-encrypt-on-insert pass is inconsistent for Password fields whose fieldname collides with a reserved name (specifically `email`): the auto-pass encrypts `password`/`x_api_key`/`webhook_token` but skips `email`. Form-side saves work uniformly via Frappe's form-handler path; only programmatic creates (scripts, fixtures, factories, `bench execute`, future scripted onboarding) hit the gap. The `EasyEcom Account` controller carries an `after_insert` hook that force-encrypts all Password fields via `set_encrypted_password()`. The hook is idempotent (skips fields whose stored value already matches the plaintext on the doc; skips the masked-asterisks read-back). Without it, every `EasyEcomClient` call after a programmatic create would fail with `Password not found for EasyEcom Account ... email`.
 
 ### 3.7.3 Write-only in the UI and the backend
 
@@ -626,6 +627,7 @@ The fixture file (`custom_field.json`, Section 31.6) is therefore assembled flow
 - ecs_easyecom_company_product_id — Data, the single EE master product id for the account (masters are account-global). Stored in child table ecs_easyecom_mappings
 - ecs_easyecom_mappings — Table with rows per (frappe_company, easyecom_location_key, easyecom_company_product_id)
 - ecs_marketplace_skus — Table with rows per (marketplace, marketplace_sku, channel)
+- ecs_additional_image_urls — Long Text (read-only), JSON-encoded array of secondary EE image URLs populated by the item pull (commit `c79eaa5`, patch `v0_1.add_ecs_item_image_fields` in `post_model_sync`). The primary EE `product_image_url` maps to native `Item.image` (URL string accepted by Attach Image, renders inline in list/SI/portal); the additional images are captured here for later use by customer-facing portals and Sales Order enrichment. Read-only because ERPNext is not source-of-truth for marketplace images.
 - ecs_push_status — Select: Not Synced / Pending / Synced / Failed
 - ecs_last_sync_at — Datetime
 - ecs_last_sync_error — Long Text (last failure reason)
@@ -1552,6 +1554,7 @@ The pull is the **inbound onboarding** flow, and after the flip becomes **drift 
   - **Unmapped tax rule or dirty/missing UOM → create + flag (Created-Flagged).** These do **not** block Item creation, so the item is **created and flagged** (the SKU exists for downstream orders) and surfaced in the review queue — never silently defaulted.
   - Nothing is ever silently defaulted; the only thing that holds is missing HSN (because the platform makes it un-createable).
 - **`is_stock_item` is set per product nature, not hardcoded.** Normal products are stock items (`is_stock_item=1`); Product Bundle wrapper items are non-stock (`is_stock_item=0`, §8.1.6); a future "digital" product type will also be non-stock (`is_stock_item=0`). The item-creation path takes `is_stock_item` as an input (default 1) so bundles and future non-physical types set it without rework.
+- **Images (commit `c79eaa5`, Option A URL-only):** EE's `GetProductMaster` returns image URLs. `product_image_url` → native `Item.image` (URL string; ERPNext's Attach Image renders inline in list view, Sales Invoice lines, and customer portal). `additional_images[]` → `Item.ecs_additional_image_urls` (Long Text, JSON-encoded array of URLs; see §4.2.1) for later use by customer-facing portals / image galleries / Sales Order enrichment. URLs only — no download, no Frappe File records. The `_populate_image_fields` helper runs inline during the pull.
 - `active: 0` in the payload → the ERPNext item is **disabled** (never deleted).
 
 ### 8.1.5 ERPNext → EE (push)
@@ -1593,6 +1596,10 @@ Once `item_master_mode = erpnext_mastered`:
   - **Created-Flagged** — created but with a content problem that does not block creation (unmapped tax, dirty/missing UOM) to fix.
   - **Flagged-Not-Created** — not created: either an unsupported type (variant_parent / child_product / kit_bom / unknown) **or** a product missing HSN (India Compliance makes an HSN-less Item un-createable, §8.1.4).
   - **Drift** — (post-flip) an unexpected EE-side change or EE-origin product.
+
+**Per-row FDE actions on Item Map (commit `4108048`):**
+- **Re-evaluate from EE** (`re_evaluate_one_product` whitelist; depends_on `status == Created-Flagged`). Walks `GetProductMaster` page-by-page (capped at 200 pages — ~40k products) looking for the row's `ee_sku`, then runs the standard `process_one_product` on the matched row. Use case: FDE fixed the source of a flag (set `tax_rule_name` in EE, corrected the UOM) and wants this single row re-evaluated NOW, without waiting for the full cursor walk. Returns new status + remaining `flag_reasons`. Cleanly surfaces "SKU not found in EE" when the product was deleted upstream since the last pull.
+- **Mark Mapped (override flags)** (`mark_mapped_override` whitelist; **FDE / System Manager only**, confirm-required, audit Comment). Flips Created-Flagged → Mapped without fixing the source. Escape hatch for benign flags (e.g. EE doesn't carry `tax_rule_name` for this Item and it's accepted, or UOM is dirty but downstream is unaffected). Intentionally per-row, never bulk — FDE-by-FDE judgement, audit-logged. No equivalent action exists for Flagged-Not-Created (those require fixing the un-createable cause).
 
 ### 8.1.10 Build sequence (one packet, internally sequential)
 
