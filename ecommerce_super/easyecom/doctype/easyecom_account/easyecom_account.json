@@ -84,6 +84,11 @@
   "supplier_master_flipped_at",
   "supplier_master_mode_col_2",
   "flip_to_erpnext_mastered_suppliers_action",
+  "discover_suppliers_action",
+  "supplier_pull_cursor",
+  "supplier_pull_cursor_at",
+  "supplier_pull_last_updated_at",
+  "supplier_pull_total_seen",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -628,6 +633,39 @@
    "fieldtype": "Button",
    "label": "Flip Suppliers → ERPNext-Mastered",
    "description": "One-way flip for Supplier master: marks onboarding complete and switches the §8.3 pull from accept-and-create to drift-detection-only. The FDE confirms in a dialog before the flip lands. Reverse flips require manual intervention."
+  },
+  {
+   "fieldname": "discover_suppliers_action",
+   "fieldtype": "Button",
+   "label": "Discover Suppliers (§8f Pull)",
+   "description": "Trigger the §8f pull — cursor-walks /wms/V2/getVendors, creates Suppliers + Billing/Dispatch Addresses + Supplier Map rows, applies country-aware GST gating (Indian → IC validates GSTIN+PAN, bad → FNC; foreign → gst_category=Overseas), and propagates active:0 → Supplier.disabled. Resumable via supplier_pull_cursor. Post-flip (supplier_master_mode=erpnext_mastered), the same button runs in drift-detection mode (no mutations; EE-side changes land as Drift map rows)."
+  },
+  {
+   "fieldname": "supplier_pull_cursor",
+   "fieldtype": "Long Text",
+   "label": "Supplier Pull Resume Cursor",
+   "read_only": 1,
+   "description": "EE getVendors nextUrl. Persisted page-by-page so an interrupted walk resumes from the last completed page rather than restarting. Cleared on full-pull start; advanced after each page commits. Mirrors §8d's item_pull_cursor pattern."
+  },
+  {
+   "fieldname": "supplier_pull_cursor_at",
+   "fieldtype": "Datetime",
+   "label": "Supplier Cursor Advanced At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "supplier_pull_last_updated_at",
+   "fieldtype": "Datetime",
+   "label": "Last Successful Supplier Pull (updated_after high-water)",
+   "read_only": 1,
+   "description": "High-water mark for incremental deltas. The next scheduled pull passes this as the getVendors updated_after parameter (vendors HAVE delta-pull support, unlike customers' flat-pull). Set only on a clean full-walk (no failed pages); a partial run leaves the previous value untouched so the next run still covers the gap. Stage 6 wires the cron; Stage 3 just stores the watermark."
+  },
+  {
+   "fieldname": "supplier_pull_total_seen",
+   "fieldtype": "Int",
+   "label": "Total Suppliers Seen (last successful pull)",
+   "read_only": 1,
+   "description": "Aggregate count from the last full successful pull — used by the FDE to monitor that the supplier base size is sane."
   },
   {
    "fieldname": "item_pull_section",

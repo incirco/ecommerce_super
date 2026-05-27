@@ -23,8 +23,28 @@ ITEM_MASTER_UPLOAD: str = "/Wms/Inventory/itemMasterUpload"  # POST
 ITEM_MASTER_GET: str = "/Wms/Inventory/getItemMaster"  # GET
 CUSTOMER_CREATE: str = "/Customer/createCustomer"  # POST
 CUSTOMER_GET: str = "/Customer/getCustomer"  # GET
-VENDOR_CREATE: str = "/Wms/Vendor/createVendor"  # POST
-VENDOR_GET: str = "/Wms/Vendor/getVendor"  # GET
+VENDOR_CREATE: str = "/Wms/Vendor/createVendor"  # POST (legacy — unused)
+VENDOR_GET: str = "/Wms/Vendor/getVendor"  # GET (legacy — unused)
+
+# §8f Stage 3+ — Wholesale Vendor (supplier) master.
+# /wms/V2/getVendors    → bulk list (flat data[], nextUrl pagination,
+#                         created_after / updated_after / updated_before
+#                         params for delta pull)
+# /wms/CreateVendor     → POST — returns data.vendor_id (write key); body
+#                         keys ee_vendor_c_id is NOT set on create
+#                         (returned by EE later when the row is read back
+#                         via getVendors)
+# /wms/UpdateVendor     → POST — keys vendorId; sparse-update; state as
+#                         NAME (not id); returns data.vendorId (the
+#                         post-update id, observed as 58614 in the
+#                         sample — open question per packet, confirm
+#                         Stage 4)
+# All three are account-wide (no per-location dimension) → foundational
+# at the API Call layer. The flow still writes one Sync Record per
+# supplier (entity-sync §7.3) for the bulk pull.
+VENDORS_GET: str = "/wms/V2/getVendors"  # GET — foundational
+WHOLESALE_VENDOR_CREATE: str = "/wms/CreateVendor"  # POST — foundational
+WHOLESALE_VENDOR_UPDATE: str = "/wms/UpdateVendor"  # POST — foundational
 LOCATIONS_GET: str = "/getAllLocation"  # GET — foundational (§7.7, §8.4.1)
 CHANNELS_GET: str = "/current-channel-status"  # GET — per-location (§8.6.3, §8b)
 
@@ -125,6 +145,10 @@ FOUNDATIONAL_ENDPOINTS: frozenset[str] = frozenset(
         # §8e Stage 4 — wholesale customer push (account-wide).
         WHOLESALE_CUSTOMER_CREATE,
         WHOLESALE_CUSTOMER_UPDATE,
+        # §8f Stage 3+ — wholesale vendor master (account-wide).
+        VENDORS_GET,
+        WHOLESALE_VENDOR_CREATE,
+        WHOLESALE_VENDOR_UPDATE,
     }
 )
 

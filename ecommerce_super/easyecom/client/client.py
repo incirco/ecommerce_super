@@ -292,12 +292,33 @@ class EasyEcomClient:
             # wrapping a business-level 400 was silently treated as
             # success and the Sync Record falsely reported Success
             # while EE rejected the write.
+            #
+            # CARVE-OUT: EE also returns HTTP 200 + body code 400 for
+            # benign empty-result conditions — there's no separate
+            # 204-style "no data" envelope. Observed live:
+            #   - /getStates?countryId=5 (Aland Islands, Antarctica,
+            #     etc., 28 territories) →
+            #     {"code": 400, "message": "Unable to find states for
+            #     given country Id"} (§8f Stage 2 finding)
+            #   - GetProductMaster cursor walk past last page →
+            #     {"data": "No Data Found"} (§8d, handled separately
+            #     at the flow layer since the shape is different)
+            # Treating these as failures spuriously raises
+            # EasyEcomValidationError and pollutes outcome.states_failed
+            # with false positives. Match a tight list of known empty-
+            # result message patterns and keep the call classified as
+            # success so the flow sees an empty payload and routes the
+            # caller through its no-data branch normally.
             if (
                 status_class == "success"
                 and isinstance(response_body, dict)
             ):
                 body_code = response_body.get("code")
-                if isinstance(body_code, (int, float)) and body_code >= 400:
+                if (
+                    isinstance(body_code, (int, float))
+                    and body_code >= 400
+                    and not _is_no_data_envelope(response_body)
+                ):
                     status_class = (
                         "auth" if int(body_code) == 401
                         else "rate_limit" if int(body_code) == 429
@@ -552,6 +573,33 @@ def _is_duplicate(response_body: Any) -> bool:
         response_body.get("error", "") or response_body.get("message", "")
     ).lower()
     return "duplicate" in error_str or "already exists" in error_str
+
+
+# Substring patterns (lowercase) that mark an HTTP-200-wrapped 400
+# response as benign empty-result rather than a real validation error.
+# Tight list — extend only when a new live observation justifies it.
+# A real validation error like "Invalid input" or "Missing field foo"
+# must continue to raise.
+_NO_DATA_MESSAGE_PATTERNS: tuple[str, ...] = (
+    "no data found",
+    "unable to find states",
+    "unable to find vendors",
+    "no records found",
+    "no result found",
+)
+
+
+def _is_no_data_envelope(response_body: Any) -> bool:
+    """Detect EE's "HTTP 200 + body code >= 400 + benign empty-result
+    message" pattern. Returns True for known-benign messages — caller
+    will keep the call classified as success and return the body, so
+    the flow sees an empty payload."""
+    if not isinstance(response_body, dict):
+        return False
+    msg = str(response_body.get("message", "") or "").strip().lower()
+    if not msg:
+        return False
+    return any(p in msg for p in _NO_DATA_MESSAGE_PATTERNS)
 
 
 def _extract_existing_id(response_body: dict) -> str | None:

@@ -779,6 +779,91 @@ frappe.ui.form.on("EasyEcom Account", {
         });
     },
 
+    discover_suppliers_action(frm) {
+        if (!_ensureSaved(frm, "Save the Account before discovering suppliers.")) {
+            return;
+        }
+        const startFresh = frm.doc.supplier_pull_cursor
+            ? false  // resumable when a cursor's saved
+            : true;
+        frappe.show_alert({
+            message: __(
+                startFresh
+                    ? "Pulling /wms/V2/getVendors from the top…"
+                    : "Resuming supplier pull from saved cursor…"
+            ),
+            indicator: "blue",
+        });
+        frappe.call({
+            method: "ecommerce_super.easyecom.api.supplier_pull.discover_suppliers",
+            args: {start_fresh: startFresh ? 1 : 0},
+            freeze: true,
+            freeze_message: __("Pulling vendors…"),
+            callback(r) {
+                const result = r.message || {};
+                if (!result.ok) {
+                    frappe.msgprint({
+                        title: __("Discover Suppliers Failed"),
+                        message: result.message || __("Unknown error."),
+                        indicator: "red",
+                    });
+                    return;
+                }
+                const lines = [
+                    __(
+                        "Pages: {0} | Total: <b>{1}</b> | Created: {2} | Skipped (mapped): {3} | Disabled: {4} | Created-Flagged: {5} | FNC: {6} | Failed: {7}",
+                        [
+                            result.pages_walked,
+                            result.total,
+                            result.created,
+                            result.skipped,
+                            result.disabled,
+                            result.created_flagged,
+                            result.flagged_not_created,
+                            result.failed,
+                        ]
+                    ),
+                ];
+                if (result.final_cursor_present) {
+                    lines.push(
+                        __(
+                            "<b>Partial walk</b> — saved cursor preserved; click Discover Suppliers again to resume."
+                        )
+                    );
+                }
+                if ((result.failures_sample || []).length) {
+                    lines.push(
+                        "<br><b>Failure sample:</b><br>" +
+                            result.failures_sample
+                                .map(f =>
+                                    frappe.utils.escape_html(
+                                        `vendor_c_id=${f.ee_vendor_c_id} (${f.vendor_name || "?"}): ${f.error}`
+                                    )
+                                )
+                                .join("<br>")
+                    );
+                }
+                const overallOk =
+                    result.failed === 0 && !result.final_cursor_present;
+                frappe.msgprint({
+                    title: __("Supplier Pull Result"),
+                    message: lines.join("<br>"),
+                    indicator: overallOk ? "green" : "orange",
+                });
+                frm.reload_doc();
+            },
+            error() {
+                frappe.msgprint({
+                    title: __("Discover Suppliers Failed"),
+                    message: __(
+                        "The pull call itself failed (network or permission)."
+                    ),
+                    indicator: "red",
+                });
+            },
+        });
+    },
+
     test_connection_action(frm) {
         if (!_ensureSaved(frm, "Save the Account before testing the connection — credentials must be persisted (encrypted) before the test can read them back transiently.")) {
             return;

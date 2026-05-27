@@ -858,12 +858,12 @@
   "mapping_name": "EasyEcom-Supplier-Sync",
   "entity_type": "Supplier",
   "direction": "Bidirectional",
-  "active": 1,
+  "active": 0,
   "missing_field_policy": "Permissive",
-  "version": 1,
+  "version": 2,
   "last_modified_by": "Administrator",
-  "last_modified_at": "2026-05-24 00:00:00",
-  "change_reason": "Initial library fixture (\u00a75.11)",
+  "last_modified_at": "2026-05-27 00:00:00",
+  "change_reason": "RETIRED in \u00a78f Stage 3 (2026-05-27). This ruleset mapped a dead EE shape (name \u2194 vendor_id) that conflated the \u00a78.3 two-identifier split \u2014 EE's read key is vendor_c_id (the join key on getVendors, e.g. 99358), and vendor_id (= vendor_code, e.g. 'VN00001') is the WRITE key returned by CreateVendor. Using either as the ERPNext Supplier.name is wrong on both counts: vendor_c_id is just an int with no narrative value, and vendor_id is account-mutable. The real /wms/V2/getVendors endpoint we integrate against in 8f uses vendor_c_id / vendor_code / vendor_name / address.{billing,dispatch}.* with a nested-or-empty-array address envelope \u2014 see EasyEcom-Supplier-Pull (added in this commit) for the live shape. Left in the fixture as active=0 so the historical reference is preserved; the engine ignores inactive rulesets per the DocType's own description. Mirrors the \u00a78e Stage 3 retirement pattern (EasyEcom-Customer-Sync). PO-Push / GRN-Pull still reference vendor_id directly \u2014 to be repointed to the EasyEcom Supplier Map.ee_vendor_id lookup in \u00a79/\u00a710 (NOT this stage).",
   "rules": [
    {
     "erpnext_path": "name",
@@ -888,6 +888,149 @@
    {
     "erpnext_path": "mobile_no",
     "easyecom_path": "vendor_mobile",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   }
+  ]
+ },
+ {
+  "doctype": "EasyEcom Field Mapping",
+  "name": "EasyEcom-Supplier-Pull",
+  "mapping_name": "EasyEcom-Supplier-Pull",
+  "entity_type": "Supplier",
+  "direction": "Pull",
+  "active": 1,
+  "missing_field_policy": "Permissive",
+  "version": 1,
+  "last_modified_by": "Administrator",
+  "last_modified_at": "2026-05-27 00:00:00",
+  "change_reason": "§8f Stage 3 — reconciled against the captured Harmony /wms/V2/getVendors payload (process/ee_mock_fixtures/getvendors_pages_response.json, 30 real records across 2 cursor pages). The engine produces a FLAT dict; the flow (supplier_pull.py) splits into Supplier + 2 Address docs and handles GSTIN+PAN gating, country-aware (Indian vs Foreign → Overseas), lifecycle (active:0→disabled), the address-may-be-empty-array envelope, and the supplier_type=Company convention. TWO-IDENTIFIER SPLIT: vendor_c_id is the READ key (the unique join key on the Supplier Map), vendor_code is the WRITE key (= vendor_id used by CreateVendor/UpdateVendor). BOTH are captured on pull so the §9/§10 PO/GRN flows can resolve via the Supplier Map without re-reading. Replaces the now-retired EasyEcom-Supplier-Sync (active=0) which mapped a dead shape. The FLOW pre-flattens the nested address.{billing,dispatch}.* envelope before invoking the engine — EE returns `address: {billing: [], dispatch: {...}}` mixed dict/empty-array shapes, and the engine reads flat keys (mirrors EasyEcom-Customer-Pull which uses billingStreet etc.).",
+  "rules": [
+   {
+    "erpnext_path": "ee_vendor_c_id",
+    "easyecom_path": "vendor_c_id",
+    "transform_push": "noop",
+    "transform_pull": "int_to_str",
+    "required": 1,
+    "notes": "EE's vendor_c_id is the READ-side identifier (Int in EE; stored as Data on the Supplier Map ee_vendor_c_id field). It's the unique join key (autoname format:ECS-SUPP-{ee_vendor_c_id}). NOT used by push — see ee_vendor_id below."
+   },
+   {
+    "erpnext_path": "ee_vendor_id",
+    "easyecom_path": "vendor_code",
+    "transform_push": "str_strip",
+    "transform_pull": "str_strip",
+    "notes": "EE's vendor_code is the WRITE-side identifier (also called vendor_id; e.g. 'VN00001'). CreateVendor returns it as data.vendor_id (echoes vendor_code); UpdateVendor consumes it as `vendorId`. Captured separately from vendor_c_id on every pull so the §9/§10 PO/GRN flows can resolve ERPNext Supplier → EE write key via the Supplier Map without re-reading EE."
+   },
+   {
+    "erpnext_path": "supplier_name",
+    "easyecom_path": "vendor_name",
+    "transform_push": "str_strip",
+    "transform_pull": "str_strip",
+    "required": 1,
+    "notes": "EE's `vendor_name` is the supplier company name — maps to ERPNext Supplier.supplier_name. The flow does NOT auto-match on this field (same dirty-data reasoning as customer pull — EE re-uses names across vendor_c_ids); pull always creates a new Supplier when there's no map row. 'Never wrongly link > never duplicate' (§8f packet)."
+   },
+   {
+    "erpnext_path": "gstin",
+    "easyecom_path": "tax_identification_number",
+    "transform_push": "str_upper",
+    "transform_pull": "str_upper",
+    "notes": "EE's tax_identification_number is the GSTIN for Indian suppliers (or blank for foreign / unregistered). India Compliance enforces 15-char format on Supplier.validate AND auto-extracts PAN from gstin[2:12]. The FLOW catches IC's throw on bad-format (or country=India + blank GSTIN if the supplier truly is registered) and lands the row as Flagged-Not-Created. For FOREIGN suppliers (resolved via country lookup), the flow sets gst_category='Overseas' BEFORE IC validate so GSTIN is optional."
+   },
+   {
+    "erpnext_path": "pan",
+    "easyecom_path": "pan",
+    "transform_push": "str_upper",
+    "transform_pull": "str_upper",
+    "notes": "EE's pan is the PAN field (10 chars, often dirty in real data — 9-char or null observed). The flow only needs PAN separately when GSTIN is blank (Indian unregistered + foreign); when GSTIN is valid, IC auto-extracts PAN from gstin[2:12] and the value here is informational only."
+   },
+   {
+    "erpnext_path": "mobile_no",
+    "easyecom_path": "contact_number",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "EE's contact_number is a free-text field; may be empty in real data (Incirco Test Supplier shows ''). Permissive policy lets it skip silently when blank. ERPNext Supplier.mobile_no is the standard field; ERPNext fetches it from the linked Contact / Address but the direct Supplier.mobile_no field is read-only — stored separately as a Contact in Stage 3."
+   },
+   {
+    "erpnext_path": "email_id",
+    "easyecom_path": "email",
+    "transform_push": "str_lower",
+    "transform_pull": "str_lower",
+    "notes": "EE's email is the primary supplier contact email. ERPNext Supplier.email_id is read-only (fetched from Contact); stored as a Contact in Stage 3 alongside the Supplier."
+   },
+   {
+    "erpnext_path": "default_currency",
+    "easyecom_path": "currency_code",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "EE's currency_code is the 3-letter currency code (INR for Indian, USD/EUR/etc. for foreign). The flow falls back to the Account's company's default_currency if blank."
+   },
+   {
+    "erpnext_path": "active",
+    "easyecom_path": "active",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "EE's `active` is the supplier lifecycle flag (0/1). Vendors HAVE this (unlike customers in §8e). The flow maps active:0 → Supplier.disabled=1 (and active:1 → .disabled=0) so EE-side deactivation propagates to ERPNext on pull."
+   },
+   {
+    "erpnext_path": "billing_street",
+    "easyecom_path": "billing_address_line",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "Pre-flattened key from address.billing.address (the flow flattens before invoking the engine — EE's nested envelope may be `address.billing: []` empty-array, which dotted paths handle poorly). When billing is empty-array, this key is absent and Permissive policy lets the rule skip silently — the flow treats absence as no-address (no row inserted)."
+   },
+   {
+    "erpnext_path": "billing_city",
+    "easyecom_path": "billing_city",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "billing_zipcode",
+    "easyecom_path": "billing_zip",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "billing_state_name",
+    "easyecom_path": "billing_state_name",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "billing_country_name",
+    "easyecom_path": "billing_country",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "Country name as it appears in EE (e.g. 'India', 'Italy', 'Armenia'). The flow resolves via Stage 2's resolve_country to determine Indian vs Foreign — drives the GST gating (Indian → IC GSTIN+PAN validation; Foreign → gst_category='Overseas')."
+   },
+   {
+    "erpnext_path": "dispatch_street",
+    "easyecom_path": "dispatch_address_line",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "Pre-flattened from address.dispatch.address. Empty-array `dispatch: []` — 16 of 30 sample vendors — means no dispatch address; flow skips Address creation rather than crashing."
+   },
+   {
+    "erpnext_path": "dispatch_city",
+    "easyecom_path": "dispatch_city",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_zipcode",
+    "easyecom_path": "dispatch_zip",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_state_name",
+    "easyecom_path": "dispatch_state_name",
+    "transform_push": "identity",
+    "transform_pull": "identity"
+   },
+   {
+    "erpnext_path": "dispatch_country_name",
+    "easyecom_path": "dispatch_country",
     "transform_push": "identity",
     "transform_pull": "identity"
    }
