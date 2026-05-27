@@ -335,6 +335,186 @@ function _runPushAllPending(frm) {
     );
 }
 
+function _runGoLiveEnableAutoPush(frm) {
+    if (!_ensureSaved(frm, "Save the Account before going live on auto-push.")) {
+        return;
+    }
+    // Build the per-entity current-state snapshot so the dialog shows
+    // the FDE which entities are already enabled vs OFF (idempotent
+    // re-click on already-enabled doesn't surprise anyone).
+    const currentItems = !!frm.doc.auto_push_on_save;
+    const currentCust = !!frm.doc.auto_push_customers_on_save;
+    const currentSupp = !!frm.doc.auto_push_suppliers_on_save;
+
+    const d = new frappe.ui.Dialog({
+        title: __("Go Live — Enable Auto-Push"),
+        fields: [
+            {
+                fieldtype: "HTML",
+                options: __(
+                    "<div style='padding:8px;background:#fef3c7;border-radius:4px;margin-bottom:12px;'>" +
+                        "<b>This is the steady-state transition.</b> Every ERPNext-side save on " +
+                        "the enabled entities will enqueue an EE push (via the on_update hook). " +
+                        "Use this ONCE after onboarding reconciliation is complete; use Pause to " +
+                        "roll back at any time.<br><br>" +
+                        "<b>Prerequisite (warned but not enforced):</b> each entity should be " +
+                        "flipped to <code>erpnext_mastered</code> first — pushing while still in " +
+                        "<code>onboarding</code> races the pull's accept-and-create logic."
+                    + "</div>"
+                ),
+            },
+            {
+                fieldname: "items",
+                fieldtype: "Check",
+                label: __("Enable Items auto-push (§8d)"),
+                default: currentItems ? 0 : 1,
+                description: __("Currently: {0}",
+                    [currentItems ? "<b>ON</b> — re-enabling is a no-op" : "OFF"]),
+            },
+            {
+                fieldname: "customers",
+                fieldtype: "Check",
+                label: __("Enable Customers auto-push (§8e)"),
+                default: currentCust ? 0 : 1,
+                description: __("Currently: {0}",
+                    [currentCust ? "<b>ON</b> — re-enabling is a no-op" : "OFF"]),
+            },
+            {
+                fieldname: "suppliers",
+                fieldtype: "Check",
+                label: __("Enable Suppliers auto-push (§8f)"),
+                default: currentSupp ? 0 : 1,
+                description: __("Currently: {0}",
+                    [currentSupp ? "<b>ON</b> — re-enabling is a no-op" : "OFF"]),
+            },
+        ],
+        primary_action_label: __("Confirm Go Live"),
+        primary_action(values) {
+            if (!values.items && !values.customers && !values.suppliers) {
+                frappe.msgprint({
+                    title: __("Nothing Selected"),
+                    message: __("Pick at least one entity to enable, or cancel."),
+                    indicator: "orange",
+                });
+                return;
+            }
+            frappe.call({
+                method:
+                    "ecommerce_super.easyecom.api.auto_push_controls.go_live_enable_auto_push",
+                args: {
+                    account: frm.doc.name,
+                    items: values.items ? 1 : 0,
+                    customers: values.customers ? 1 : 0,
+                    suppliers: values.suppliers ? 1 : 0,
+                    confirm: 1,
+                },
+                freeze: true,
+                freeze_message: __("Enabling auto-push…"),
+                callback(r) {
+                    const result = r.message || {};
+                    if (!result.ok) {
+                        frappe.msgprint({
+                            title: __("Go Live Failed"),
+                            message: result.message || __("Unknown error."),
+                            indicator: "red",
+                        });
+                        return;
+                    }
+                    let body = __(
+                        "<b>Enabled:</b> {0}<br><br><b>Current state:</b> Items=<code>{1}</code>, Customers=<code>{2}</code>, Suppliers=<code>{3}</code>",
+                        [
+                            (result.transitioned || []).join(", ") || "(none)",
+                            result.state.items, result.state.customers, result.state.suppliers,
+                        ]
+                    );
+                    if ((result.warnings || []).length) {
+                        body += "<br><br><b>Warnings:</b><br>" +
+                            result.warnings
+                                .map(w => "&bull; " + frappe.utils.escape_html(w))
+                                .join("<br>");
+                    }
+                    body += "<br><br><i>Audit Comment added to this Account's Activity log.</i>";
+                    frappe.msgprint({
+                        title: __("Go Live Complete"),
+                        message: body,
+                        indicator: (result.warnings || []).length ? "orange" : "green",
+                    });
+                    d.hide();
+                    frm.reload_doc();
+                },
+            });
+        },
+    });
+    d.show();
+}
+
+function _runPauseAllAutoPush(frm) {
+    if (!_ensureSaved(frm, "Save the Account before pausing auto-push.")) {
+        return;
+    }
+    const d = new frappe.ui.Dialog({
+        title: __("Pause All Auto-Push (Kill-Switch)"),
+        fields: [
+            {
+                fieldtype: "HTML",
+                options: __(
+                    "<div style='padding:8px;background:#fee2e2;border-radius:4px;margin-bottom:12px;'>" +
+                        "<b>Emergency kill-switch.</b> Sets ALL three auto-push toggles to OFF " +
+                        "in one transaction. Use during incidents to stop on_update hooks from " +
+                        "firing. Manual pushes via the FDE buttons still work. Re-enable via " +
+                        "Go Live action."
+                    + "</div>"
+                ),
+            },
+            {
+                fieldname: "reason",
+                fieldtype: "Small Text",
+                label: __("Reason (recorded in audit Comment)"),
+                reqd: 0,
+                description: __(
+                    "Optional but strongly encouraged. Post-incident review reads this."
+                ),
+            },
+        ],
+        primary_action_label: __("Pause Now"),
+        primary_action(values) {
+            frappe.call({
+                method:
+                    "ecommerce_super.easyecom.api.auto_push_controls.pause_all_auto_push",
+                args: {
+                    account: frm.doc.name,
+                    reason: values.reason || "",
+                    confirm: 1,
+                },
+                freeze: true,
+                freeze_message: __("Pausing auto-push…"),
+                callback(r) {
+                    const result = r.message || {};
+                    if (!result.ok) {
+                        frappe.msgprint({
+                            title: __("Pause Failed"),
+                            message: result.message || __("Unknown error."),
+                            indicator: "red",
+                        });
+                        return;
+                    }
+                    frappe.msgprint({
+                        title: __("Auto-Push Paused"),
+                        message: __(
+                            "{0}<br><br><i>Audit Comment added to this Account's Activity log.</i>",
+                            [frappe.utils.escape_html(result.message || "")]
+                        ),
+                        indicator: "green",
+                    });
+                    d.hide();
+                    frm.reload_doc();
+                },
+            });
+        },
+    });
+    d.show();
+}
+
 frappe.ui.form.on("EasyEcom Account", {
     refresh(frm) {
         frm.trigger("update_connection_indicator");
@@ -409,6 +589,14 @@ frappe.ui.form.on("EasyEcom Account", {
 
     push_all_pending_action(frm) {
         _runPushAllPending(frm);
+    },
+
+    go_live_enable_auto_push_action(frm) {
+        _runGoLiveEnableAutoPush(frm);
+    },
+
+    pause_all_auto_push_action(frm) {
+        _runPauseAllAutoPush(frm);
     },
 
     flip_to_erpnext_mastered_action(frm) {

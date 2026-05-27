@@ -102,6 +102,10 @@
   "item_push_section",
   "auto_push_on_save",
   "push_all_pending_action",
+  "go_live_section",
+  "go_live_enable_auto_push_action",
+  "go_live_col_2",
+  "pause_all_auto_push_action",
   "internal_section",
   "last_full_sync_at"
  ],
@@ -753,6 +757,28 @@
    "fieldtype": "Button",
    "label": "Push All Pending Items (§8d Onboarding Sweep)",
    "description": "Trigger the §8d batch push for every Item not yet pushed: is_stock_item=1, not disabled, has gst_hsn_code, NO existing map with ee_product_id. Bundle wrappers dispatch to combo push. Resumable — re-running picks up only still-pending items. Used for one-shot onboarding; steady-state changes flow via the auto-push hook."
+  },
+  {
+   "fieldname": "go_live_section",
+   "fieldtype": "Section Break",
+   "label": "Steady-State Controls (Go Live)",
+   "description": "Controlled transition between onboarding mode (auto-push OFF; FDE triggers each pull/push manually) and steady state (auto-push ON; every ERPNext-side doc save propagates to EE). Use Go Live ONCE per client after onboarding reconciliation is complete; use Pause as an emergency kill-switch. Both actions record an audit Comment on this Account doc."
+  },
+  {
+   "fieldname": "go_live_enable_auto_push_action",
+   "fieldtype": "Button",
+   "label": "Go Live — Enable Auto-Push",
+   "description": "Steady-state transition. Flips auto_push_on_save (Items), auto_push_customers_on_save, auto_push_suppliers_on_save all to ON in one action — FDE picks which entities in the confirm dialog. Warns (but doesn't block) when an entity is still in onboarding master-mode. Audit-logged via Comment with timestamp + user + which entities."
+  },
+  {
+   "fieldname": "go_live_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pause_all_auto_push_action",
+   "fieldtype": "Button",
+   "label": "Pause All Auto-Push (Kill-Switch)",
+   "description": "Emergency disable — sets all three auto-push toggles to OFF in one transaction. Use during incidents (EE rate-limit storm, bad ERPNext config polluting EE, etc.) to stop the on_update hooks from firing. Idempotent. The JS handler prompts for a reason; the reason lands in the audit Comment for post-incident review. Re-enable via Go Live."
   },
   {
    "fieldname": "internal_section",
