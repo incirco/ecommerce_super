@@ -59,6 +59,7 @@ from ecommerce_super.easyecom.field_mapping.executor import (
 )
 from ecommerce_super.easyecom.flows._isolation import for_each_record
 from ecommerce_super.easyecom.flows._supplier_sync_records import (
+    STATUS_DISCREPANCY,
     STATUS_FAILED,
     STATUS_SUCCESS,
     write_supplier_pull_sync_record,
@@ -77,6 +78,40 @@ STATUS_DISABLED: str = "Disabled"
 
 MODE_ONBOARDING: str = "onboarding"
 MODE_ERPNEXT_MASTERED: str = "erpnext_mastered"
+
+# Stage 5 — drift detection comparable-field lists. The post-flip
+# pull compares the EE-translated payload against the existing ERPNext
+# Supplier + linked Addresses on these fields; any diff lands as a
+# row in EasyEcom Supplier Map.drift_fields.
+#
+# Internal ids (ee_vendor_c_id / ee_vendor_id, vendor_code) are
+# deliberately NOT compared — they're identity-management state, not
+# user-visible content. A change there would be a remap operation,
+# not drift in the §8.3 sense.
+SUPPLIER_DRIFT_COMPARABLE_SUPPLIER_FIELDS: tuple[str, ...] = (
+    "supplier_name",
+    "gstin",
+    "pan",
+    "email_id",
+    "mobile_no",
+    "default_currency",
+)
+
+# (drift label, payload_key from ruleset, ERPNext Address field).
+# "billing." / "dispatch." prefix on the label is what the FDE sees
+# in the drift_fields child table — same shape as §8e Customer drift.
+SUPPLIER_DRIFT_COMPARABLE_ADDRESS_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("billing.street", "billing_street", "address_line1"),
+    ("billing.city", "billing_city", "city"),
+    ("billing.pincode", "billing_zipcode", "pincode"),
+    ("billing.state", "billing_state_name", "state"),
+    ("billing.country", "billing_country_name", "country"),
+    ("dispatch.street", "dispatch_street", "address_line1"),
+    ("dispatch.city", "dispatch_city", "city"),
+    ("dispatch.pincode", "dispatch_zipcode", "pincode"),
+    ("dispatch.state", "dispatch_state_name", "state"),
+    ("dispatch.country", "dispatch_country_name", "country"),
+)
 
 # Page-walk safety cap — well above 30-vendor sandbox but high
 # enough that a real client with thousands of suppliers still
@@ -314,17 +349,17 @@ def process_one_supplier(
     is_active = _truthy(active_raw)
 
     # === Stage 5 phase gate — branch BEFORE GSTIN gating / address
-    # creation so post-flip pulls NEVER mutate ERPNext. Stage 5 wires
-    # _detect_drift_one_supplier; Stage 3 raises so a misconfigured
-    # post-flip site doesn't silently dual-master. ===
+    # creation so post-flip pulls NEVER mutate ERPNext. The drift
+    # detector reads the EE payload, compares against the existing
+    # ERPNext Supplier + Addresses, and writes a Drift Map row +
+    # Discrepancy Sync Record on divergence. No Supplier rows are
+    # created or modified in this branch. ===
     if account_mode == MODE_ERPNEXT_MASTERED:
-        # Stage 3 doesn't implement drift detection — that's Stage 5.
-        # We refuse to mutate; the FDE either does NOT flip yet, or
-        # waits for Stage 5 to ship.
-        raise NotImplementedError(
-            "supplier_pull in erpnext_mastered mode requires Stage 5 drift "
-            "detection — not implemented yet. Either delay the flip or "
-            "build Stage 5 first."
+        return _detect_drift_one_supplier(
+            row=row,
+            erpnext_fields=erpnext_fields,
+            ee_vendor_c_id=ee_vendor_c_id,
+            ee_vendor_id=ee_vendor_id,
         )
 
     # === 1) Map-row match (no natural-key auto-match) ===
@@ -923,3 +958,551 @@ def _set_clean_completion(account_doc: Any, *, total: int) -> None:
         },
         update_modified=False,
     )
+
+
+# ============================================================
+# Stage 5 — Drift detection (post-flip, erpnext_mastered mode)
+# ============================================================
+#
+# When supplier_master_mode=erpnext_mastered, the pull becomes
+# drift-detection-only: ERPNext owns the supplier master; EE-side
+# new vendors and edits to mapped vendors show as Drift in the
+# Supplier Map (audit-visible), NEVER auto-create or auto-overwrite.
+#
+# Three outcomes (mirror §8e Customer Drift):
+#   1. EE-origin NEW vendor (no Supplier Map row): Drift row created
+#      so the vendor_c_id is FDE-visible; no Supplier inserted.
+#   2. EE-side EDIT to mapped Supplier: Drift status + structured
+#      per-field diffs in drift_fields child table; Supplier untouched.
+#   3. NO drift (quiet re-pull): drift child rows cleared, status
+#      preserved (no auto-heal — Drift sticks until Dismiss).
+#
+# Sync Record direction stays Pull; status flips to Discrepancy
+# (NOT Failed) because divergence is not a failure per §7.3.
+
+
+def _detect_drift_one_supplier(
+    *,
+    row: dict,
+    erpnext_fields: dict,
+    ee_vendor_c_id: str,
+    ee_vendor_id: str | None,
+) -> "SupplierOutcome":
+    """Post-flip pull — DETECTS drift, never accepts or overwrites.
+
+    Mirrors §8e Customer Drift exactly: three outcomes, the "no flap"
+    rule (Mapped stays Mapped, Drift sticks until Dismiss), no
+    Accept-EE direction, no Supplier mutation under any branch.
+    """
+    map_row = frappe.db.get_value(
+        "EasyEcom Supplier Map",
+        {"ee_vendor_c_id": ee_vendor_c_id},
+        ["name", "erpnext_name", "status", "ee_vendor_id"],
+        as_dict=True,
+    )
+
+    country_kind = _classify_country(
+        erpnext_fields.get("billing_country_name")
+        or erpnext_fields.get("dispatch_country_name")
+    )
+
+    # === Case 1: EE-origin new vendor post-flip ===
+    if not map_row:
+        reason = (
+            f"EE-origin new vendor vendor_c_id={ee_vendor_c_id} appeared "
+            "post-flip (supplier_master_mode=erpnext_mastered); not "
+            "created in ERPNext because ERPNext is the source of truth "
+            "in steady state. FDE: (a) create the Supplier in ERPNext "
+            "and push it, or (b) ignore EE-side novelty by marking this "
+            "row Disabled."
+        )
+        _upsert_drift_map_row(
+            ee_vendor_c_id=ee_vendor_c_id,
+            ee_vendor_id=ee_vendor_id,
+            erpnext_name=None,
+            reason=reason,
+        )
+        _write_pull_sync_record(
+            entity_name=None,
+            ee_vendor_c_id=ee_vendor_c_id,
+            status=STATUS_DISCREPANCY,
+            last_error=reason,
+        )
+        return SupplierOutcome(
+            ee_vendor_c_id=ee_vendor_c_id,
+            ee_vendor_id=ee_vendor_id,
+            supplier_docname=None,
+            status="Drift",
+            operation="flagged",
+            country_kind=country_kind,
+            flag_reasons=[reason],
+        )
+
+    # === Case 2: broken-link existing map (Map.erpnext_name points
+    #             nowhere). Flip to Drift; FDE investigates. ===
+    if not map_row.erpnext_name or not frappe.db.exists(
+        "Supplier", map_row.erpnext_name
+    ):
+        reason = (
+            f"Map row {map_row.name} has no linked Supplier (or the "
+            "Supplier was deleted); cannot compare for drift. FDE: "
+            "investigate the map row's link target."
+        )
+        _mark_existing_map_drift(map_row.name, reasons=[reason])
+        _write_pull_sync_record(
+            entity_name=None,
+            ee_vendor_c_id=ee_vendor_c_id,
+            status=STATUS_DISCREPANCY,
+            last_error=reason,
+        )
+        return SupplierOutcome(
+            ee_vendor_c_id=ee_vendor_c_id,
+            ee_vendor_id=map_row.ee_vendor_id,
+            supplier_docname=map_row.erpnext_name,
+            status="Drift",
+            operation="flagged",
+            country_kind=country_kind,
+            flag_reasons=[reason],
+        )
+
+    # === Case 3: existing mapping — diff payload vs Supplier + Addresses ===
+    supplier = frappe.get_doc("Supplier", map_row.erpnext_name)
+    excluded_fields = _load_excluded_fields(map_row.name)
+    diffs = _diff_supplier_payload_vs_docs(
+        erpnext_fields=erpnext_fields,
+        supplier=supplier,
+        excluded_fields=excluded_fields,
+    )
+
+    if not diffs:
+        # Quiet re-pull: no flap. Clear child diff rows so the FDE
+        # doesn't see stale diffs from a prior run, but DO NOT change
+        # status (a Drift row stays Drift until Dismiss; a Mapped row
+        # stays Mapped — same §8d/§8e contract).
+        _clear_drift_state(map_row.name)
+        _write_pull_sync_record(
+            entity_name=supplier.name,
+            ee_vendor_c_id=ee_vendor_c_id,
+            status=STATUS_SUCCESS,
+            last_error=None,
+        )
+        return SupplierOutcome(
+            ee_vendor_c_id=ee_vendor_c_id,
+            ee_vendor_id=map_row.ee_vendor_id,
+            supplier_docname=supplier.name,
+            status=map_row.status or "Mapped",
+            operation="skipped",
+            country_kind=country_kind,
+            flag_reasons=[],
+        )
+
+    _record_drift_with_table(map_row.name, diffs=diffs)
+    reason_strings = [
+        f"{d['field']}: ERPNext={d['erpnext_value']!r} EE→{d['ee_value']!r}"
+        for d in diffs
+    ]
+    _write_pull_sync_record(
+        entity_name=supplier.name,
+        ee_vendor_c_id=ee_vendor_c_id,
+        status=STATUS_DISCREPANCY,
+        last_error=" || ".join(reason_strings),
+    )
+    return SupplierOutcome(
+        ee_vendor_c_id=ee_vendor_c_id,
+        ee_vendor_id=map_row.ee_vendor_id,
+        supplier_docname=supplier.name,
+        status="Drift",
+        operation="flagged",
+        country_kind=country_kind,
+        flag_reasons=reason_strings,
+    )
+
+
+def _diff_supplier_payload_vs_docs(
+    *,
+    erpnext_fields: dict,
+    supplier: Any,
+    excluded_fields: set[str],
+) -> list[dict]:
+    """Compare translated EE payload against the existing Supplier +
+    its linked Billing/Shipping Addresses. Returns structured diff
+    dicts shaped like EasyEcom Drift Field child rows
+    (field/erpnext_value/ee_value).
+
+    Address sourcing: EE getVendors returns dual billing+dispatch
+    envelopes (flattened by _flatten_vendor_row); the ERPNext side
+    stores them as two separate Address rows linked via Address.links.
+    We look up Billing once and Shipping once; reuse for all rows
+    under each side.
+    """
+    diffs: list[dict] = []
+
+    # Supplier-level fields.
+    for fld in SUPPLIER_DRIFT_COMPARABLE_SUPPLIER_FIELDS:
+        if fld in excluded_fields:
+            continue
+        if fld not in erpnext_fields:
+            continue
+        ee_value = erpnext_fields.get(fld)
+        # Supplier.email_id / mobile_no are read-only fetched from the
+        # linked Contact — for drift, read them via the same Contact
+        # lookup the push uses (single source of truth).
+        if fld == "email_id":
+            en_value = (
+                supplier.get("email_id")
+                or _primary_contact_field_for_drift(supplier.name, "email_id")
+            )
+        elif fld == "mobile_no":
+            en_value = (
+                supplier.get("mobile_no")
+                or _primary_contact_field_for_drift(supplier.name, "mobile_no")
+                or _primary_contact_field_for_drift(supplier.name, "phone")
+            )
+        else:
+            en_value = supplier.get(fld)
+        if _values_differ(ee_value, en_value):
+            diffs.append(
+                {
+                    "field": fld,
+                    "erpnext_value": _stringify(en_value),
+                    "ee_value": _stringify(ee_value),
+                }
+            )
+
+    # Address-level fields. Billing + Shipping looked up once each.
+    billing = _find_address_for_supplier_drift(
+        supplier.name, address_type="Billing"
+    )
+    shipping = _find_address_for_supplier_drift(
+        supplier.name, address_type="Shipping"
+    )
+    for label, payload_key, address_field in SUPPLIER_DRIFT_COMPARABLE_ADDRESS_FIELDS:
+        if label in excluded_fields:
+            continue
+        if payload_key not in erpnext_fields:
+            continue
+        ee_value = erpnext_fields.get(payload_key)
+        address_doc = billing if label.startswith("billing.") else shipping
+        en_value = (address_doc or {}).get(address_field) if address_doc else None
+        if _values_differ(ee_value, en_value):
+            diffs.append(
+                {
+                    "field": label,
+                    "erpnext_value": _stringify(en_value),
+                    "ee_value": _stringify(ee_value),
+                }
+            )
+
+    return diffs
+
+
+def _find_address_for_supplier_drift(
+    supplier_docname: str, *, address_type: str
+) -> dict | None:
+    """Read-only Address lookup for Supplier drift comparison."""
+    rows = frappe.db.sql(
+        """
+        SELECT a.name, a.address_line1, a.city, a.pincode, a.state, a.country
+        FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl ON dl.parent = a.name
+        WHERE dl.parenttype = 'Address'
+          AND dl.link_doctype = 'Supplier'
+          AND dl.link_name = %s
+          AND a.address_type = %s
+        ORDER BY a.creation ASC
+        LIMIT 1
+        """,
+        (supplier_docname, address_type),
+        as_dict=True,
+    )
+    return rows[0] if rows else None
+
+
+def _primary_contact_field_for_drift(
+    supplier_docname: str, fieldname: str
+) -> str | None:
+    """Return the named field from the primary Contact linked to the
+    Supplier. Same query shape as supplier_push's helper but inlined
+    here to keep the drift module's dependencies symmetric (the push
+    module imports from here, not the other way round)."""
+    rows = frappe.db.sql(
+        f"""
+        SELECT c.{fieldname}
+        FROM `tabContact` c
+        JOIN `tabDynamic Link` dl ON dl.parent = c.name
+        WHERE dl.parenttype = 'Contact'
+          AND dl.link_doctype = 'Supplier'
+          AND dl.link_name = %s
+          AND c.{fieldname} IS NOT NULL AND c.{fieldname} != ''
+        ORDER BY c.is_primary_contact DESC, c.creation ASC
+        LIMIT 1
+        """,
+        (supplier_docname,),
+    )
+    return rows[0][0] if rows else None
+
+
+def _values_differ(a: Any, b: Any) -> bool:
+    """Drift comparison with None / "" / 0 leniency. Same shape as
+    customer_pull's helper. Treats None and "" as equal; coerces to
+    float for numeric comparison; falls back to string equality."""
+
+    def _norm(v: Any) -> Any:
+        if v in (None, ""):
+            return None
+        if isinstance(v, str):
+            return v.strip() or None
+        return v
+
+    na, nb = _norm(a), _norm(b)
+    if na is None and nb is None:
+        return False
+    if na is None or nb is None:
+        return True
+    try:
+        return abs(float(na) - float(nb)) > 0.0001
+    except (TypeError, ValueError):
+        return na != nb
+
+
+def _stringify(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v)
+    return s if len(s) <= 200 else (s[:197] + "...")
+
+
+def _load_excluded_fields(map_name: str) -> set[str]:
+    """Read FDE-marked exclude list off the Supplier Map row. Reuses
+    the renamed entity-agnostic EasyEcom Exclude Field child DocType
+    (see §8f Stage 1 rename — was EasyEcom Item Map Exclude Field)."""
+    rows = frappe.db.get_all(
+        "EasyEcom Exclude Field",
+        filters={"parent": map_name, "parenttype": "EasyEcom Supplier Map"},
+        fields=["field"],
+    )
+    return {r.field for r in rows if r.field}
+
+
+def _upsert_drift_map_row(
+    *,
+    ee_vendor_c_id: str,
+    ee_vendor_id: str | None,
+    erpnext_name: str | None,
+    reason: str,
+) -> str:
+    """Create or update a Supplier Map row in Drift status. Used for
+    the EE-origin-new-vendor case (no prior map row).
+
+    ee_vendor_c_id remains the unique key (autoname = ECS-SUPP-
+    {ee_vendor_c_id}); ee_vendor_id may be empty if EE hasn't
+    surfaced one for this c_id yet (a Drift on a never-pushed vendor
+    is plausible)."""
+    existing = frappe.db.get_value(
+        "EasyEcom Supplier Map",
+        {"ee_vendor_c_id": ee_vendor_c_id},
+        "name",
+    )
+    if existing:
+        frappe.db.set_value(
+            "EasyEcom Supplier Map",
+            existing,
+            {"status": STATUS_DRIFT, "flag_reason": reason[:140]},
+            update_modified=True,
+        )
+        return existing
+    doc = frappe.new_doc("EasyEcom Supplier Map")
+    doc.update(
+        {
+            "ee_vendor_c_id": ee_vendor_c_id,
+            "ee_vendor_id": ee_vendor_id or "",
+            "erpnext_doctype": "Supplier" if erpnext_name else None,
+            "erpnext_name": erpnext_name,
+            "status": STATUS_DRIFT,
+            "flag_reason": reason[:140],
+        }
+    )
+    doc.insert(ignore_permissions=True)
+    return doc.name
+
+
+def _mark_existing_map_drift(map_name: str, *, reasons: list[str]) -> None:
+    """Flip an existing map row to Drift status with the diff list as
+    the reason. NEVER mutates the linked Supplier — drift is read-only
+    on the ERPNext side."""
+    reason = " || ".join(reasons) if reasons else ""
+    frappe.db.set_value(
+        "EasyEcom Supplier Map",
+        map_name,
+        {"status": STATUS_DRIFT, "flag_reason": reason[:140]},
+        update_modified=True,
+    )
+
+
+def _record_drift_with_table(map_name: str, *, diffs: list[dict]) -> None:
+    """Write the structured diff to the Supplier Map's drift_fields
+    child table + set status=Drift + drift_detected_at=now. Saves the
+    parent map doc once (not per-row)."""
+    map_doc = frappe.get_doc("EasyEcom Supplier Map", map_name)
+    map_doc.set("drift_fields", [])
+    now = frappe.utils.now_datetime()
+    for d in diffs:
+        map_doc.append(
+            "drift_fields",
+            {
+                "field": d["field"],
+                "erpnext_value": d["erpnext_value"],
+                "ee_value": d["ee_value"],
+                "detected_at": now,
+            },
+        )
+    map_doc.status = STATUS_DRIFT
+    map_doc.drift_detected_at = now
+    map_doc.flag_reason = (
+        f"{len(diffs)} field(s) drifted — see Drift Fields table below"
+    )
+    map_doc.save(ignore_permissions=True)
+
+
+def _clear_drift_state(map_name: str) -> None:
+    """Clean re-pull — clear the drift table + drift_detected_at so
+    historical diffs don't linger when the EE-side state has been
+    fixed upstream. Mirrors §8d/§8e EXACTLY: status is left untouched
+    (FDE owns the Drift → Mapped transition via Dismiss). A Drift row
+    whose diffs vanished still requires explicit FDE acknowledgement
+    — that's the §8.3 audit-trail contract.
+
+    Returns silently when there were no drift rows to clear (this is
+    the steady-state quiet-re-pull case for a Mapped row)."""
+    map_doc = frappe.get_doc("EasyEcom Supplier Map", map_name)
+    if not map_doc.get("drift_fields"):
+        return
+    map_doc.set("drift_fields", [])
+    map_doc.drift_detected_at = None
+    map_doc.save(ignore_permissions=True)
+
+
+# ----- Drift resolution actions (whitelisted) -----
+
+
+@frappe.whitelist()
+def dismiss_drift(supplier_map_name: str) -> dict[str, Any]:
+    """FDE acknowledges the EE-side change is wrong or already-handled
+    upstream. Returns the row to Mapped, clears the Drift Fields child
+    table, leaves the underlying Supplier + Addresses untouched.
+
+    The next pull will re-detect if the divergence still exists; to
+    silence persistent intentional divergence, the FDE adds the field
+    to ecs_drift_exclude_fields instead.
+
+    Mirror of §8e Customer dismiss_drift."""
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Dismiss Drift requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not supplier_map_name:
+        return {"ok": False, "message": "supplier_map_name required"}
+    if not frappe.db.exists("EasyEcom Supplier Map", supplier_map_name):
+        return {
+            "ok": False,
+            "message": f"Supplier Map {supplier_map_name!r} not found.",
+        }
+    doc = frappe.get_doc("EasyEcom Supplier Map", supplier_map_name)
+    if doc.status != STATUS_DRIFT:
+        return {
+            "ok": False,
+            "message": (
+                f"Supplier Map {supplier_map_name!r} is not in Drift "
+                f"status (current: {doc.status}); nothing to dismiss."
+            ),
+        }
+    doc.status = STATUS_MAPPED
+    doc.flag_reason = None
+    doc.drift_detected_at = None
+    doc.set("drift_fields", [])
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "supplier_map_name": supplier_map_name,
+        "status": STATUS_MAPPED,
+    }
+
+
+@frappe.whitelist()
+def push_to_ee_for_drift(supplier_map_name: str) -> dict[str, Any]:
+    """FDE re-asserts ERPNext as SoT by pushing the current Supplier
+    state to EE, overwriting the EE-side divergence. Dispatches to the
+    Stage 4 push (push_one_supplier).
+
+    On success the push flow writes a fresh snapshot + sets the Map
+    row to Mapped; the next pull will see no drift.
+
+    NO 'Accept EE Value' counterpart — §8.3 post-flip contract is
+    'ERPNext wins; EE-side novelty/edits are not adopted'. The only
+    paths out of Drift are dismiss-and-wait or push-to-overwrite."""
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Push to EasyEcom requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not supplier_map_name:
+        return {"ok": False, "message": "supplier_map_name required"}
+    if not frappe.db.exists("EasyEcom Supplier Map", supplier_map_name):
+        return {
+            "ok": False,
+            "message": f"Supplier Map {supplier_map_name!r} not found.",
+        }
+    doc = frappe.get_doc("EasyEcom Supplier Map", supplier_map_name)
+    if doc.status != STATUS_DRIFT:
+        return {
+            "ok": False,
+            "message": (
+                f"Supplier Map {supplier_map_name!r} is not in Drift "
+                f"status (current: {doc.status}); use the Supplier-form "
+                "Push button for non-drift pushes."
+            ),
+        }
+    if not doc.erpnext_name:
+        return {
+            "ok": False,
+            "message": (
+                f"Supplier Map {supplier_map_name!r} has no linked "
+                "Supplier; create one in ERPNext first, then re-pull "
+                "to set the link."
+            ),
+        }
+
+    from ecommerce_super.easyecom.flows.supplier_push import (
+        push_one_supplier,
+    )
+
+    try:
+        outcome = push_one_supplier(doc.erpnext_name)
+    except Exception as exc:
+        frappe.log_error(
+            title=f"push_to_ee_for_drift failed: {supplier_map_name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}"}
+
+    return {
+        "ok": True,
+        "supplier_map_name": supplier_map_name,
+        "operation": outcome.operation,
+        "pushed": outcome.pushed,
+        "ee_vendor_c_id": outcome.ee_vendor_c_id,
+        "ee_vendor_id": outcome.ee_vendor_id,
+        "flag_reasons": outcome.flag_reasons,
+    }
