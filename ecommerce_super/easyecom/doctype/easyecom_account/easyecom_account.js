@@ -346,14 +346,20 @@ frappe.ui.form.on("EasyEcom Account", {
             return;
         }
 
-        // Discover group — 8a Locations, 8b Channels, 8d Products.
+        // Discover group — every entity master that ships a pull
+        // surface. Each top-button delegates to the same section
+        // button handler (frm.events.X_action), so the UX in the
+        // dropdown is byte-equivalent to clicking the in-section
+        // button — same confirm dialog, same async-enqueue path,
+        // same result rendering. The dropdown just saves the FDE
+        // a scroll on a tall Account form.
         frm.add_custom_button(
-            __("Locations"),
+            __("Locations (§8a)"),
             () => _runLocationDiscovery(frm),
             __("Discover")
         );
         frm.add_custom_button(
-            __("Channels"),
+            __("Channels (§8b)"),
             () => _runChannelDiscovery(frm),
             __("Discover")
         );
@@ -362,12 +368,38 @@ frappe.ui.form.on("EasyEcom Account", {
             () => _runProductDiscovery(frm),
             __("Discover")
         );
-
-        // Push group — 8d batch sweep (Stage 6).
         frm.add_custom_button(
-            __("Push All Pending Items"),
+            __("Customers (§8e)"),
+            () => frm.events.discover_customers_action(frm),
+            __("Discover")
+        );
+        frm.add_custom_button(
+            __("Suppliers (§8f)"),
+            () => frm.events.discover_suppliers_action(frm),
+            __("Discover")
+        );
+        // Shared foundational refresh — gates §8e and §8f.
+        frm.add_custom_button(
+            __("States / Countries"),
+            () => frm.events.refresh_states_countries_action(frm),
+            __("Discover")
+        );
+
+        // Push group — batch sweeps across §8d / §8e / §8f.
+        frm.add_custom_button(
+            __("Items (§8d)"),
             () => _runPushAllPending(frm),
-            __("Push")
+            __("Push All Pending")
+        );
+        frm.add_custom_button(
+            __("Customers (§8e)"),
+            () => frm.events.push_all_pending_customers_action(frm),
+            __("Push All Pending")
+        );
+        frm.add_custom_button(
+            __("Suppliers (§8f)"),
+            () => frm.events.push_all_pending_suppliers_action(frm),
+            __("Push All Pending")
         );
     },
 
