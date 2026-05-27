@@ -153,16 +153,20 @@ Before Section 3 can be built, the local environment must exist: Frappe bench (v
 
 **Build sequence (local):**
 - Stage 1 substrate — EasyEcom Supplier Map (autoname ECS-SUPP-{ee_vendor_c_id}; two-identifier split — ee_vendor_c_id unique-reqd read key, ee_vendor_id non-unique write key), supplier_master_mode flag + independent flip endpoint, drift-child rename (EasyEcom Item Map Drift/Exclude Field → EasyEcom Drift/Exclude Field, pre-model-sync patch, 14 rows preserved, controllers + parent options + flow + test references repointed) — 4c6b700
+- Stage 2 verified eager multi-country lookups — multi-country fixtures (Italy 356 states, Armenia 11 states) captured from Harmony, 15 new tests exercising eager-sweep / per-country-failure-isolation / foreign-state resolution (Abruzzo→1556, Armenian Marz→384/386) / multi-country idempotent re-run. Existing flow code already eager-all-countries; §8f scope was test-verification + foreign-fixture capture. Live timing 101.9s for 247 countries / 8,791 states / 248 HTTP calls — acceptable as admin-triggered refresh. — 36c6ee1
+- Stage 3 pull — new EasyEcom-Supplier-Pull ruleset (19 rules, 2-id split + GSTIN+PAN + country-aware fields + flat-address-flattening); EasyEcom-Supplier-Sync RETIRED (active=0); cursor pagination (nextUrl confirmed live 2-pages 30-vendors); empty-array address handled via pre-flatten; country-aware GST gating (Indian valid/Unregistered/invalid-FNC + foreign Overseas); lifecycle pull-side (active:0 → Supplier.disabled=1 + Map.status=Disabled; symmetric restore); Sync Records (one per Supplier, direction=Pull, none for FNC); Discover Suppliers button (role-gated, refuses post-flip). Also folded in the client-layer no-data carve-out fixing the 28-territory false-positive (Stage 2 finding) — verified 0 failures on live re-sweep. — a3b6dea
 
 **Standing items / carry-forward:**
 - **§8d test_item_lifecycle_drift_stage5 has a PRE-EXISTING standing failure** (2 fail + 1 err): test_flip_explicitly_changes_pull_behavior (error), test_erpnext_disable_sends_deactivate_status_zero (fail), test_erpnext_enable_sends_activate_status_one (fail). Confirmed unrelated to the §8f drift-child rename by git-stashing §8f and re-running on the pre-§8f tree — same failures occur there. Push outcome shows `item has no ecs_ee_cp_id — never pushed`, suggesting test-setup brittleness around the cp_id seed, not the rename. **Fix before §8 closeout** — do not let this carry into operational flows §9–§13.
-- Stale `EasyEcom-Supplier-Sync` (Bidirectional) ruleset in the fixture — 4 fields, conflates name↔vendor_id (no read-key separation); to be replaced by EasyEcom-Supplier-Pull + EasyEcom-Supplier-Push in Stage 3/4 (mirror §8e Customer-Sync soft-retire).
-- `EasyEcom-PO-Push` / `EasyEcom-GRN-Pull` map `supplier ↔ vendor_id` directly — switch to `EasyEcom Supplier Map.ee_vendor_id` lookup once the map is populated (don't assume `supplier.name == vendor_id`).
+- **§8d test_item_pull_stage2 has a PRE-EXISTING standing failure** (2 fail + 1 err): test_savepoint_isolation_one_bad_product, test_combo_product_with_no_subproducts_flagged, test_child_product_flagged_not_created. Errors show "product carries no tax_rule_name" — §8d Stage 2 tax-stamping test brittleness, unrelated to §8f. Confirmed unrelated by stashing §8f Stage 3 and re-running. **Fix before §8 closeout** alongside the lifecycle_drift_stage5 failures.
+- `EasyEcom-PO-Push` / `EasyEcom-GRN-Pull` map `supplier ↔ vendor_id` directly — switch to `EasyEcom Supplier Map.ee_vendor_id` lookup in §9/§10 (don't assume `supplier.name == vendor_id`). Stage 3 deliberately left these untouched per packet directive.
 - IC `validate_party` auto-extracts PAN from GSTIN[2:12]; Indian suppliers need country=India + valid GSTIN, foreign suppliers need country set BEFORE validate runs so `guess_gst_category` returns "Overseas".
+- Client-layer no-data detection — current allow-list covers "no data found", "unable to find states/vendors", "no records found", "no result found". Extend the tuple if a new live observation justifies it; do NOT relax to a generic-400-passthrough.
+- Stage 3 refuses cleanly in erpnext_mastered mode (raises NotImplementedError at the flow + clean refusal at the whitelist) — Stage 5 must wire drift detection BEFORE any FDE flips a real account.
 
-**Open decisions (carried from packet):**
-1. UpdateVendor `data.vendorId: 58614` — confirm what it is live (Stage 4).
-2. getVendors `nextUrl` pagination — verify shape (Stage 3).
-3. Push-side deactivate endpoint exists? (Stage 5).
+**Open decisions (resolved by Stage 3):**
+1. ~~getVendors `nextUrl` pagination~~ → **CONFIRMED USED** — Harmony returned 2 cursor pages on the captured sample. nextUrl is a path; client follows directly via path-as-endpoint. Cursor classified foundational (with query-strip).
+2. UpdateVendor `data.vendorId: 58614` — still **OPEN** (Stage 4).
+3. Push-side deactivate endpoint exists? — still **OPEN** (Stage 5).
 
-**Next:** Stage 2 — eager multi-country state/country caching (extend §8e Stage 2 from India-only to all ~247 countries).
+**Next:** Stage 4 — push (create + update + lifecycle write-back of vendor_id from CreateVendor response).
