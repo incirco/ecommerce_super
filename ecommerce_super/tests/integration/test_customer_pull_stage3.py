@@ -34,6 +34,9 @@ from ecommerce_super.easyecom.flows.customer_pull import (
     process_customer_rows,
     pull_customers,
 )
+from ecommerce_super.easyecom.field_mapping.executor import (
+    FieldMappingExecutor,
+)
 from ecommerce_super.easyecom.flows._customer_sync_records import (
     ENTITY_TYPE_CUSTOMER,
 )
@@ -743,3 +746,101 @@ class TestFullPullViaClient(FrappeTestCase):
             + outcome.skipped
         )
         self.assertEqual(accounted, 23)
+
+
+_DUP_PREFIX = "TEST-8E-DUP-"
+
+
+class TestCustomerDupNameResilience(FrappeTestCase):
+    """Defensive regression mirroring §8f supplier dup-name fix.
+    ERPNext's default Customer Naming By is "Naming Series" so dup
+    customer_names don't collide on docname. BUT if Selling Settings.
+    cust_master_name is set to "Customer Name", Customer.name =
+    customer_name and a second EE customer with the same companyname
+    raises DuplicateEntryError. Test forces that config + verifies
+    the _create_customer retry-with-suffix path lands both rows."""
+
+    def setUp(self) -> None:
+        self._orig_cust_master_name = frappe.db.get_single_value(
+            "Selling Settings", "cust_master_name"
+        )
+        frappe.db.set_single_value(
+            "Selling Settings", "cust_master_name", "Customer Name"
+        )
+        self._orig_autoname = frappe.get_meta("Customer").autoname
+        frappe.db.set_value(
+            "DocType", "Customer", "autoname", "field:customer_name",
+            update_modified=False,
+        )
+        frappe.db.commit()
+        frappe.clear_cache(doctype="Customer")
+        self._wipe()
+
+    def tearDown(self) -> None:
+        self._wipe()
+        if self._orig_cust_master_name is not None:
+            frappe.db.set_single_value(
+                "Selling Settings",
+                "cust_master_name",
+                self._orig_cust_master_name,
+            )
+        frappe.db.set_value(
+            "DocType", "Customer", "autoname",
+            self._orig_autoname or "",
+            update_modified=False,
+        )
+        frappe.clear_cache(doctype="Customer")
+        frappe.db.commit()
+
+    def _wipe(self) -> None:
+        for n in frappe.db.get_all(
+            "Customer",
+            filters={"customer_name": ("like", f"{_DUP_PREFIX}%")},
+            pluck="name",
+        ):
+            try:
+                frappe.delete_doc(
+                    "Customer", n, force=True, ignore_permissions=True
+                )
+            except Exception:
+                pass
+        for n in frappe.db.get_all(
+            "EasyEcom Customer Map",
+            filters={"ee_c_id": ("like", f"{_DUP_PREFIX}%")},
+            pluck="name",
+        ):
+            try:
+                frappe.delete_doc(
+                    "EasyEcom Customer Map",
+                    n,
+                    force=True,
+                    ignore_permissions=True,
+                )
+            except Exception:
+                pass
+        frappe.db.commit()
+
+    def test_dup_name_second_customer_disambiguates_via_c_id(self) -> None:
+        from ecommerce_super.easyecom.flows.customer_pull import (
+            _create_customer,
+        )
+        dup_name = f"{_DUP_PREFIX}DupName"
+        c_id_a, c_id_b = f"{_DUP_PREFIX}A", f"{_DUP_PREFIX}B"
+
+        cust1 = _create_customer(
+            ee_c_id=c_id_a,
+            erpnext_fields={"customer_name": dup_name},
+            gstin="",
+            gst_category="Unregistered",
+        )
+        self.assertEqual(cust1.customer_name, dup_name)
+        first_docname = cust1.name
+
+        cust2 = _create_customer(
+            ee_c_id=c_id_b,
+            erpnext_fields={"customer_name": dup_name},
+            gstin="",
+            gst_category="Unregistered",
+        )
+        self.assertEqual(cust2.customer_name, f"{dup_name} ({c_id_b})")
+        self.assertNotEqual(cust2.name, first_docname)

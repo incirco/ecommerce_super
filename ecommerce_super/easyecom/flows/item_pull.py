@@ -500,6 +500,257 @@ def dismiss_drift(item_map_name: str) -> dict[str, Any]:
     return {"ok": True, "item_map_name": item_map_name, "status": STATUS_MAPPED}
 
 
+@frappe.whitelist()
+def mark_mapped_override(
+    item_map_name: str, acknowledged_flags: str | None = None
+) -> dict[str, Any]:
+    """FDE/SM override — flip a Created-Flagged row to Mapped WITHOUT
+    fixing the underlying flag(s).
+
+    Use case: the flag is genuinely benign for THIS Item (the EE
+    payload omits a tax_rule_name for a non-taxable accessory; an
+    EE-side dirty UOM has been verified as the intended value;
+    similar). The FDE wants to suppress the flag without forcing a
+    fictional fix on the source data.
+
+    Semantics:
+      - status flips Created-Flagged → Mapped, flag_reason CLEARED.
+      - The next pull will re-evaluate from scratch (acceptance
+        criteria from the underlying _process_one_product_inner). If
+        the same flag fires again, the row flips back to
+        Created-Flagged automatically. To suppress PERMANENTLY, fix
+        the source. The override is a one-pull-cycle ack, not a mute.
+      - Every override is recorded as a Frappe Comment on the Item
+        Map row, with the suppressed flag_reason quoted + the user
+        who clicked. The Comment is audit-trail-visible in the desk
+        and survives the next pull's status flip-back.
+
+    Permission: System Manager / EasyEcom System Manager / EasyEcom
+    FDE. Operator is read-only and refused.
+
+    Refuses cleanly on:
+      - Unknown / non-existent Item Map name.
+      - Status != Created-Flagged (no Mapped / Drift / FNC / Disabled
+        override path — use Dismiss / Push for Drift, or re-pull for
+        FNC).
+    """
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Mark Mapped override requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not item_map_name:
+        return {"ok": False, "message": "item_map_name required"}
+    if not frappe.db.exists("EasyEcom Item Map", item_map_name):
+        return {
+            "ok": False,
+            "message": f"Item Map {item_map_name!r} not found.",
+        }
+    doc = frappe.get_doc("EasyEcom Item Map", item_map_name)
+    if doc.status != STATUS_CREATED_FLAGGED:
+        return {
+            "ok": False,
+            "message": (
+                f"Item Map {item_map_name!r} is in {doc.status} status, "
+                "not Created-Flagged. Override only applies to "
+                "Created-Flagged rows (use Dismiss / Push for Drift; "
+                "re-pull for FNC)."
+            ),
+        }
+
+    suppressed = doc.flag_reason or "(no flag_reason recorded)"
+    user = frappe.session.user
+    doc.status = STATUS_MAPPED
+    doc.flag_reason = None
+    doc.save(ignore_permissions=True)
+
+    # Audit: append a Comment so the override is permanently visible
+    # on the Item Map row even after the next pull may flip the
+    # status back. Survives status churn.
+    doc.add_comment(
+        comment_type="Info",
+        text=(
+            f"<b>Mark Mapped override</b> applied by <code>{user}</code> "
+            f"— Created-Flagged → Mapped. Suppressed flag_reason:<br>"
+            f"<code>{frappe.utils.escape_html(suppressed)}</code><br>"
+            "<i>The next pull re-evaluates; if the same flag fires "
+            "again the row flips back to Created-Flagged. Fix the "
+            "source to suppress permanently.</i>"
+        ),
+    )
+    frappe.db.commit()
+    return {
+        "ok": True,
+        "item_map_name": item_map_name,
+        "status": STATUS_MAPPED,
+        "suppressed_flag_reason": suppressed,
+    }
+
+
+@frappe.whitelist()
+def re_evaluate_one_product(item_map_name: str) -> dict[str, Any]:
+    """Re-pull a single Item from EE and re-run the flag-evaluation
+    on it. Lets the FDE refresh ONE row without triggering the
+    account-wide cursor walk.
+
+    Flow:
+      1. Look up the Item Map's ee_sku.
+      2. Cursor-walk GetProductMaster until that sku is found
+         (worst case: O(catalogue_size) pages; ~5–10s on a
+         2000-product catalogue, much faster than re-running the
+         whole pull).
+      3. Call process_one_product on the matched row. The flow's
+         existing logic handles match-by-map + re-evaluation +
+         flag-list-recompute + status flip (CF → Mapped when flags
+         are now empty, or Mapped → CF if new flags appeared).
+      4. Return the outcome.
+
+    Use case: FDE fixed the source of a flag (set tax_rule_name in
+    EE-side, corrected the UOM, etc.) and wants to verify the row
+    flips back to Mapped without waiting for the next scheduled pull
+    or running the full Discover Products (which on a large
+    catalogue takes minutes).
+
+    Permission: System Manager / EasyEcom System Manager / EasyEcom
+    FDE. Operator is read-only and refused.
+
+    NEVER raises through the whitelist boundary — returns
+    {"ok": False, "message": ...} on failure so the JS handler
+    renders a clean message.
+    """
+    roles = set(frappe.get_roles(frappe.session.user))
+    if not roles.intersection(
+        {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
+    ):
+        frappe.throw(
+            frappe._(
+                "Re-evaluate Item requires EasyEcom FDE or System Manager."
+            ),
+            frappe.PermissionError,
+        )
+    if not item_map_name:
+        return {"ok": False, "message": "item_map_name required"}
+    if not frappe.db.exists("EasyEcom Item Map", item_map_name):
+        return {
+            "ok": False,
+            "message": f"Item Map {item_map_name!r} not found.",
+        }
+
+    map_doc = frappe.get_doc("EasyEcom Item Map", item_map_name)
+    sku = map_doc.ee_sku
+    if not sku:
+        return {
+            "ok": False,
+            "message": (
+                f"Item Map {item_map_name!r} has no ee_sku — cannot "
+                "look it up in EE."
+            ),
+        }
+
+    # Pick the enabled Account. Re-evaluate routes through the same
+    # account as the cursor walk.
+    account_name = frappe.db.get_value(
+        "EasyEcom Account", {"enabled": 1}, "name"
+    )
+    if not account_name:
+        return {
+            "ok": False,
+            "message": "No enabled EasyEcom Account found.",
+        }
+
+    try:
+        outcome = _re_evaluate_one_by_sku(
+            account_name=account_name, sku=sku
+        )
+    except Exception as exc:  # noqa: BLE001
+        frappe.log_error(
+            title=f"re_evaluate_one_product failed for {item_map_name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {
+            "ok": False,
+            "message": f"{type(exc).__name__}: {exc}",
+        }
+
+    if outcome is None:
+        return {
+            "ok": False,
+            "message": (
+                f"SKU {sku!r} not found on EE (walked GetProductMaster "
+                "to exhaustion). The product may have been deleted "
+                "from EE since the last pull, or this Map row was "
+                "created from a non-pull source. Manual review needed."
+            ),
+        }
+
+    return {
+        "ok": True,
+        "item_map_name": item_map_name,
+        "ee_sku": sku,
+        "status": outcome.status,
+        "created": outcome.created,
+        "flag_reasons": outcome.flag_reasons,
+        "erpnext_name": outcome.erpnext_name,
+    }
+
+
+def _re_evaluate_one_by_sku(
+    *, account_name: str, sku: str
+) -> "ProductOutcome | None":
+    """Walk GetProductMaster for the matching ee_sku and run the
+    standard per-product flow on it.
+
+    Returns the ProductOutcome on success, or None if the SKU
+    wasn't found in EE (walked to exhaustion). Caller decides how
+    to surface "not found".
+
+    NOT for bulk use — for the full catalogue, use pull_products.
+    This is the single-SKU shortcut for the Item-Map form's
+    'Re-evaluate from EE' button.
+    """
+    from ecommerce_super.easyecom.flows._item_sync_records import (
+        _company_for_item_sync,
+    )
+
+    account = frappe.get_doc("EasyEcom Account", account_name)
+    client = EasyEcomClient(company=_company_for_item_sync())
+    executor = FieldMappingExecutor(ITEM_PULL_RULESET)
+    enabled_companies = _enabled_companies(account_name)
+
+    # Walk pages from the top; ignore the persisted account-wide
+    # cursor so we don't disturb a partial walk that might be in
+    # progress.
+    pages_seen = 0
+    for page in _iter_pages(
+        client, starting_cursor=None, updated_after=None, max_pages=None
+    ):
+        pages_seen += 1
+        records = _normalise_page_data(page.get("data"))
+        for product in records:
+            if (product or {}).get("sku") == sku:
+                return process_one_product(
+                    product,
+                    account=account,
+                    executor=executor,
+                    enabled_companies=enabled_companies,
+                    is_stock_item=1,
+                )
+        if pages_seen > 200:
+            # Safety cap — a catalogue over 40k products with the SKU
+            # not yet seen is anomalous; bail rather than walk forever.
+            frappe.log_error(
+                title=f"re_evaluate_one_by_sku: gave up after {pages_seen} pages",
+                message=f"SKU {sku!r} not found in first 200 pages.",
+            )
+            return None
+    return None
+
+
 # ----- Scheduler entry (audit fix #3) -----
 
 

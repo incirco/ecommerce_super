@@ -30,7 +30,9 @@ from ecommerce_super.easyecom.flows.item_pull import (
     MODE_ONBOARDING,
     STATUS_DRIFT,
     STATUS_MAPPED,
+    STATUS_CREATED_FLAGGED,
     dismiss_drift,
+    mark_mapped_override,
     process_one_product,
     scheduled_discover_products,
 )
@@ -583,3 +585,131 @@ class TestSchedulerEntry(FrappeTestCase):
         frappe.db.commit()
         # Should not raise.
         scheduled_discover_products()
+
+
+# ============================================================
+# Mark Mapped override (FDE/SM escape hatch for Created-Flagged)
+# ============================================================
+
+
+class TestMarkMappedOverride(FrappeTestCase):
+    """The FDE/SM-only override that flips a Created-Flagged row to
+    Mapped without fixing the source. Audit-logged via Frappe Comment
+    so the override survives subsequent pulls' status churn.
+
+    Contracts:
+      - status=Created-Flagged required (refuses Mapped / Drift / FNC).
+      - Operator role refused with PermissionError.
+      - Underlying Item is NOT mutated.
+      - A Comment is added to the Map row quoting the suppressed
+        flag_reason + the user who clicked.
+    """
+
+    def setUp(self) -> None:
+        _wipe()
+        _ensure_hsn()
+        _ensure_uom()
+        _ensure_item_group()
+
+    def tearDown(self) -> None:
+        _wipe()
+
+    def _seed_cf_row(self, item_code: str = f"{PREFIX}cf-ovr") -> tuple[str, str]:
+        """Insert a Created-Flagged Item + Map row directly. We bypass
+        the full pull (which would flip the row back on the next run)
+        since this test exercises the override endpoint, not the
+        pull's flag-evaluation."""
+        if not frappe.db.exists("Item", item_code):
+            it = frappe.new_doc("Item")
+            it.item_code = item_code
+            it.item_name = item_code
+            it.item_group = "All Item Groups"
+            it.stock_uom = "Nos"
+            it.gst_hsn_code = "85171000"
+            it.insert(ignore_permissions=True)
+        m = frappe.new_doc("EasyEcom Item Map")
+        m.update({
+            "ee_sku": item_code,
+            "status": STATUS_CREATED_FLAGGED,
+            "erpnext_doctype": "Item",
+            "erpnext_name": item_code,
+            "flag_reason": "missing HSN || dirty UOM 'X' substituted with 'Nos'",
+        })
+        m.insert(ignore_permissions=True)
+        frappe.db.commit()
+        return item_code, m.name
+
+    def test_override_flips_cf_to_mapped_and_clears_reason(self) -> None:
+        item_code, map_name = self._seed_cf_row()
+        result = mark_mapped_override(item_map_name=map_name)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "Mapped")
+        refreshed = frappe.get_doc("EasyEcom Item Map", map_name)
+        self.assertEqual(refreshed.status, STATUS_MAPPED)
+        self.assertIsNone(refreshed.flag_reason)
+        # Underlying Item is untouched.
+        self.assertTrue(frappe.db.exists("Item", item_code))
+
+    def test_override_writes_audit_comment(self) -> None:
+        item_code, map_name = self._seed_cf_row(f"{PREFIX}cf-audit")
+        mark_mapped_override(item_map_name=map_name)
+        # Frappe stores Comments as `tabComment` rows with reference_doctype/name.
+        comments = frappe.get_all(
+            "Comment",
+            filters={
+                "reference_doctype": "EasyEcom Item Map",
+                "reference_name": map_name,
+            },
+            fields=["content"],
+        )
+        self.assertTrue(comments, "audit Comment must be added")
+        self.assertTrue(
+            any("Mark Mapped override" in c.content for c in comments),
+            f"comment must mention the override; got {[c.content[:100] for c in comments]}",
+        )
+        self.assertTrue(
+            any("missing HSN" in c.content for c in comments),
+            "audit comment must quote the suppressed flag_reason",
+        )
+
+    def test_override_rejects_mapped_row(self) -> None:
+        item_code = f"{PREFIX}cf-mapped-skip"
+        _ensure_test_company()
+        _seed_mapped_item(item_code)
+        map_name = frappe.db.get_value(
+            "EasyEcom Item Map", {"ee_sku": item_code}, "name"
+        )
+        result = mark_mapped_override(item_map_name=map_name)
+        self.assertFalse(result["ok"])
+        self.assertIn("not Created-Flagged", result["message"])
+
+    def test_override_rejects_unknown_map(self) -> None:
+        result = mark_mapped_override(item_map_name="NO-SUCH-MAP-XYZZY")
+        self.assertFalse(result["ok"])
+        self.assertIn("not found", result["message"].lower())
+
+    def test_override_refused_for_operator_role(self) -> None:
+        item_code, map_name = self._seed_cf_row(f"{PREFIX}cf-op")
+        email = "op-mark-mapped@test.local"
+        if frappe.db.exists("User", email):
+            frappe.delete_doc(
+                "User", email, force=True, ignore_permissions=True
+            )
+        u = frappe.new_doc("User")
+        u.update({
+            "email": email, "first_name": "Op",
+            "send_welcome_email": 0, "enabled": 1,
+        })
+        u.insert(ignore_permissions=True)
+        u.append("roles", {"role": "EasyEcom Operator"})
+        u.save(ignore_permissions=True)
+        frappe.db.commit()
+        orig = frappe.session.user
+        frappe.set_user(email)
+        try:
+            with self.assertRaises(frappe.PermissionError):
+                mark_mapped_override(item_map_name=map_name)
+        finally:
+            frappe.set_user(orig)
+            frappe.delete_doc("User", email, force=True, ignore_permissions=True)
+            frappe.db.commit()

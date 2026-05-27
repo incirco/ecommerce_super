@@ -16,6 +16,8 @@
   "ee_cp_id",
   "flag_section",
   "flag_reason",
+  "re_evaluate_from_ee_action",
+  "mark_mapped_override_action",
   "drift_section",
   "drift_detected_at",
   "drift_fields",
@@ -96,6 +98,20 @@
    "fieldtype": "Small Text",
    "label": "Flag Reason",
    "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: a plain-English explanation the FDE can act on (e.g. 'missing HSN', 'unsupported product_type=variant_parent', 'EE-side edit to product_name after onboarding flip'). For Drift rows, the structured per-field diff lives in the Drift Fields table below; flag_reason summarises (e.g. '3 fields drifted')."
+  },
+  {
+   "fieldname": "re_evaluate_from_ee_action",
+   "fieldtype": "Button",
+   "label": "Re-evaluate from EE",
+   "depends_on": "eval:doc.status==='Created-Flagged'",
+   "description": "Re-pull THIS SKU from EE and re-run the flag-evaluation, without triggering the account-wide cursor walk. Use after you've fixed the source of a flag (set tax_rule_name in EE, corrected the UOM, etc.) and want to verify this row flips back to Mapped immediately. Walks GetProductMaster up to ~200 pages looking for the SKU — fast on small catalogues, ~5–10s on a 2000-product one. If the SKU is no longer in EE (deleted upstream), the call surfaces that cleanly."
+  },
+  {
+   "fieldname": "mark_mapped_override_action",
+   "fieldtype": "Button",
+   "label": "Mark Mapped (override flags)",
+   "depends_on": "eval:doc.status==='Created-Flagged'",
+   "description": "FDE/SM override — flip a Created-Flagged row to Mapped WITHOUT fixing the underlying flag(s). Use case: the flag is genuinely benign for this Item (e.g. EE doesn't carry a tax_rule_name for a non-taxable accessory and the FDE has confirmed that's intentional) and the FDE wants to suppress it without changing source data. The next pull WILL re-evaluate — if the same flag fires again, the row flips back to Created-Flagged. To suppress permanently, fix the source (recommended) or add field-level exclusions if/when that becomes a supported pattern for CF rows. Each override is audit-logged via Frappe's Comment trail. Confirm dialog quotes the current flag_reason so the FDE acknowledges what they're suppressing."
   },
   {
    "fieldname": "drift_section",

@@ -458,34 +458,74 @@ def _create_customer(
     gstin: str,
     gst_category: str | None,
 ) -> Any:
-    """Insert a new Customer. Frappe auto-names (CUST-YYYY-NNNNN); the
-    docname is NOT the customer_name. Caller captures customer.name.
+    """Insert a new Customer. Frappe auto-names (CUST-YYYY-NNNNN) by
+    default — the docname is NOT the customer_name. Caller captures
+    customer.name.
+
+    **Dup-name resilience** (defensive, mirrors §8f supplier_pull):
+    ERPNext's default Customer Naming By is "Naming Series" so dup
+    customer_names DON'T collide on docname. BUT clients can change
+    Selling Settings.cust_master_name to "Customer Name" — at which
+    point Customer.name = customer_name and a second EE customer with
+    the same companyname raises DuplicateEntryError. The smoke run
+    against Harmony didn't trip this (Harmony's 26 customers all have
+    unique companynames), but a real client with EE-side test data or
+    a Customer-Name autoname config would hit it on the first pull.
+    Catch + retry-with-suffix mirrors the §8f Supplier fix.
 
     Caller is responsible for catching frappe.ValidationError from
     India Compliance — we don't swallow here so the caller can decide
     between FNC (validate failure) vs raise (infra failure)."""
-    customer = frappe.new_doc("Customer")
-    payload: dict[str, Any] = {
-        "customer_name": (erpnext_fields.get("customer_name") or "").strip()
-        or f"EE Customer {ee_c_id}",
-        "customer_type": "Company",  # §8e wholesale is B2B/Company
-        "customer_group": _default_customer_group(),
-        "territory": _default_territory(),
-    }
-    if erpnext_fields.get("email_id"):
-        payload["email_id"] = erpnext_fields["email_id"]
-    if erpnext_fields.get("mobile_no"):
-        payload["mobile_no"] = erpnext_fields["mobile_no"]
-    if erpnext_fields.get("default_currency"):
-        payload["default_currency"] = erpnext_fields["default_currency"]
-    if gstin:
-        payload["gstin"] = gstin
-    if gst_category:
-        payload["gst_category"] = gst_category
+    customer_name = (
+        (erpnext_fields.get("customer_name") or "").strip()
+        or f"EE Customer {ee_c_id}"
+    )
 
-    customer.update(payload)
-    customer.insert(ignore_permissions=True)
-    return customer
+    def _build(name_for_customer: str) -> Any:
+        c = frappe.new_doc("Customer")
+        payload: dict[str, Any] = {
+            "customer_name": name_for_customer,
+            "customer_type": "Company",  # §8e wholesale is B2B/Company
+            "customer_group": _default_customer_group(),
+            "territory": _default_territory(),
+        }
+        if erpnext_fields.get("email_id"):
+            payload["email_id"] = erpnext_fields["email_id"]
+        if erpnext_fields.get("mobile_no"):
+            payload["mobile_no"] = erpnext_fields["mobile_no"]
+        if erpnext_fields.get("default_currency"):
+            payload["default_currency"] = erpnext_fields["default_currency"]
+        if gstin:
+            payload["gstin"] = gstin
+        if gst_category:
+            payload["gst_category"] = gst_category
+        c.update(payload)
+        return c
+
+    customer = _build(customer_name)
+    try:
+        customer.insert(ignore_permissions=True)
+        return customer
+    except frappe.DuplicateEntryError:
+        # Customer Naming By="Customer Name" config + another customer
+        # already has this docname. Disambiguate with the EE c_id
+        # (unique by definition) so both rows land. customer_name on
+        # the doc shows both pieces so the FDE can identify the row.
+        disambiguated = f"{customer_name} ({ee_c_id})"
+        customer = _build(disambiguated)
+        customer.insert(ignore_permissions=True)
+        frappe.log_error(
+            title=f"customer_pull: dup-name disambiguation for c_id={ee_c_id}",
+            message=(
+                f"EE companyname={customer_name!r} collided with an "
+                f"existing Customer docname (Selling Settings."
+                "cust_master_name='Customer Name'); created as "
+                f"{disambiguated!r} (docname={customer.name!r}). c_id "
+                "remains the join key on the Customer Map; downstream "
+                "lookups via the Map are unaffected."
+            ),
+        )
+        return customer
 
 
 def _create_address_strict(
