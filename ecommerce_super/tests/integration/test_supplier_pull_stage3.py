@@ -941,3 +941,166 @@ class TestStaleSupplierSyncDoesNotRun(FrappeTestCase):
         )
         self.assertIn("EasyEcom-Supplier-Pull", active_pulls)
         self.assertNotIn("EasyEcom-Supplier-Sync", active_pulls)
+
+
+_DUP_PREFIX = "TEST-8F-DUP-"
+
+
+class TestSupplierDupNameResilience(FrappeTestCase):
+    """Regression for the blank-site smoke finding 2026-05-27:
+    Harmony's sandbox has multiple vendors sharing the same
+    `vendor_name` (e.g. 'MSTEST_123', 'Akanksha', 'library'). On a
+    fresh ERPNext install (FrappeCloud staging, blank smoke site),
+    Buying Settings.supp_master_name defaults to "Supplier Name" —
+    meaning Supplier.name = supplier_name. So the second insert of a
+    same-named vendor collides on Supplier.name and raises
+    DuplicateEntryError. The fix in supplier_pull._create_supplier
+    retries once with a vendor_c_id suffix on the supplier_name;
+    both rows end up distinct, the Supplier Map carries the real
+    vendor_c_id as the join key, and the FDE sees both in the list.
+
+    This test temporarily forces supp_master_name='Supplier Name'
+    (the FrappeCloud / fresh-install default) so the dup behaviour
+    is deterministic regardless of the dev site's customised naming
+    config."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        _seed_lookups_cache()
+
+    def setUp(self) -> None:
+        # Force Supplier autoname=field:supplier_name to match the
+        # FrappeCloud / fresh-ERPNext default — that's where the dup-
+        # name bug actually fires (this dev site uses 'Naming Series',
+        # so without the override the test would pass vacuously).
+        self._orig_supp_master_name = frappe.db.get_single_value(
+            "Buying Settings", "supp_master_name"
+        )
+        frappe.db.set_single_value(
+            "Buying Settings", "supp_master_name", "Supplier Name"
+        )
+        # ERPNext's Supplier.autoname_from() reads the meta's autoname
+        # field via Buying Settings — we must force the doctype's
+        # autoname property too, since the Supplier controller reads
+        # it on insert.
+        self._orig_autoname = frappe.get_meta("Supplier").autoname
+        frappe.db.set_value(
+            "DocType", "Supplier", "autoname", "field:supplier_name",
+            update_modified=False,
+        )
+        frappe.db.commit()
+        frappe.clear_cache(doctype="Supplier")
+
+        _wipe_supplier_maps()
+        for n in frappe.db.get_all(
+            "Supplier",
+            filters={"supplier_name": ("like", f"{_DUP_PREFIX}%")},
+            pluck="name",
+        ):
+            try:
+                frappe.delete_doc("Supplier", n, force=True, ignore_permissions=True)
+            except Exception:
+                pass
+        frappe.db.commit()
+
+    def tearDown(self) -> None:
+        _wipe_supplier_maps()
+        for n in frappe.db.get_all(
+            "Supplier",
+            filters={"supplier_name": ("like", f"{_DUP_PREFIX}%")},
+            pluck="name",
+        ):
+            try:
+                frappe.delete_doc("Supplier", n, force=True, ignore_permissions=True)
+            except Exception:
+                pass
+        # Restore the dev site's original naming preference.
+        if self._orig_supp_master_name is not None:
+            frappe.db.set_single_value(
+                "Buying Settings",
+                "supp_master_name",
+                self._orig_supp_master_name,
+            )
+        frappe.db.set_value(
+            "DocType", "Supplier", "autoname",
+            self._orig_autoname or "",
+            update_modified=False,
+        )
+        frappe.clear_cache(doctype="Supplier")
+        frappe.db.commit()
+
+    def _row(self, *, c_id: str, name: str, vendor_code: str) -> dict:
+        return {
+            "vendor_c_id": c_id,
+            "vendor_code": vendor_code,
+            "vendor_name": name,
+            "tax_identification_number": VALID_GSTIN_DELHI,
+            "pan": "ABCDE1234F",
+            "email": f"{vendor_code.lower()}@test.local",
+            "contact_number": "9999900001",
+            "active": 1,
+            "currency_code": "INR",
+            "address": {
+                "billing": {
+                    "address": "1 Test",
+                    "city": "Delhi",
+                    "state_name": "Delhi",
+                    "zip": "110001",
+                    "country": "India",
+                },
+                "dispatch": [],
+            },
+        }
+
+    def test_dup_name_second_supplier_disambiguates_via_vendor_c_id(self) -> None:
+        executor = FieldMappingExecutor(SUPPLIER_PULL_RULESET)
+        dup_name = f"{_DUP_PREFIX}DupName"
+        # vendor_c_id is Int in EE — the ruleset's int_to_str
+        # transform enforces that. Use big-enough numbers that won't
+        # collide with prior smoke artifacts.
+        c_id_a, c_id_b = 950001, 950002
+
+        # First row — happy path.
+        out1 = process_one_supplier(
+            self._row(c_id=c_id_a, name=dup_name, vendor_code="VC-A"),
+            executor=executor, account_mode=MODE_ONBOARDING,
+        )
+        self.assertEqual(out1.status, "Mapped")
+        first_docname = out1.supplier_docname
+        self.assertEqual(
+            frappe.db.get_value("Supplier", first_docname, "supplier_name"),
+            dup_name,
+            "first Supplier keeps the EE vendor_name verbatim",
+        )
+
+        # Second row — DIFFERENT vendor_c_id, SAME vendor_name. Without
+        # the fix this raised DuplicateEntryError; with the fix it
+        # disambiguates.
+        out2 = process_one_supplier(
+            self._row(c_id=c_id_b, name=dup_name, vendor_code="VC-B"),
+            executor=executor, account_mode=MODE_ONBOARDING,
+        )
+        self.assertEqual(out2.status, "Mapped")
+        self.assertEqual(out2.operation, "created")
+        self.assertNotEqual(out2.supplier_docname, first_docname)
+        self.assertEqual(
+            frappe.db.get_value("Supplier", out2.supplier_docname, "supplier_name"),
+            f"{dup_name} ({c_id_b})",
+            "second Supplier's supplier_name carries the vendor_c_id "
+            "suffix so the FDE can distinguish both rows",
+        )
+
+        # Map row's join key is still the read-side vendor_c_id —
+        # downstream PO/GRN lookups via the Map are unaffected.
+        m = frappe.db.get_value(
+            "EasyEcom Supplier Map",
+            {
+                "erpnext_doctype": "Supplier",
+                "erpnext_name": out2.supplier_docname,
+            },
+            ["ee_vendor_c_id", "ee_vendor_id"],
+            as_dict=True,
+        )
+        self.assertEqual(m.ee_vendor_c_id, str(c_id_b))
+        self.assertEqual(m.ee_vendor_id, "VC-B")

@@ -148,3 +148,94 @@ class TestAccountCreation(FrappeTestCase):
                 frappe.ValidationError, msg=f"Bad endpoint {bad} should be rejected"
             ):
                 doc.insert(ignore_permissions=True)
+
+
+class TestPasswordFieldEncryption(FrappeTestCase):
+    """Regression for the cold-start blank-site finding 2026-05-27:
+    Frappe's auto-encrypt-on-insert pass skips the `email` Password
+    field (collides with reserved name convention), so programmatic
+    creates (scripts / fixtures / factories / bench execute) end up
+    with no `email` row in `__Auth`. Every subsequent EasyEcomClient
+    call then fails with 'Password not found for EasyEcom Account ...
+    email'. The after_insert hook on EasyEcomAccount closes the gap.
+
+    Form-side saves on the desk work without the hook because
+    Frappe's form-handler path encrypts all Password fields uniformly;
+    only programmatic-create paths need the controller-level guard."""
+
+    def setUp(self) -> None:
+        cleanup_easyecom_state()
+
+    def tearDown(self) -> None:
+        cleanup_easyecom_state()
+
+    def test_all_password_fields_round_trip_after_programmatic_insert(self) -> None:
+        from frappe.utils.password import get_decrypted_password
+
+        doc = frappe.new_doc("EasyEcom Account")
+        doc.update(
+            {
+                "account_name": "acc-pwd-test",
+                "environment_badge": "Sandbox",
+                "api_endpoint": "https://api.example.com",
+                "x_api_key": "xak-1234567890",
+                "email": "test@example.com",
+                "password": "supersecret",
+                "rate_limit_tier": "Silver",
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        # ALL three Password fields must decrypt back to the plaintext
+        # we sent — the after_insert hook re-encrypts whatever Frappe's
+        # auto-pass skipped.
+        self.assertEqual(
+            get_decrypted_password("EasyEcom Account", "acc-pwd-test", "x_api_key"),
+            "xak-1234567890",
+        )
+        self.assertEqual(
+            get_decrypted_password("EasyEcom Account", "acc-pwd-test", "email"),
+            "test@example.com",
+            "email is the one Frappe's auto-encryption skips — the "
+            "hook must close that gap or every programmatic create "
+            "breaks the client layer",
+        )
+        self.assertEqual(
+            get_decrypted_password("EasyEcom Account", "acc-pwd-test", "password"),
+            "supersecret",
+        )
+
+    def test_hook_is_idempotent_on_resave(self) -> None:
+        """Saving the doc again must not corrupt the existing encrypted
+        values. The hook compares the stored value before re-writing."""
+        from frappe.utils.password import get_decrypted_password
+
+        doc = frappe.new_doc("EasyEcom Account")
+        doc.update(
+            {
+                "account_name": "acc-pwd-idempotent",
+                "environment_badge": "Sandbox",
+                "api_endpoint": "https://api.example.com",
+                "x_api_key": "xak-once",
+                "email": "once@example.com",
+                "password": "pwd-once",
+                "rate_limit_tier": "Silver",
+            }
+        )
+        doc.insert(ignore_permissions=True)
+        # Save again with no field changes (form-side flow when FDE
+        # opens + saves without editing). after_insert fires only on
+        # insert, not on save, so this just verifies on_save doesn't
+        # blow up; the prior round-trip values must survive.
+        doc.reload()
+        doc.save(ignore_permissions=True)
+
+        self.assertEqual(
+            get_decrypted_password("EasyEcom Account", "acc-pwd-idempotent", "email"),
+            "once@example.com",
+        )
+        self.assertEqual(
+            get_decrypted_password("EasyEcom Account", "acc-pwd-idempotent", "password"),
+            "pwd-once",
+        )

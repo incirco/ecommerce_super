@@ -706,31 +706,73 @@ def _create_supplier(
     the docname is the supplier_name. We capture supplier.name from
     the returned doc.
 
+    **Dup-name resilience**: Harmony's sandbox + plenty of real-client
+    EE tenants have multiple vendors that legitimately share the
+    same vendor_name (e.g. 'MSTEST_123', 'Akanksha', 'library' in
+    Harmony — terse / test-data-ish names that collide on
+    Supplier.name because ERPNext autonames by supplier_name). The
+    second insert would raise DuplicateEntryError and the savepoint
+    isolation would surface it as a failed pull. Catch on first
+    failure, append a `-{ee_vendor_c_id}` suffix (guaranteed unique
+    by EE), retry once. supplier_name itself stays as the EE value
+    (only `.name` carries the disambiguation), so the FDE sees the
+    real EE name in the list view + on linked POs/GRNs.
+
     Caller is responsible for catching frappe.ValidationError from
     India Compliance — we don't swallow here so the caller can decide
     between FNC (validate failure) vs raise (infra failure).
     """
-    supplier = frappe.new_doc("Supplier")
-    payload: dict[str, Any] = {
-        "supplier_name": (erpnext_fields.get("supplier_name") or "").strip()
-        or f"EE Supplier {ee_vendor_c_id}",
-        "supplier_type": "Company",
-        "supplier_group": _default_supplier_group(),
-        "country": country,
-        "disabled": 0 if is_active else 1,
-    }
-    if erpnext_fields.get("default_currency"):
-        payload["default_currency"] = erpnext_fields["default_currency"]
-    if gstin:
-        payload["gstin"] = gstin
-    if pan:
-        payload["pan"] = pan
-    if gst_category:
-        payload["gst_category"] = gst_category
+    supplier_name = (
+        (erpnext_fields.get("supplier_name") or "").strip()
+        or f"EE Supplier {ee_vendor_c_id}"
+    )
 
-    supplier.update(payload)
-    supplier.insert(ignore_permissions=True)
-    return supplier
+    def _build(name_for_docname: str) -> Any:
+        s = frappe.new_doc("Supplier")
+        payload: dict[str, Any] = {
+            # supplier_name is what shows in the list/links; on first
+            # try it equals the EE name, on retry it carries the
+            # vendor_c_id suffix so the autoname doesn't collide.
+            "supplier_name": name_for_docname,
+            "supplier_type": "Company",
+            "supplier_group": _default_supplier_group(),
+            "country": country,
+            "disabled": 0 if is_active else 1,
+        }
+        if erpnext_fields.get("default_currency"):
+            payload["default_currency"] = erpnext_fields["default_currency"]
+        if gstin:
+            payload["gstin"] = gstin
+        if pan:
+            payload["pan"] = pan
+        if gst_category:
+            payload["gst_category"] = gst_category
+        s.update(payload)
+        return s
+
+    supplier = _build(supplier_name)
+    try:
+        supplier.insert(ignore_permissions=True)
+        return supplier
+    except frappe.DuplicateEntryError:
+        # ERPNext autoname collision — another Supplier already
+        # carries this docname. Disambiguate by appending the EE
+        # read-key (guaranteed unique). The new supplier_name shows
+        # both pieces so the FDE can still find/identify the row.
+        disambiguated = f"{supplier_name} ({ee_vendor_c_id})"
+        supplier = _build(disambiguated)
+        supplier.insert(ignore_permissions=True)
+        frappe.log_error(
+            title=f"supplier_pull: dup-name disambiguation for vendor_c_id={ee_vendor_c_id}",
+            message=(
+                f"EE vendor_name={supplier_name!r} collided with an existing "
+                f"Supplier docname; created as {disambiguated!r} (docname="
+                f"{supplier.name!r}). vendor_c_id remains the join key on "
+                "the Supplier Map; downstream lookups via the Map are "
+                "unaffected."
+            ),
+        )
+        return supplier
 
 
 def _create_address_strict(

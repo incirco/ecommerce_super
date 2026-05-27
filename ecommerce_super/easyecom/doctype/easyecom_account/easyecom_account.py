@@ -56,6 +56,57 @@ class EasyEcomAccount(Document):
         self._update_webhook_endpoint_display()
         self._validate_single_enabled_account()
 
+    def after_insert(self) -> None:
+        """Belt-and-suspenders Password-field encryption.
+
+        Frappe v15/v16's auto-encrypt-on-insert pass is INCONSISTENT
+        for Password-typed fields whose fieldname collides with
+        reserved names (specifically `email` — auto-encryption skips
+        it; `password` + `x_api_key` + `webhook_token` are encrypted
+        normally). Form-side saves DO encrypt all four correctly, so
+        the FDE's create-via-desk path works; the failure mode shows
+        up on programmatic creates (scripts, fixtures, factories,
+        bench execute) — the resulting Account has no `email` row in
+        __Auth, and every subsequent EasyEcomClient call fails with
+        'Password not found for EasyEcom Account ... email'.
+
+        Live-found on the blank-site smoke 2026-05-27 (cold-start
+        bring-up of smoke-test.local). The same gotcha would bite
+        any future fixture-driven onboarding or any scripted
+        multi-site provisioning, so the controller closes the gap
+        unconditionally.
+
+        Idempotent: only writes when the on-doc plaintext value is
+        a non-empty string AND differs from what's already encrypted
+        in __Auth. Existing accounts on FrappeCloud staging are
+        unaffected.
+        """
+        from frappe.utils.password import (
+            get_decrypted_password,
+            set_encrypted_password,
+        )
+
+        for field in self.REDACTED_FIELDS:
+            plaintext = self.get(field) or ""
+            if not isinstance(plaintext, str) or not plaintext.strip():
+                continue
+            # Skip if the value on the doc is the redacted-asterisks
+            # mask (Frappe's read-back of a Password field returns
+            # the mask, not the plaintext).
+            if plaintext.startswith("*") and all(c == "*" for c in plaintext):
+                continue
+            try:
+                stored = get_decrypted_password(
+                    "EasyEcom Account", self.name, field
+                )
+            except Exception:
+                stored = None
+            if stored == plaintext:
+                continue
+            set_encrypted_password(
+                "EasyEcom Account", self.name, plaintext, field
+            )
+
     def _validate_single_enabled_account(self) -> None:
         """§8.1 / Stage-6-audit #11 — at most one EasyEcom Account may
         be enabled at a time.
