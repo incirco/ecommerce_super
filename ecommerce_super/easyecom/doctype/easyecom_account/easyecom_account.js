@@ -191,15 +191,15 @@ function _runProductDiscovery(frm) {
     }
     const isErpnextMastered = frm.doc.item_master_mode === "erpnext_mastered";
     const verb = isErpnextMastered
-        ? __("Drift Detection (§8d Pull post-flip)")
-        : __("Pulling /Products/GetProductMaster…");
+        ? __("Enqueuing drift detection (§8d Pull post-flip)…")
+        : __("Enqueuing /Products/GetProductMaster pull…");
     frappe.show_alert({message: verb, indicator: "blue"});
 
     frappe.call({
         method: "ecommerce_super.easyecom.flows.item_pull.discover_products",
         args: {account: frm.doc.name},
-        freeze: true,
-        freeze_message: verb,
+        // Async-by-default: the server enqueues and returns immediately,
+        // so no freeze needed. The HTTP call itself is fast.
         callback(r) {
             const result = r.message || {};
             if (!result.ok) {
@@ -210,6 +210,24 @@ function _runProductDiscovery(frm) {
                 });
                 return;
             }
+            // Async response: server enqueued into the long queue.
+            if (result.enqueued) {
+                frappe.msgprint({
+                    title: __("Product Discovery Enqueued"),
+                    message: __(
+                        "<b>Discovery is running in the background.</b><br><br>" +
+                            "The cursor advances page-by-page on the EasyEcom Account — refresh this form to see <code>item_pull_cursor_at</code> update. " +
+                            "Created Items + Map rows appear in the Item Map list as the worker pulls them.<br><br>" +
+                            "RQ job: <code>{0}</code> (long queue, 3600s timeout)<br><br>" +
+                            "<a href='/app/easyecom-item-map'>Open EasyEcom Item Map list →</a> · " +
+                            "<a href='/app/error-log?reference_doctype=EasyEcom Account'>Open Error Log →</a>",
+                        [frappe.utils.escape_html(result.job_id || "(no id)")]
+                    ),
+                    indicator: "blue",
+                });
+                return;
+            }
+            // Sync (inline=True) response: render the rich result.
             const lines = [
                 __(
                     "Reported: {0} | Pages: {1} | Processed: {2}",
@@ -234,7 +252,6 @@ function _runProductDiscovery(frm) {
                     ).join("<br>")
                 );
             }
-            // Worklist deep-links.
             lines.push(
                 `<br><br><a href="/app/easyecom-item-map">Open EasyEcom Item Map list →</a>`
             );
@@ -766,13 +783,12 @@ frappe.ui.form.on("EasyEcom Account", {
             return;
         }
         frappe.show_alert({
-            message: __("Pulling /Wholesale/v2/UserManagement…"),
+            message: __("Enqueuing /Wholesale/v2/UserManagement pull…"),
             indicator: "blue",
         });
         frappe.call({
             method: "ecommerce_super.easyecom.api.customer_pull.discover_customers",
-            freeze: true,
-            freeze_message: __("Pulling wholesale customers…"),
+            // Async-by-default: server enqueues and returns immediately.
             callback(r) {
                 const result = r.message || {};
                 if (!result.ok) {
@@ -783,6 +799,22 @@ frappe.ui.form.on("EasyEcom Account", {
                     });
                     return;
                 }
+                if (result.enqueued) {
+                    frappe.msgprint({
+                        title: __("Customer Discovery Enqueued"),
+                        message: __(
+                            "<b>Discovery is running in the background.</b><br><br>" +
+                                "Created Customers + Map rows appear in the Customer Map list as the worker pulls them.<br><br>" +
+                                "RQ job: <code>{0}</code> (long queue, 3600s timeout)<br><br>" +
+                                "<a href='/app/easyecom-customer-map'>Open Customer Map list →</a> · " +
+                                "<a href='/app/error-log'>Open Error Log →</a>",
+                            [frappe.utils.escape_html(result.job_id || "(no id)")]
+                        ),
+                        indicator: "blue",
+                    });
+                    return;
+                }
+                // Sync (inline=True) path
                 const lines = [
                     __(
                         "Total: <b>{0}</b> | Created: {1} | Skipped (mapped): {2} | Created-Flagged: {3} | FNC: {4} | Failed: {5}",
@@ -837,16 +869,15 @@ frappe.ui.form.on("EasyEcom Account", {
         frappe.show_alert({
             message: __(
                 startFresh
-                    ? "Pulling /wms/V2/getVendors from the top…"
-                    : "Resuming supplier pull from saved cursor…"
+                    ? "Enqueuing /wms/V2/getVendors pull from the top…"
+                    : "Enqueuing supplier pull resume from saved cursor…"
             ),
             indicator: "blue",
         });
         frappe.call({
             method: "ecommerce_super.easyecom.api.supplier_pull.discover_suppliers",
             args: {start_fresh: startFresh ? 1 : 0},
-            freeze: true,
-            freeze_message: __("Pulling vendors…"),
+            // Async-by-default: server enqueues and returns immediately.
             callback(r) {
                 const result = r.message || {};
                 if (!result.ok) {
@@ -857,6 +888,23 @@ frappe.ui.form.on("EasyEcom Account", {
                     });
                     return;
                 }
+                if (result.enqueued) {
+                    frappe.msgprint({
+                        title: __("Supplier Discovery Enqueued"),
+                        message: __(
+                            "<b>Discovery is running in the background.</b><br><br>" +
+                                "The cursor advances page-by-page on the EasyEcom Account — refresh this form to see <code>supplier_pull_cursor_at</code> update. " +
+                                "Created Suppliers + Map rows appear in the Supplier Map list as the worker pulls them.<br><br>" +
+                                "RQ job: <code>{0}</code> (long queue, 3600s timeout)<br><br>" +
+                                "<a href='/app/easyecom-supplier-map'>Open Supplier Map list →</a> · " +
+                                "<a href='/app/error-log'>Open Error Log →</a>",
+                            [frappe.utils.escape_html(result.job_id || "(no id)")]
+                        ),
+                        indicator: "blue",
+                    });
+                    return;
+                }
+                // Sync (inline=True) path
                 const lines = [
                     __(
                         "Pages: {0} | Total: <b>{1}</b> | Created: {2} | Skipped (mapped): {3} | Disabled: {4} | Created-Flagged: {5} | FNC: {6} | Failed: {7}",

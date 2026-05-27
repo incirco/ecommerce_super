@@ -609,3 +609,62 @@ class TestEndpointInventory(FrappeTestCase):
                 "User", email, force=True, ignore_permissions=True
             )
             frappe.db.commit()
+
+
+class TestDiscoverAsyncByDefault(FrappeTestCase):
+    """Regression for the FrappeCloud "Discover Products call itself
+    failed (network or permission)" issue that fires on >2000-row
+    pulls: the whitelist endpoints must enqueue by default and only
+    run inline when explicitly opted in via inline=True. The inline
+    path is reserved for tests + small catalogues that fit in the 120s
+    desk-whitelist window."""
+
+    def test_discover_suppliers_async_by_default(self) -> None:
+        """Default invocation (no inline arg) returns enqueued=True
+        without calling the underlying pull_suppliers."""
+        from unittest.mock import patch
+        from ecommerce_super.easyecom.api.supplier_pull import (
+            discover_suppliers,
+        )
+
+        with patch(
+            "ecommerce_super.easyecom.api.supplier_pull.pull_suppliers"
+        ) as mock_pull, patch(
+            "ecommerce_super.easyecom.api.supplier_pull.frappe.enqueue"
+        ) as mock_enqueue:
+            mock_enqueue.return_value.id = "discover_suppliers_test_1"
+            result = discover_suppliers()
+        mock_pull.assert_not_called()
+        mock_enqueue.assert_called_once()
+        # Verify it goes to the long queue with the right timeout.
+        kwargs = mock_enqueue.call_args.kwargs
+        self.assertEqual(kwargs.get("queue"), "long")
+        self.assertEqual(kwargs.get("timeout"), 3600)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["enqueued"])
+
+    def test_discover_suppliers_inline_runs_synchronously(self) -> None:
+        """inline=True bypasses enqueue and calls pull_suppliers
+        directly. Used by tests + small-catalogue runs."""
+        from unittest.mock import MagicMock, patch
+        from ecommerce_super.easyecom.api.supplier_pull import (
+            discover_suppliers,
+        )
+
+        fake_outcome = MagicMock(
+            pages_walked=1, final_cursor=None, total=5, created=5,
+            skipped=0, disabled=0, created_flagged=0,
+            flagged_not_created=0, drift_count=0, failed=0, failures=[],
+        )
+        with patch(
+            "ecommerce_super.easyecom.api.supplier_pull.pull_suppliers",
+            return_value=fake_outcome,
+        ) as mock_pull, patch(
+            "ecommerce_super.easyecom.api.supplier_pull.frappe.enqueue"
+        ) as mock_enqueue:
+            result = discover_suppliers(inline=1)
+        mock_pull.assert_called_once()
+        mock_enqueue.assert_not_called()
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["enqueued"])
+        self.assertEqual(result["total"], 5)

@@ -338,13 +338,28 @@ def pull_products(
 
 @frappe.whitelist()
 def discover_products(
-    account: str, start_fresh: int | bool = False
+    account: str,
+    start_fresh: int | bool = False,
+    inline: int | bool = False,
 ) -> dict[str, Any]:
     """FDE-facing wrapper, mirrors the §8a discover_locations pattern.
 
     Permission: EasyEcom FDE / System Manager / EasyEcom System Manager.
     Operator is read-only — pulling is allowed (no EE mutation) but the
     button is FDE-tier because creating Items is a write.
+
+    DEFAULT: enqueues the pull into the `long` queue (timeout 3600s) and
+    returns immediately with the RQ job id. The HTTP request budget for
+    a desk whitelist call is 120s; a 2000-product cursor walk + per-item
+    IC validation + tax stamping easily exceeds that, and the timeout
+    surfaces in the JS error handler as "(network or permission)" —
+    misleading because the call IS authorised, the server just hasn't
+    finished. Async-by-default fixes this without breaking the cursor's
+    resumable contract (worker advances the cursor page-by-page).
+
+    `inline=True` opt-in for tests and small catalogues that fit within
+    the 120s window. The smoke tests and the existing unit tests use
+    inline so the assertions can read outcome.outcomes synchronously.
     """
     roles = set(frappe.get_roles(frappe.session.user))
     if not roles.intersection(
@@ -354,9 +369,42 @@ def discover_products(
             frappe._("Discover Products requires EasyEcom FDE or System Manager."),
             frappe.PermissionError,
         )
+
+    start_fresh_bool = bool(int(start_fresh or 0))
+
+    if not bool(int(inline or 0)):
+        # Async path — enqueue into the long queue and return immediately.
+        # The cursor + EasyEcom Account watermark fields advance as the
+        # worker processes each page; the FDE sees progress by refreshing
+        # the Account form (item_pull_cursor_at) or the Item Map list.
+        import time as _time
+        job = frappe.enqueue(
+            "ecommerce_super.easyecom.flows.item_pull._discover_products_worker",
+            queue="long",
+            timeout=3600,
+            job_id=f"discover_products_{account}_{int(_time.time())}",
+            account=account,
+            start_fresh=start_fresh_bool,
+        )
+        return {
+            "ok": True,
+            "enqueued": True,
+            "job_id": getattr(job, "id", None) or getattr(job, "name", None),
+            "queue": "long",
+            "message": (
+                "Product discovery enqueued in the long queue. The "
+                "cursor advances page-by-page on the EasyEcom Account; "
+                "refresh this form to see `item_pull_cursor_at` "
+                "update. Created Items + Map rows appear in the Item "
+                "Map list as the worker pulls them. Any per-page "
+                "failures land in Error Log."
+            ),
+        }
+
+    # Inline path (tests + small catalogues).
     try:
         result = pull_products(
-            account_name=account, start_fresh=bool(int(start_fresh or 0))
+            account_name=account, start_fresh=start_fresh_bool
         )
     except Exception as exc:  # noqa: BLE001 — whitelist boundary
         frappe.log_error(
@@ -376,6 +424,7 @@ def discover_products(
         by_status[o.status] = by_status.get(o.status, 0) + 1
     return {
         "ok": True,
+        "enqueued": False,
         "total_reported": result.total_count_reported,
         "pages_walked": result.pages_walked,
         "products_processed": result.products_processed,
@@ -383,6 +432,23 @@ def discover_products(
         "page_failures": result.page_failures[:10],
         "more_to_walk": bool(result.last_cursor),
     }
+
+
+def _discover_products_worker(
+    *, account: str, start_fresh: bool
+) -> None:
+    """Background worker entry-point for async product discovery. Wraps
+    pull_products() so the RQ job's exception handling sees raw failures
+    (the whitelist's try/except is for the HTTP-boundary; here we let
+    RQ + Error Log surface real exceptions for retry/diagnostics)."""
+    try:
+        pull_products(account_name=account, start_fresh=start_fresh)
+    except Exception as exc:  # noqa: BLE001
+        frappe.log_error(
+            title=f"EasyEcom Discover Products (async) failed for {account}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        raise
 
 
 # ----- Drift resolution whitelists (audit fix #7) -----

@@ -24,26 +24,26 @@ from ecommerce_super.easyecom.flows.supplier_pull import pull_suppliers
 
 @frappe.whitelist()
 def discover_suppliers(
-    *, start_fresh: bool | str = True, account: str | None = None
+    *,
+    start_fresh: bool | str = True,
+    account: str | None = None,
+    inline: int | bool = False,
 ) -> dict[str, Any]:
     """Run the §8f pull (mode-aware: onboarding → accept-and-create;
-    erpnext_mastered → drift-detection-only). Returns a JSON-friendly
-    summary.
+    erpnext_mastered → drift-detection-only).
 
-    Args:
-        start_fresh: True (default) clears the cursor and pulls from
-            the top; False resumes from the persisted cursor. JS
-            passes a string; we coerce.
-        account: optional EasyEcom Account docname. Defaults to the
-            single enabled account.
+    DEFAULT: async — enqueues into the `long` queue and returns
+    immediately. The 120s desk whitelist budget is fine for the Harmony
+    sandbox (~41 vendors) but a >2000-vendor cursor walk + IC
+    validation per row blows past it and the JS surfaces "(network or
+    permission)" — misleading, since the pull is authorised, just slow.
+
+    `inline=True` opt-in for tests + small catalogues (existing tests
+    rely on synchronous outcome shape).
 
     Permission: EasyEcom FDE / System Manager / EasyEcom System Manager.
-    Operator is read-only and refused.
-
-    Never raises through the whitelist boundary. On infrastructure
-    failure returns {"ok": False, "message": ...}; per-record
-    failures are aggregated into outcome.failures and returned as
-    part of the success summary.
+    Operator is read-only and refused. Never raises through the
+    whitelist.
     """
     roles = set(frappe.get_roles(frappe.session.user))
     if not roles.intersection(
@@ -64,6 +64,30 @@ def discover_suppliers(
     else:
         start_fresh_bool = bool(start_fresh)
 
+    if not bool(int(inline or 0)):
+        import time as _time
+        job = frappe.enqueue(
+            "ecommerce_super.easyecom.api.supplier_pull._discover_suppliers_worker",
+            queue="long",
+            timeout=3600,
+            job_id=f"discover_suppliers_{account or 'default'}_{int(_time.time())}",
+            account=account,
+            start_fresh=start_fresh_bool,
+        )
+        return {
+            "ok": True,
+            "enqueued": True,
+            "job_id": getattr(job, "id", None) or getattr(job, "name", None),
+            "queue": "long",
+            "message": (
+                "Supplier discovery enqueued in the long queue. The "
+                "cursor advances page-by-page on the EasyEcom Account; "
+                "refresh this form to see `supplier_pull_cursor_at` "
+                "update. Created Suppliers + Map rows appear in the "
+                "Supplier Map list as the worker pulls them."
+            ),
+        }
+
     try:
         outcome = pull_suppliers(start_fresh=start_fresh_bool, account=account)
     except Exception as exc:
@@ -80,6 +104,7 @@ def discover_suppliers(
 
     return {
         "ok": True,
+        "enqueued": False,
         "account": account,
         "pages_walked": outcome.pages_walked,
         "final_cursor_present": bool(outcome.final_cursor),
@@ -93,3 +118,17 @@ def discover_suppliers(
         "failed": outcome.failed,
         "failures_sample": outcome.failures[:5],
     }
+
+
+def _discover_suppliers_worker(
+    *, account: str | None, start_fresh: bool
+) -> None:
+    """Background worker entry-point for async supplier discovery."""
+    try:
+        pull_suppliers(start_fresh=start_fresh, account=account)
+    except Exception as exc:
+        frappe.log_error(
+            title=f"EasyEcom Discover Suppliers (async) failed for {account or '(default)'}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        raise
