@@ -89,6 +89,8 @@
   "supplier_pull_cursor_at",
   "supplier_pull_last_updated_at",
   "supplier_pull_total_seen",
+  "auto_push_suppliers_on_save",
+  "push_all_pending_suppliers_action",
   "item_pull_section",
   "default_uom",
   "item_pull_cursor",
@@ -666,6 +668,19 @@
    "label": "Total Suppliers Seen (last successful pull)",
    "read_only": 1,
    "description": "Aggregate count from the last full successful pull — used by the FDE to monitor that the supplier base size is sane."
+  },
+  {
+   "fieldname": "auto_push_suppliers_on_save",
+   "fieldtype": "Check",
+   "label": "Auto-push Suppliers to EasyEcom on save",
+   "default": "0",
+   "description": "§8f Stage 4 — when ON: every ERPNext Supplier create/edit enqueues a /wms/CreateVendor or /wms/UpdateVendor push. Defaults OFF for safety. Turn ON only when you've configured credentials and want steady-state push automation. The push is queued (non-blocking on save) and obeys the same flagging logic as the batch sweep — unresolvable country / missing mandatory field / IC throws on Indian GSTIN → flag-not-pushed (Supplier Map row), not a broken EE payload. The pull-vs-push ping-pong guard prevents loops (a Supplier that was just pulled by Discover Suppliers doesn't immediately re-push)."
+  },
+  {
+   "fieldname": "push_all_pending_suppliers_action",
+   "fieldtype": "Button",
+   "label": "Push All Pending Suppliers",
+   "description": "§8f Stage 4 — batch sweep: enqueue a /wms/CreateVendor push for every candidate Supplier (supplier_type=Company; no EasyEcom Supplier Map row yet; disabled=0). Returns immediately with the count enqueued; per-Supplier progress lands in Sync Records / Queue Job rows. Non-candidates (already on EE, individual-type, disabled) are skipped at the candidate-query level."
   },
   {
    "fieldname": "item_pull_section",

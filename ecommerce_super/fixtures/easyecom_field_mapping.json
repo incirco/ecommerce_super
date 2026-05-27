@@ -1038,6 +1038,130 @@
  },
  {
   "doctype": "EasyEcom Field Mapping",
+  "name": "EasyEcom-Supplier-Push",
+  "mapping_name": "EasyEcom-Supplier-Push",
+  "entity_type": "Supplier",
+  "direction": "Push",
+  "active": 1,
+  "missing_field_policy": "Permissive",
+  "version": 1,
+  "last_modified_by": "Administrator",
+  "last_modified_at": "2026-05-27 00:00:00",
+  "change_reason": "§8f Stage 4 — ERPNext Supplier + linked Addresses → EE /wms/CreateVendor & /wms/UpdateVendor. SEPARATE from EasyEcom-Supplier-Pull per §8.0 engine policy (one ruleset per direction). LIVE FINDINGS (Harmony 2026-05-27): (1) The mandatory tax field on CreateVendor is named `taxIdentificationNum` — EE docs / packet said `taxIdentificationNumber` but the live error '_taxIdentificationNum is a mandatory Field!_' disclosed the actual name. (2) CreateVendor response carries BOTH ids in data: `data.vendor_id` (echoes the input vendor_code — the WRITE key) AND `data.vendor_c_id` (the NEWLY-assigned READ key). Both are written back to the Supplier Map after a successful create. (3) UpdateVendor request body keys `vendorId` to the WRITE key (vendor_code string); UpdateVendor response returns `data.vendorId` as the READ key (vendor_c_id int) — confirms the §8.3 packet's 58614 hypothesis. (4) State everywhere on push as NAME (no name→id resolution needed, unlike §8e customer push). NO password (vendors aren't portal logins).",
+  "rules": [
+   {
+    "erpnext_path": "supplier_name",
+    "easyecom_path": "companyName",
+    "transform_push": "str_strip",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory companyName. Not marked required: at the ruleset level — the FLOW does the required-presence check so missing input produces Flagged-Not-Created instead of an engine exception."
+   },
+   {
+    "erpnext_path": "ee_vendor_id_seed",
+    "easyecom_path": "vendorCode",
+    "transform_push": "str_strip",
+    "transform_pull": "noop",
+    "notes": "EE's CreateVendor `vendorCode` is the WRITE key seed. ERPNext doesn't have a native vendor code field — the FLOW manufactures one from Supplier.name (sanitised to ASCII-safe characters; max length per EE constraint). Optional on EE; if omitted, EE auto-generates a code."
+   },
+   {
+    "erpnext_path": "supplier_primary_email",
+    "easyecom_path": "emailId",
+    "transform_push": "str_lower",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory emailId. Sourced from Supplier.email_id which fetches from the linked Contact — the FLOW reads this via _gather_supplier_payload_dict (Supplier has no direct email field, only a fetch_from on the Contact link)."
+   },
+   {
+    "erpnext_path": "supplier_primary_contact_number",
+    "easyecom_path": "contactNumber",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "Optional on EE per the docs, but a §8e finding showed EE rejected CreateCustomer when missing — keep the rule and let the FLOW omit when blank."
+   },
+   {
+    "erpnext_path": "firstname",
+    "easyecom_path": "firstName",
+    "transform_push": "str_strip",
+    "transform_pull": "noop",
+    "notes": "Optional. EE shows it as a separate field on getVendors; the FLOW splits supplier_name on first whitespace as a fallback when no Contact link exists."
+   },
+   {
+    "erpnext_path": "lastname",
+    "easyecom_path": "lastName",
+    "transform_push": "str_strip",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "gstin",
+    "easyecom_path": "taxIdentificationNum",
+    "transform_push": "str_upper",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory tax field. FIELD NAME IS taxIdentificationNum (live finding — NOT taxIdentificationNumber as the EE docs / §8f packet said). The FLOW substitutes 'URP' for Indian Unregistered suppliers; foreign suppliers (gst_category=Overseas) can pass an empty string (the FLOW handles the country-aware gating)."
+   },
+   {
+    "erpnext_path": "pan",
+    "easyecom_path": "PAN",
+    "transform_push": "str_upper",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory PAN (capital). The FLOW auto-extracts from gstin[2:12] when blank but GSTIN is present (mirrors IC's behaviour); foreign suppliers can pass empty."
+   },
+   {
+    "erpnext_path": "default_currency",
+    "easyecom_path": "currency",
+    "transform_push": "str_upper",
+    "transform_pull": "noop",
+    "notes": "EE's create mandatory 3-letter currency code. FLOW falls back to 'INR' when Supplier.default_currency is blank."
+   },
+   {
+    "erpnext_path": "billing_street",
+    "easyecom_path": "address",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "EE's CreateVendor has a SINGLE-address payload (street/city/state/zip/country at top level), unlike the dual billing+dispatch envelope on getVendors. The FLOW prefers the Supplier's Billing Address row; falls back to Shipping when Billing absent."
+   },
+   {
+    "erpnext_path": "billing_city",
+    "easyecom_path": "city",
+    "transform_push": "identity",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "billing_postal_code",
+    "easyecom_path": "zip",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "EE accepts zip as string; no name→int resolution like state. Keep as identity."
+   },
+   {
+    "erpnext_path": "billing_state_name",
+    "easyecom_path": "state",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "STATE AS NAME on push — both Create and Update use the name (no name→id resolution like §8e customer push). This is a §8.3 specific simplification; the EE backend resolves the name internally for vendors."
+   },
+   {
+    "erpnext_path": "billing_country_name",
+    "easyecom_path": "country",
+    "transform_push": "identity",
+    "transform_pull": "noop"
+   },
+   {
+    "erpnext_path": "prep_days",
+    "easyecom_path": "daysToPrep",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "Lead-time field. ERPNext Supplier doesn't have prep_days natively — Stage 4 leaves it as a parked custom-field hook (FLOW omits when missing). EE accepts it on both create + update."
+   },
+   {
+    "erpnext_path": "shipment_intransit_days",
+    "easyecom_path": "daysToShip",
+    "transform_push": "identity",
+    "transform_pull": "noop",
+    "notes": "Lead-time field. Same parked-custom-field caveat as prep_days."
+   }
+  ]
+ },
+ {
+  "doctype": "EasyEcom Field Mapping",
   "name": "EasyEcom-Location-Pull",
   "mapping_name": "EasyEcom-Location-Pull",
   "entity_type": "Warehouse",

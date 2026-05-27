@@ -266,6 +266,16 @@ doc_events: dict[str, dict[str, str]] = {
         "after_insert": "ecommerce_super.easyecom.flows.customer_push.enqueue_on_customer_change",
         "on_update": "ecommerce_super.easyecom.flows.customer_push.enqueue_on_customer_change",
     },
+    # §8f Stage 4: Supplier auto-push hook. Gated by:
+    #   - auto_push_suppliers_on_save=1 on the enabled EasyEcom Account
+    #     (default 0 — safe by default; opt-in once onboarding stabilises)
+    #   - supplier_type=Company (§8f is wholesale only)
+    #   - not currently in the supplier_pull flow (ping-pong guard via
+    #     frappe.flags.easyecom_supplier_pull_in_flight)
+    "Supplier": {
+        "after_insert": "ecommerce_super.easyecom.flows.supplier_push.enqueue_on_supplier_change",
+        "on_update": "ecommerce_super.easyecom.flows.supplier_push.enqueue_on_supplier_change",
+    },
     # "Sales Order": {
     #     "validate": "ecommerce_super.easyecom.flows.b2b_sales.validate_pre_push",
     #     "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.on_submit_push",
