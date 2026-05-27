@@ -1406,3 +1406,146 @@ class TestNonFoundationalClientConstruction(FrappeTestCase):
             co and frappe.db.exists("Company", co),
             f"company= must be a real Company; got {co!r}",
         )
+
+
+class TestImagePopulation(FrappeTestCase):
+    """§8d Stage 2 — Option A image handling. EE's getProductMaster
+    returns `product_image_url` (single URL string) + `additional_images`
+    (list of URLs). _populate_image_fields copies them onto the
+    translated payload:
+      - product_image_url → Item.image (URL string; ERPNext renders
+        directly).
+      - additional_images → Item.ecs_additional_image_urls (Long Text,
+        JSON-encoded array).
+    NO download, NO Frappe File doc creation. Tests target the pure
+    helper directly so they don't drag in the full pull-flow."""
+
+    def test_main_image_url_copied(self) -> None:
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        product = {
+            "sku": "TEST-IMG-1",
+            "product_image_url": "https://example.test/main.jpg",
+        }
+        erpnext_fields: dict = {}
+        _populate_image_fields(product, erpnext_fields)
+        self.assertEqual(
+            erpnext_fields["image"], "https://example.test/main.jpg"
+        )
+
+    def test_additional_images_json_encoded(self) -> None:
+        import json as _json
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        product = {
+            "sku": "TEST-IMG-2",
+            "additional_images": [
+                "https://example.test/a.jpg",
+                "https://example.test/b.jpg",
+                "https://example.test/c.jpg",
+            ],
+        }
+        erpnext_fields: dict = {}
+        _populate_image_fields(product, erpnext_fields)
+        stored = erpnext_fields["ecs_additional_image_urls"]
+        self.assertIsInstance(stored, str, "must be JSON string, not list")
+        parsed = _json.loads(stored)
+        self.assertEqual(len(parsed), 3)
+        self.assertEqual(parsed[0], "https://example.test/a.jpg")
+
+    def test_empty_list_persists_as_empty_json_array(self) -> None:
+        """Distinguish 'EE said no extras' (empty list → '[]') from
+        'EE didn't send the field' (absent → don't write)."""
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        product = {"sku": "TEST-IMG-EMPTY", "additional_images": []}
+        erpnext_fields: dict = {}
+        _populate_image_fields(product, erpnext_fields)
+        self.assertEqual(erpnext_fields["ecs_additional_image_urls"], "[]")
+
+    def test_absent_fields_do_not_write(self) -> None:
+        """No source key → no write. Protects against NULLing out an
+        existing Item.image when the pull's payload momentarily drops
+        the field (same additive-refresh semantics as the rest of the
+        Item field set)."""
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        product = {"sku": "TEST-IMG-ABS"}
+        erpnext_fields: dict = {}
+        _populate_image_fields(product, erpnext_fields)
+        self.assertNotIn("image", erpnext_fields)
+        self.assertNotIn("ecs_additional_image_urls", erpnext_fields)
+
+    def test_empty_main_url_does_not_write(self) -> None:
+        """Empty/whitespace string treated as 'no value' — don't
+        overwrite an existing Item.image with junk."""
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        for empty in ("", "   ", None):
+            product = {
+                "sku": "TEST-IMG-EMPTY-MAIN",
+                "product_image_url": empty,
+            }
+            erpnext_fields: dict = {}
+            _populate_image_fields(product, erpnext_fields)
+            self.assertNotIn(
+                "image", erpnext_fields,
+                f"value {empty!r} should NOT write Item.image",
+            )
+
+    def test_additional_images_filters_junk_entries(self) -> None:
+        """Non-string / empty entries in the list are filtered out
+        before JSON-encoding. EE shouldn't return junk here but we
+        don't trust upstream noise."""
+        import json as _json
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        product = {
+            "sku": "TEST-IMG-DIRTY",
+            "additional_images": [
+                "https://example.test/clean.jpg",
+                "",
+                "   ",
+                None,
+                123,
+                "https://example.test/clean2.jpg",
+            ],
+        }
+        erpnext_fields: dict = {}
+        _populate_image_fields(product, erpnext_fields)
+        parsed = _json.loads(erpnext_fields["ecs_additional_image_urls"])
+        self.assertEqual(parsed, [
+            "https://example.test/clean.jpg",
+            "https://example.test/clean2.jpg",
+        ])
+
+    def test_non_list_additional_images_skipped(self) -> None:
+        """If EE ever sends a non-list for additional_images (e.g. a
+        string or null), skip rather than corrupt the field."""
+        from ecommerce_super.easyecom.flows.item_pull import (
+            _populate_image_fields,
+        )
+        for junk in ("string-not-a-list", 42, {"not": "a list"}, None):
+            product = {"sku": "TEST-IMG-JUNK", "additional_images": junk}
+            erpnext_fields: dict = {}
+            _populate_image_fields(product, erpnext_fields)
+            self.assertNotIn(
+                "ecs_additional_image_urls", erpnext_fields,
+                f"junk {junk!r} must not be written to the field",
+            )
+
+    def test_custom_field_exists_on_item(self) -> None:
+        """Schema check — the patch added the Long Text custom field
+        with the right metadata. Guards against a future regression
+        where the patch gets reverted or moved."""
+        meta = frappe.get_meta("Item")
+        field = meta.get_field("ecs_additional_image_urls")
+        self.assertIsNotNone(field, "Item.ecs_additional_image_urls missing")
+        self.assertEqual(field.fieldtype, "Long Text")
+        self.assertEqual(int(field.read_only or 0), 1)

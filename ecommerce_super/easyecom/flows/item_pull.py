@@ -904,6 +904,20 @@ def _process_one_product_inner(
     # === Step 2: translate via the engine ===
     erpnext_fields = executor.pull(product)
 
+    # === Step 2b: image handling (Option A — URLs only, no download) ===
+    # The engine's transformer vocabulary doesn't include a list→json
+    # encoder and EE's `additional_images` is a list, so image
+    # population happens here as a post-translate side-effect rather
+    # than in the ruleset. URLs are stored verbatim:
+    #   - product_image_url → Item.image (ERPNext renders the URL
+    #     directly as an <img>; accepts URL OR an attached file path).
+    #   - additional_images (list) → Item.ecs_additional_image_urls
+    #     (Long Text, JSON-encoded array; consumers JSON.parse it).
+    # NO download — EE's S3 URLs are assumed reachable and we don't
+    # proxy. NOT drift-comparable (CDN re-uploads cycle URLs even when
+    # the visual is identical; would generate false-positive drift).
+    _populate_image_fields(product, erpnext_fields)
+
     # === Step 3: HSN gate (HOLD, do not create) ===
     hsn = erpnext_fields.get("gst_hsn_code")
     if not hsn or not frappe.db.exists("GST HSN Code", hsn):
@@ -1872,6 +1886,42 @@ def _sync_ean_barcode(item: Any, ee_eanupc: Any) -> None:
 
     item.append("barcodes", {"barcode": eanupc, "barcode_type": "EAN"})
     item.save(ignore_permissions=True)
+
+
+def _populate_image_fields(product: dict, erpnext_fields: dict) -> None:
+    """Copy EE's image URLs onto the translated payload (Option A).
+
+    Mutates `erpnext_fields` in place. Idempotent — re-populates each
+    call (the caller decides whether to overwrite an existing Item.image
+    via the additive-refresh policy in _refresh_existing_item).
+
+    Contracts:
+      - Skip when the source value is missing / None / empty (so an EE
+        payload that momentarily drops the image field doesn't NULL
+        out a previously-captured URL on the existing Item).
+      - additional_images: JSON-encode the list so it lands as a single
+        string in the Long Text field. An EE payload with an empty
+        list `[]` also encodes (as `'[]'`) — the FDE knows EE
+        explicitly has no extras, vs an absent key meaning "EE didn't
+        send the field at all".
+      - Non-list / non-string source values are skipped silently
+        (defensive — EE shouldn't return junk here but if it does, we
+        prefer absence to a corrupt field write).
+    """
+    import json
+
+    main_url = product.get("product_image_url")
+    if isinstance(main_url, str) and main_url.strip():
+        erpnext_fields["image"] = main_url.strip()
+
+    extras = product.get("additional_images")
+    if isinstance(extras, list):
+        # JSON-encode even an empty list — caller distinguishes
+        # "EE has no extras (empty list)" from "EE didn't tell us
+        # (absent key, field stays untouched)".
+        erpnext_fields["ecs_additional_image_urls"] = json.dumps(
+            [u for u in extras if isinstance(u, str) and u.strip()]
+        )
 
 
 def _refresh_existing_item(item: Any, erpnext_fields: dict) -> None:

@@ -105,6 +105,7 @@ Before Section 3 can be built, the local environment must exist: Frappe bench (v
 - §8c tax is pull-direction only — ERPNext-origin items need a manual Item Tax row before push.
 - _diag.py helpers untracked, self-marked safe-to-delete.
 - Pending workspace tiles (Partial Jobs / Webhook Events / Cursor Lag / Open Discrepancies) are labelled-empty placeholders awaiting §9–§13 flows / §23.
+- **Product images (Option A — URL-only pull)**: `product_image_url` → `Item.image` (URL string, ERPNext renders directly); `additional_images` list → `Item.ecs_additional_image_urls` (Long Text, JSON-encoded array). NO download, NO Frappe File doc creation, NO push side. EE's S3 URLs assumed reachable. NOT drift-comparable (CDN re-uploads cycle URLs even when visual is identical). If a client needs offline-resilient images or wants to push ERPNext-side image edits back to EE, that's Option B work (~3-4h, needs an EE upload endpoint we haven't validated).
 
 **8d pattern established for downstream:** §8d is the FIRST entity-sync flow to write Sync Records — 8e Customer and 8f Supplier mirror this (8a/8b/8c are foundational §7.7 and correctly don't write them).
 
