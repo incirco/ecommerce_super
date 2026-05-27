@@ -403,6 +403,22 @@ class TestRulesetActive(FrappeTestCase):
         )
         self.assertEqual(rule, "PAN")
 
+    def test_street_field_uses_corrected_ee_name(self) -> None:
+        """LIVE finding 2026-05-27 (post-Stage 6 smoke): EE silently
+        drops the street when sent as `address`. Probed 8 candidate
+        field names — only `street` persists round-trip through
+        getVendors.address.billing.address. This test guards the
+        regression — change requires re-running the probe."""
+        rule = frappe.db.get_value(
+            "EasyEcom Field Mapping Rule",
+            {
+                "parent": "EasyEcom-Supplier-Push",
+                "erpnext_path": "billing_street",
+            },
+            "easyecom_path",
+        )
+        self.assertEqual(rule, "street")
+
 
 class TestHelpers(FrappeTestCase):
     """The pure helpers (no DB I/O)."""

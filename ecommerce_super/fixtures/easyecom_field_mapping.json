@@ -1113,10 +1113,10 @@
    },
    {
     "erpnext_path": "billing_street",
-    "easyecom_path": "address",
+    "easyecom_path": "street",
     "transform_push": "identity",
     "transform_pull": "noop",
-    "notes": "EE's CreateVendor has a SINGLE-address payload (street/city/state/zip/country at top level), unlike the dual billing+dispatch envelope on getVendors. The FLOW prefers the Supplier's Billing Address row; falls back to Shipping when Billing absent."
+    "notes": "EE's CreateVendor has a SINGLE-address payload (street/city/state/zip/country at top level), unlike the dual billing+dispatch envelope on getVendors. The FLOW prefers the Supplier's Billing Address row; falls back to Shipping when Billing absent. **FIELD NAME IS `street` (LIVE FINDING 2026-05-27)** — the EE docs / earlier §8f packet used `address`, but live probe of 8 candidate names showed only `street` persists round-trip through `getVendors.address.billing.address`; `address` and 6 other variants were silently dropped by EE (HTTP 200 but read-back empty). **ASYMMETRY:** UpdateVendor cannot change the street value at all — every candidate field name (flat AND nested) returns 'Updated Successfully' but no-ops EE-side. Subsequent ERPNext-side street edits will surface as drift on the next pull (correct behaviour); resolving such drifts requires manual EE-side correction or vendor recreation, since the API offers no street-update path. Documented in BUILD_TRACKER §8f standing items."
    },
    {
     "erpnext_path": "billing_city",
