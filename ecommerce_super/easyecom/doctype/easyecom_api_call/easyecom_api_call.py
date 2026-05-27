@@ -19,6 +19,32 @@ from frappe.model.document import Document
 
 
 class EasyEcomAPICall(Document):
+    def before_insert(self) -> None:
+        """Strip auto-populated user-default Company on foundational rows.
+
+        Frappe v15/v16 auto-populates empty Link-to-Company fields from
+        `frappe.defaults.get_user_default("Company")` during the
+        default-resolution step of `insert()`. That step runs BEFORE
+        `validate()`, which means the foundational-call path in
+        `auth.acquire_jwt()` (and `client.log_api_call(...,
+        company=None, is_foundational=True, ...)`) finds the row
+        re-populated with the user's default Company by the time
+        validate runs — tripping the §7.7 invariant.
+
+        On a single-Company dev site there's no user default so this
+        never fires; on a multi-Company FrappeCloud site (or any site
+        where the FDE's User has a Company default set), every Test
+        Connection click would throw "Foundational API Calls must
+        leave Company blank."
+
+        Fix: when is_foundational=1 we explicitly null out company
+        AFTER Frappe's default-fill but BEFORE validate. Caller code
+        already knows the truth (it passed company=None); this hook
+        just guards the user-defaults injection point Frappe inserts.
+        """
+        if self.is_foundational and self.company:
+            self.company = None
+
     def validate(self) -> None:
         # Three valid shapes (the §31.2.4 binary plus the §8b per-location
         # extension):

@@ -123,6 +123,46 @@ class TestClientMocked(FrappeTestCase):
         self.assertIsNone(row.company)
         self.assertEqual(row.easyecom_account, self.account)
 
+    def test_token_call_survives_user_default_company(self) -> None:
+        """Regression: on a FrappeCloud site where the logged-in User
+        has a default Company set, Frappe v15/v16 auto-populates empty
+        Link-to-Company fields during insert(). Without the
+        before_insert hook in EasyEcomAPICall, the foundational token
+        row would inherit the user's default Company, then trip the
+        §7.7 validate() invariant ("Foundational API Calls must leave
+        Company blank.") — Test Connection breaks for every multi-
+        Company customer. Verified live 2026-05-27 against the
+        Incirco Ventures LLP account on FrappeCloud staging."""
+        from ecommerce_super.easyecom.client.client import EasyEcomClient
+
+        # Need a real Company doc for the user-default to point at.
+        company_name = frappe.db.get_value("Company", {}, "name")
+        if not company_name:
+            self.skipTest("test site has no Company — skip user-default sim")
+
+        original_default = frappe.defaults.get_user_default("Company")
+        frappe.defaults.set_user_default("Company", company_name)
+        try:
+            with patch(
+                "ecommerce_super.easyecom.client.auth.requests.post",
+                return_value=_ok_token_response(),
+            ):
+                # Must NOT raise the §7.7 validation error.
+                jwt = EasyEcomClient(location_key="MOCK-LOC").refresh_jwt()
+            self.assertTrue(jwt)
+            row = frappe.get_last_doc("EasyEcom API Call")
+            self.assertEqual(row.is_foundational, 1)
+            self.assertIsNone(
+                row.company,
+                "foundational row must have company=None even when "
+                "the user has a default Company set",
+            )
+        finally:
+            if original_default is None:
+                frappe.defaults.clear_user_default("Company")
+            else:
+                frappe.defaults.set_user_default("Company", original_default)
+
     def test_bar4_both_headers_sent(self) -> None:
         """Every authenticated call carries x-api-key + Authorization: Bearer.
 
