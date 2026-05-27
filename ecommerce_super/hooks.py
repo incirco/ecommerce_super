@@ -332,6 +332,22 @@ scheduler_events = {
         "30 5 * * *": [
             "ecommerce_super.easyecom.flows.customer_pull.scheduled_discover_customers",
         ],
+        # §8f Stage 6 daily supplier pull. Runs at 06:00 IST (after
+        # Items 05:00 + Customers 05:30 — staggered so the per-minute
+        # EE API budget isn't hammered on a single tick).
+        # DELTA pull — /wms/V2/getVendors accepts an `updated_after`
+        # YYYY-MM-DD filter (verified live 2026-05-27 against
+        # Harmony — a future date returns "No Data Found"; an old
+        # date filters on EE's internal last-updated timestamp). The
+        # scheduler reads supplier_pull_last_updated_at from the
+        # Account (set by _set_clean_completion on a clean walk) and
+        # passes it as updated_after. First-ever scheduled run with a
+        # blank high-water falls through to a full pull.
+        # Phase-aware: process_one_supplier reads supplier_master_mode
+        # and branches to drift detection in steady state.
+        "0 6 * * *": [
+            "ecommerce_super.easyecom.flows.supplier_pull.scheduled_discover_suppliers",
+        ],
         # Connection health rollup — every 5 minutes.
         "*/5 * * * *": [
             "ecommerce_super.easyecom.operational.connection_health.update_account_connection_status",

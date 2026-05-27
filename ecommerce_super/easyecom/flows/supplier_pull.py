@@ -175,12 +175,24 @@ def pull_suppliers(
     account: str | None = None,
     start_fresh: bool = True,
     max_pages: int = MAX_PAGES,
+    updated_after: str | None = None,
 ) -> PullOutcome:
     """Fetch /wms/V2/getVendors page by page and process each row.
 
     `start_fresh=True` clears the persisted cursor and pulls from the
     top; `False` resumes from the persisted cursor (for restarting
     after a partial failure without re-processing the early pages).
+
+    `updated_after`: optional YYYY-MM-DD date string. When set, the
+    FIRST page request includes the `updated_after` query param so
+    EE returns only vendors updated on or after that date. Verified
+    live 2026-05-27 — EE accepts the param; a future date returns
+    `{"data": "No Data Found"}` (handled by the non-list-shape guard
+    below). After the first page, the cursor's nextUrl already carries
+    the filter; we don't re-attach the param. Mutually exclusive with
+    `start_fresh=False` resume — a resume continues from the saved
+    cursor which already encodes whatever filter the original call
+    used.
 
     Returns PullOutcome. The flow ALWAYS writes Sync Records as it
     goes (the cursor walk is per-record-isolated via for_each_record);
@@ -207,7 +219,15 @@ def pull_suppliers(
 
     while next_endpoint and page_idx < max_pages:
         page_idx += 1
-        response = client.get(next_endpoint)
+        # Attach updated_after on the FIRST request only — the cursor
+        # carries it forward on subsequent pages, and double-passing
+        # could conflict.
+        if page_idx == 1 and updated_after and start_fresh:
+            response = client.get(
+                next_endpoint, params={"updated_after": updated_after}
+            )
+        else:
+            response = client.get(next_endpoint)
         rows = (response or {}).get(RESPONSE_DATA_KEY) or []
         if not isinstance(rows, list):
             frappe.log_error(
@@ -1506,3 +1526,66 @@ def push_to_ee_for_drift(supplier_map_name: str) -> dict[str, Any]:
         "ee_vendor_id": outcome.ee_vendor_id,
         "flag_reasons": outcome.flag_reasons,
     }
+
+
+# ============================================================
+# Stage 6 — Scheduler entry (delta-pull cron)
+# ============================================================
+
+
+def scheduled_discover_suppliers() -> None:
+    """§8f Stage 6 daily supplier pull — wired in hooks.py
+    scheduler_events at 06:00 IST (after §8d Items at 05:00 and §8e
+    Customers at 05:30).
+
+    DELTA semantics: unlike §8e Customer Pull which has no
+    updated_after filter (forcing a full-pull every run), getVendors
+    DOES accept `updated_after=YYYY-MM-DD` (verified live against
+    Harmony 2026-05-27 — passing a future date returns
+    `{"data": "No Data Found"}` envelope; passing an old date filters
+    on EE's internal last-updated timestamp). The scheduler reads
+    Account.supplier_pull_last_updated_at (set on clean-walk
+    completion in _set_clean_completion) and passes it as
+    updated_after. First-ever scheduled run with a blank high-water
+    falls through to a full pull.
+
+    Mode-aware: process_one_supplier's phase gate decides whether the
+    pulled vendor is accepted-and-created (onboarding) or runs
+    through drift detection (erpnext_mastered). No mode-specific
+    branching here; same pull_suppliers call works for both phases.
+
+    Quiet on no enabled Account (pre-onboarding state). Catches every
+    exception so a transient EE outage doesn't fail the whole
+    scheduler tick. Mirrors §8e scheduled_discover_customers exactly,
+    plus the delta filter the customer endpoint doesn't expose."""
+    account_row = frappe.db.get_value(
+        "EasyEcom Account",
+        {"enabled": 1},
+        ["name", "supplier_pull_last_updated_at"],
+        as_dict=True,
+        order_by="name asc",
+    )
+    if not account_row:
+        return
+
+    # Format the high-water as a date string for EE's filter. Falls
+    # back to None (full pull) on the first-ever scheduled run.
+    updated_after_param = None
+    high_water = account_row.get("supplier_pull_last_updated_at")
+    if high_water:
+        try:
+            updated_after_param = frappe.utils.getdate(high_water).isoformat()
+        except Exception:
+            updated_after_param = None
+
+    try:
+        pull_suppliers(
+            account=account_row.name,
+            start_fresh=True,
+            updated_after=updated_after_param,
+        )
+    except Exception as exc:
+        frappe.log_error(
+            title="EasyEcom scheduled supplier discovery failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )

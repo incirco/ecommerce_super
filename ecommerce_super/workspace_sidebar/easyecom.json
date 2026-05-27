@@ -140,6 +140,17 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Supplier Map",
+   "link_to": "EasyEcom Supplier Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
    "icon": "filter",
@@ -222,6 +233,45 @@
    "keep_closed": 0,
    "label": "Customers - Flagged-Not-Created",
    "link_to": "EasyEcom Customer Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Flagged-Not-Created\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Suppliers - Drift",
+   "link_to": "EasyEcom Supplier Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Drift\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Suppliers - Created-Flagged",
+   "link_to": "EasyEcom Supplier Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Created-Flagged\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Suppliers - Flagged-Not-Created",
+   "link_to": "EasyEcom Supplier Map",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link",
