@@ -1003,7 +1003,16 @@ def _check_tax_variance(
     variance against the PO Map's recorded tax signature.
     """
     ee_total = flt(grn_row.get("total_grn_value") or 0)
-    pr_gross = sum(flt(l.qty) * flt(l.rate) for l in (pr_doc.items or []))
+    # Live finding 2026-05-28: EE's total_grn_value is the gross of
+    # the WHOLE received quantity (incl. qc_fail rejected portion).
+    # ERPNext PR Item.qty is the ACCEPTED portion only; the rejected
+    # portion lives in PR Item.rejected_qty. The fair cross-check
+    # uses received_qty × rate (= accepted+rejected gross), not
+    # qty × rate (= accepted-only gross). Otherwise a benign qc_fail
+    # split fires a false-positive tax variance.
+    pr_gross = sum(
+        flt(l.received_qty) * flt(l.rate) for l in (pr_doc.items or [])
+    )
     if ee_total <= 0:
         return None
 
