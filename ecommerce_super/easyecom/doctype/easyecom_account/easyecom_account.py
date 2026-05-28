@@ -23,6 +23,7 @@ import re
 from typing import ClassVar
 
 import frappe
+import frappe.utils.password  # noqa: F401  — referenced via qualified path below
 from frappe import _
 from frappe.model.document import Document
 

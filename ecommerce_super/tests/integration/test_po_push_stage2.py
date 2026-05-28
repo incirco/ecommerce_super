@@ -1046,19 +1046,26 @@ class TestTriggersAndSweep(FrappeTestCase):
             items=[{"item_code": self.item}],
             submit=True,
         )
-        # Inline=1 mode runs push_one_po synchronously and returns
-        # outcomes. We don't have a mock client here, so the EE call
-        # will actually be attempted — patch it.
+        # Inline=1 mode runs push_one_po synchronously. The default
+        # candidate sweep finds ALL submitted POs on the site whose
+        # warehouse maps to ANY EE Location — so on a dev/test site
+        # with real POs + leftover test Locations from other modules,
+        # it would iterate over hundreds of POs creating Flagged-Not-
+        # Created Map rows for each (the FNC noise is what motivated
+        # this isolation fix). Patch candidate_pos_for_sweep to return
+        # ONLY this test's PO.
         from ecommerce_super.easyecom.flows import po_push as mod
 
-        with patch.object(mod, "EasyEcomClient") as MockClient:
+        with patch.object(mod, "EasyEcomClient") as MockClient, patch.object(
+            mod, "candidate_pos_for_sweep", return_value=[po.name]
+        ):
             instance = MockClient.return_value
             instance.post.return_value = {"data": {"poId": 4242}}
             result = push_all_pending_pos(inline=1)
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["inline"])
-        self.assertGreaterEqual(result["total_considered"], 1)
+        self.assertEqual(result["total_considered"], 1)
         # PO Map captured the poId.
         self.assertEqual(
             int(
