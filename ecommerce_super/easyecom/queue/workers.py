@@ -49,6 +49,13 @@ JOB_TYPE_HANDLERS: dict[str, str] = {
     # candidate, audit fix #8), (c) drift resolution's "Push
     # ERPNext → EE" action.
     "Item Push": "ecommerce_super.easyecom.flows.item_push.item_push_queue_handler",
+    # §9 Stage 2: PO push (content channel + optional status push to
+    # po_status=3). Enqueued by the on_submit hook + the batch sweep.
+    "PO Push": "ecommerce_super.easyecom.flows.po_push.po_push_queue_handler",
+    # §9 Stage 2: status-only push (po_status=7 on cancel; po_status=5
+    # completion will land in Stage 3). Enqueued by the on_cancel hook
+    # and Stage 3's GRN-driven completion trigger.
+    "PO Status Push": "ecommerce_super.easyecom.flows.po_push.po_status_push_queue_handler",
 }
 
 

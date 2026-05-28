@@ -55,7 +55,7 @@
    "fieldname": "job_type",
    "fieldtype": "Select",
    "label": "Job Type",
-   "options": "Item Push\nCustomer Push\nSupplier Push\nPO Push\nSO Push\nB2B Invoice Push\nOrder Pull\nGRN Pull\nReturn Pull\nInventory Pull\nWebhook Process\nReplay Plan Step\nMaster Sync Bulk\nField Mapping Compile\nSchema Snapshot Compute\nMapping Coverage Compute\nSLA Breach Compute\nMorning Brief Compute\nConfiguration Audit Write",
+   "options": "Item Push\nCustomer Push\nSupplier Push\nPO Push\nPO Status Push\nSO Push\nB2B Invoice Push\nOrder Pull\nGRN Pull\nReturn Pull\nInventory Pull\nWebhook Process\nReplay Plan Step\nMaster Sync Bulk\nField Mapping Compile\nSchema Snapshot Compute\nMapping Coverage Compute\nSLA Breach Compute\nMorning Brief Compute\nConfiguration Audit Write",
    "reqd": 1,
    "search_index": 1,
    "in_list_view": 1

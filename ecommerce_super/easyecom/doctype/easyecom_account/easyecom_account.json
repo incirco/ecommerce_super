@@ -103,6 +103,9 @@
   "item_push_section",
   "auto_push_on_save",
   "push_all_pending_action",
+  "po_push_section",
+  "auto_push_pos_on_save",
+  "push_all_pending_pos_action",
   "go_live_section",
   "go_live_enable_auto_push_action",
   "go_live_col_2",
@@ -767,6 +770,26 @@
    "fieldtype": "Button",
    "label": "Push All Pending Items (§8d Onboarding Sweep)",
    "description": "Trigger the §8d batch push for every Item not yet pushed: is_stock_item=1, not disabled, has gst_hsn_code, NO existing map with ee_product_id. Bundle wrappers dispatch to combo push. Resumable — re-running picks up only still-pending items. Used for one-shot onboarding; steady-state changes flow via the auto-push hook."
+  },
+  {
+   "fieldname": "po_push_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Order Push (§9)",
+   "collapsible": 1,
+   "description": "ERPNext → EasyEcom Purchase Order push (§9 Stage 2). Two channels, two keys: CONTENT via /WMS/Cart/CreatePurchaseOrder keyed on referenceCode (= PO name); STATUS via /wms/updatePoStatus keyed on po_id (EE-returned int). Gate-0: only POs whose target warehouse maps to an EE Location are in scope; non-EE POs are silently inert."
+  },
+  {
+   "fieldname": "auto_push_pos_on_save",
+   "fieldtype": "Check",
+   "label": "Auto-push Purchase Orders to EasyEcom on save",
+   "default": "0",
+   "description": "§9 Stage 2 — when ON: every ERPNext PO on_submit enqueues a /WMS/Cart/CreatePurchaseOrder + status push to po_status=3 (Approved); on_cancel enqueues a /wms/updatePoStatus to 7 (Cancelled). Defaults OFF for safety. Turn ON only after onboarding stabilises. The push is queued (non-blocking) and obeys the same flagging logic as the batch sweep — missing Supplier Map / Item Map / Gate-0 fail → PO Map row in Flagged-Not-Created, not a broken EE payload. Gate-0 (non-EE-warehouse PO) is silent — no Map row, no Sync Record."
+  },
+  {
+   "fieldname": "push_all_pending_pos_action",
+   "fieldtype": "Button",
+   "label": "Push All Pending POs (§9 Onboarding Sweep)",
+   "description": "§9 Stage 2 — batch sweep: enqueue a /WMS/Cart/CreatePurchaseOrder push for every candidate PO (target warehouse is EE-mapped, no EasyEcom PO Map row yet OR status != Mapped, PO docstatus=1 submitted, not cancelled). Async (long queue, parity with the round-2 discover-async pattern); returns immediately with the enqueued count. Per-PO progress lands in Sync Records / PO Map row status."
   },
   {
    "fieldname": "go_live_section",

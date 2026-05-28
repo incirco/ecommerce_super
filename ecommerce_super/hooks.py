@@ -280,6 +280,24 @@ doc_events: dict[str, dict[str, str]] = {
     #     "validate": "ecommerce_super.easyecom.flows.b2b_sales.validate_pre_push",
     #     "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.on_submit_push",
     # },
+    # §9 Stage 2: PO push hooks.
+    #   - validate: mixed-warehouse refusal + warehouse-flip refusal on
+    #     amend (BLOCKING — these are user-correctable invariants).
+    #   - on_submit: gated by auto_push_pos_on_save; Gate-0 short-circuit
+    #     (non-EE-warehouse → silently inert). Enqueues content + status
+    #     push to po_status=3 (Approved).
+    #   - on_cancel: fires updatePoStatus=7 (Cancelled) when the PO has
+    #     ee_po_id. NOT gated on auto_push — cancels must propagate even
+    #     when auto-push is paused.
+    #   - after_rename: fallback-flag (PO Map → Drift) per packet; auto-
+    #     re-push would orphan the EE-side row since referenceCode is
+    #     the join key.
+    "Purchase Order": {
+        "validate": "ecommerce_super.easyecom.flows.po_push.validate_pre_push",
+        "on_submit": "ecommerce_super.easyecom.flows.po_push.enqueue_on_po_submit",
+        "on_cancel": "ecommerce_super.easyecom.flows.po_push.enqueue_on_po_cancel",
+        "after_rename": "ecommerce_super.easyecom.flows.po_push.after_rename_po",
+    },
 }
 
 

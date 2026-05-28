@@ -17,6 +17,8 @@
   "status_drift_col",
   "ee_observed_po_status",
   "ee_observed_at",
+  "push_snapshot_section",
+  "ecs_last_tax_signature",
   "flag_section",
   "flag_reason",
   "drift_section",
@@ -103,6 +105,20 @@
    "label": "Observed At",
    "read_only": 1,
    "description": "When ee_observed_po_status was last refreshed by the §9 Stage 3 GRN-pull sweep."
+  },
+  {
+   "fieldname": "push_snapshot_section",
+   "fieldtype": "Section Break",
+   "label": "Push Snapshot",
+   "collapsible": 1,
+   "description": "§9 Stage 2 — drives the createOrUpdate=U behaviour. Stores a compact tax signature (item_tax_template per line) from the last successful CreatePurchaseOrder push so the next amend can decide updateTaxRate=1 (tax changed) vs 0 (qty/quantity-only change). Not a full snapshot — PO docs are submitted-immutable, so a full payload mirror would be redundant."
+  },
+  {
+   "fieldname": "ecs_last_tax_signature",
+   "fieldtype": "Long Text",
+   "label": "Last Tax Signature (JSON)",
+   "read_only": 1,
+   "description": "JSON-encoded compact signature of the tax shape last pushed to EE (per-line item_tax_template). The amend path compares the current PO's signature against this; difference → updateTaxRate=1 on CreatePurchaseOrder."
   },
   {
    "fieldname": "flag_section",

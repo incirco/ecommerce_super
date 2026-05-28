@@ -89,11 +89,29 @@ PRODUCT_MASTER_ACTIVATE_DEACTIVATE: str = "/Products/ActivateDeactivateProduct" 
 
 # ----- Buying flow endpoints (§31.3.3) -----
 
-PO_CREATE: str = "/Wms/Purchase/createPO"  # POST
+# §9 packet supersedes the older SPEC §31.3.3 paths (kept below as
+# stale-but-retained constants — `PO_CREATE` / `PO_GET` etc. — for
+# back-compat. New §9 code targets the live paths below.).
+#
+# §9 Stage 2 PO push uses TWO channels with TWO keys (§9 packet model):
+#   - Content  → /WMS/Cart/CreatePurchaseOrder  keyed `referenceCode`
+#   - Status   → /wms/updatePoStatus            keyed `po_id`
+# Case difference is real: EE uses uppercase `WMS` on the content
+# path and lowercase `wms` on the status path. Don't normalise either.
+PURCHASE_ORDER_CREATE: str = "/WMS/Cart/CreatePurchaseOrder"  # POST (§9 Stage 2)
+PURCHASE_ORDER_STATUS_UPDATE: str = "/wms/updatePoStatus"  # POST (§9 Stage 2)
+
+# §9 Stage 3 GRN pull endpoint per packet (supersedes the stale
+# `/wms/getGrnDetails` referenced in SPEC §9.5.1).
+GRN_DETAILS_V2_GET: str = "/Grn/V2/getGrnDetails"  # GET (§9 Stage 3; nextUrl)
+
+# Pre-§9-packet constants — RETAINED to avoid breaking any references
+# in older SPEC sections / fixtures. Not used by §9 code paths.
+PO_CREATE: str = "/Wms/Purchase/createPO"  # POST (stale; replaced by PURCHASE_ORDER_CREATE)
 PO_GET: str = "/Wms/Purchase/getPO"  # GET
 PO_STATUS_GET: str = "/Wms/Purchase/getPOStatus"  # GET
 GRN_GET: str = "/Wms/Inventory/getGRN"  # GET (bulk; Next-Page URL)
-GRN_DETAILS_GET: str = "/Wms/Inventory/getGRNDetails"  # GET
+GRN_DETAILS_GET: str = "/Wms/Inventory/getGRNDetails"  # GET (stale; replaced by GRN_DETAILS_V2_GET)
 
 
 # ----- Sales flow endpoints (§31.3.4) -----
