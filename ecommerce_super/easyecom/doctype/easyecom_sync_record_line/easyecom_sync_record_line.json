@@ -54,7 +54,7 @@
    "fieldtype": "Link",
    "label": "Integration Discrepancy",
    "options": "EasyEcom Integration Discrepancy",
-   "description": "Set when line_status=Discrepancy. Tracks resolution per §23. Empty until §23's Integration Discrepancy DocType ships."
+   "description": "Set when line_status=Discrepancy. Tracks resolution per §23. The target DocType is a §23 stub shipped pre-§9-Stage-2 (frozen contract: kind / status {Open/Resolved/Dismissed} / Dynamic Link reference / Company / reason / resolution_note); §23 will extend it with workflow, SLA, routing, etc. without breaking the stub fields."
   }
  ],
  "index_web_pages_for_search": 0,

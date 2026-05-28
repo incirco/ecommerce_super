@@ -1,0 +1,137 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-DISC-{YYYY}-{MM}-{DD}-{######}",
+ "creation": "2026-05-28 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "kind",
+  "status",
+  "reference_section",
+  "reference_doctype",
+  "reference_name",
+  "company",
+  "detail_section",
+  "reason",
+  "resolution_note"
+ ],
+ "fields": [
+  {
+   "fieldname": "kind",
+   "fieldtype": "Data",
+   "label": "Kind",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Categorical discrepancy type (free-text in the stub; §23 will tighten this to a closed Select vocabulary). Examples flows will write: 'po_status_drift' (§9 Stage 3), 'grn_tolerance_breach' (§9 Stage 3), 'hsn_mismatch' (§9 Stage 3), 'deleted_post_receipt' (§9 Stage 3). FROZEN CONTRACT: the field exists, is reqd, and accepts string values; §23 may add a vocabulary table but must not remove the field or change its semantic meaning."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Open\nResolved\nDismissed",
+   "default": "Open",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Resolution state. Open = newly raised, awaiting FDE action. Resolved = FDE fixed the underlying source and confirmed. Dismissed = FDE acknowledged but no action needed (e.g. EE-side internal status code we don't care about). FROZEN CONTRACT: these three states are the minimal viable set; §23 may add intermediate states (e.g. 'In Progress', 'Escalated') but must keep Open / Resolved / Dismissed as terminal-equivalent values."
+  },
+  {
+   "fieldname": "reference_section",
+   "fieldtype": "Section Break",
+   "label": "Reference"
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "label": "Reference DocType",
+   "options": "DocType",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The DocType the discrepancy is raised against (e.g. 'EasyEcom GRN Map', 'EasyEcom PO Map', 'Purchase Receipt'). Dynamic-Link pattern: controls the options for reference_name. FROZEN CONTRACT: paired with reference_name to identify the offending entity."
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Reference Name",
+   "options": "reference_doctype",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The specific row this discrepancy concerns (e.g. 'ECS-GRN-141653', 'PO-2026-00042'). FROZEN CONTRACT: §9+ flows write this; §23 may add resolution actions that operate on the linked doc."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "description": "The Company this discrepancy is scoped to. Mirrors the company scoping on Sync Record / API Call / Webhook Event — the operational surface must always be filter-able per Company on multi-Company sites. FROZEN CONTRACT: required; §23 may add Company-scoped permission rules that depend on this."
+  },
+  {
+   "fieldname": "detail_section",
+   "fieldtype": "Section Break",
+   "label": "Detail",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Long Text",
+   "label": "Reason",
+   "reqd": 1,
+   "description": "Plain-English why-it-happened the FDE can act on. Populated by the raising flow (e.g. 'GRN 141653 received_quantity (105) exceeds PO original_quantity (100) by 5% — over-tolerance threshold (3%) breached'). FROZEN CONTRACT: required; §23 may add structured diff fields (suspected_cause, suggested_actions per §27 Error Translation) but must keep reason as the free-text human-readable narrative."
+  },
+  {
+   "fieldname": "resolution_note",
+   "fieldtype": "Small Text",
+   "label": "Resolution Note",
+   "description": "Optional FDE note recorded when flipping status to Resolved / Dismissed. Example: 'Spoke to vendor; over-receipt is the new normal for this SKU. Increased PO original_quantity by 10 units and re-pulled.' FROZEN CONTRACT: optional; §23 may add structured resolution metadata (resolved_by, resolved_at, resolution_action enum) but must keep resolution_note as the free-text reviewable note."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-28 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Integration Discrepancy",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
