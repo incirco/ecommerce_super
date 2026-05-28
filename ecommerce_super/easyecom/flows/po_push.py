@@ -489,23 +489,29 @@ def _do_content_push(
             warehouse_state=warehouse_state,
             supplier_country=supplier_country,
         )
-        line_items.append(
-            {
-                "lineItemNumber": int(line.idx or 0),
-                "sku": sku,
-                "ean": "",
-                "AccountingSku": "",
-                "quantity": float(line.qty or 0),
-                "unitPrice": round(tax_inclusive_unit_price, 4),
-                "taxRate": tax_rate_pct,
-                "taxValue": round(tax_value, 4),
-                "taxType": int(tax_type),
-                "batch_code": "",
-                "batch_mrp": "",
-                "expiry_date": "",
-                "serials": [],
-            }
-        )
+        # Build line with only POPULATED fields. Live finding 2026-05-28
+        # on Harmony: empty-string optional fields (ean/AccountingSku/
+        # batch_code/batch_mrp/expiry_date) caused EE's PO creation to
+        # crash with HTTP 500 (HTML server error page, not a JSON
+        # validation response). EE's parser appears to choke on
+        # present-but-empty optional fields. Omit them instead.
+        line_item: dict[str, Any] = {
+            "lineItemNumber": int(line.idx or 0),
+            "sku": sku,
+            "quantity": float(line.qty or 0),
+            "unitPrice": round(tax_inclusive_unit_price, 4),
+            "taxRate": tax_rate_pct,
+            "taxValue": round(tax_value, 4),
+            "taxType": int(tax_type),
+        }
+        # Optional fields — only include if populated.
+        if getattr(line, "ean", None):
+            line_item["ean"] = line.ean
+        if getattr(line, "batch_no", None):
+            line_item["batch_code"] = line.batch_no
+        if getattr(line, "expiry_date", None):
+            line_item["expiry_date"] = _fmt_date(line.expiry_date)
+        line_items.append(line_item)
         line_outcomes.append(
             {
                 "source_line_ref": line.item_code,
@@ -516,29 +522,51 @@ def _do_content_push(
             }
         )
 
-    payload = {
+    # Top-level payload — same trim philosophy: omit empty optional
+    # keys rather than send them blank. EE's PO creation crashed with
+    # HTTP 500 on present-but-empty fields during the 2026-05-28 live
+    # smoke.
+    payload: dict[str, Any] = {
         "vendorId": vendor_id,
         "referenceCode": po.name,
-        "address": (warehouse_address or {}).get("address_line1") or "",
         "expDeliveryDate": _fmt_date(po.schedule_date),
-        "shippingCost": float(
-            getattr(po, "shipping_address_name", None) and 0 or 0
-        ),
         "createOrUpdate": create_or_update,
         "isCancel": 0,  # never wired — cancel goes via updatePoStatus=7
         "docNumber": po.name,
         "updateTaxRate": 1 if (existing_ee_po_id and tax_changed) else 0,
         "lineItems": line_items,
     }
+    addr = (warehouse_address or {}).get("address_line1")
+    if addr:
+        payload["address"] = addr
+    # shippingCost — only include if non-zero (and as int when possible).
+    # ERPNext PO has `taxes` table for shipping; for now we don't
+    # extract; Stage 4 may add this.
+    shipping_cost = 0
+    if shipping_cost:
+        payload["shippingCost"] = shipping_cost
 
     try:
         response = client.post(PURCHASE_ORDER_CREATE, payload=payload)
     except EasyEcomError as exc:
+        # Flip PO Map → Flagged-Not-Created (status invariant: if we
+        # tried to push and EE rejected, this is FDE-actionable —
+        # don't leave the row as Mapped).
+        flag_text = f"CreatePurchaseOrder rejected by EE: {type(exc).__name__}: {exc}"
+        frappe.db.set_value(
+            "EasyEcom PO Map",
+            map_row["name"],
+            {
+                "status": "Flagged-Not-Created",
+                "flag_reason": flag_text[:1000],
+            },
+            update_modified=True,
+        )
         sr = write_po_push_sync_record(
             entity_name=po.name,
             company=po.company,
             status=STATUS_FAILED,
-            last_error=f"CreatePurchaseOrder: {type(exc).__name__}: {exc}",
+            last_error=flag_text,
             line_outcomes=[
                 {**lo, "line_status": "Failed", "reason": f"{type(exc).__name__}"}
                 for lo in line_outcomes
@@ -549,7 +577,7 @@ def _do_content_push(
             operation="error",
             pushed=False,
             ee_po_id=existing_ee_po_id or None,
-            po_map_status=map_row.get("status"),
+            po_map_status="Flagged-Not-Created",
             flag_reasons=[f"{type(exc).__name__}: {exc}"],
             ee_content_payload=payload,
             sync_record_name=sr,
@@ -796,15 +824,18 @@ def _extract_ee_po_id(response: dict) -> int | None:
 
 
 def _fmt_date(value: Any) -> str:
-    """EE expects 'DD/MM/YYYY' (matches the §9 PO-Push ruleset's
-    date_format). Falls back to empty string on None / parse failure."""
+    """EE expects 'YYYY-MM-DD' on `expDeliveryDate` (discovered live
+    on Harmony 2026-05-28; the §9 packet's DD/MM/YYYY guess was wrong
+    — EE responds: "The expected delivery date must be a date after
+    today in yyyy-mm-dd format"). Falls back to empty string on
+    None / parse failure."""
     if not value:
         return ""
     try:
         from frappe.utils import getdate
 
         d = getdate(value)
-        return f"{d.day:02d}/{d.month:02d}/{d.year:04d}"
+        return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
     except Exception:
         return ""
 

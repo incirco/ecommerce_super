@@ -305,15 +305,24 @@ class TestGRNMapValidation(FrappeTestCase):
         with self.assertRaises(frappe.ValidationError):
             doc.validate()
 
-    def test_refuses_grn_status_id_outside_1_to_4(self) -> None:
+    def test_refuses_grn_status_id_outside_valid_range(self) -> None:
+        """Live finding 2026-05-28: real Harmony GRNs have
+        grn_status_id=5 (Completed/Closed beyond QC). The §9 packet's
+        documented {1,2,3,4} enum was incomplete. Validator widened
+        to {1..10}; clearly bogus values (0, negative, >10) still
+        rejected."""
         doc = frappe.new_doc("EasyEcom GRN Map")
-        doc.update({"ee_grn_id": 911002, "status": "Pending", "grn_status_id": 7})
+        # 99 — clearly out of range, rejected.
+        doc.update({"ee_grn_id": 911002, "status": "Pending", "grn_status_id": 99})
         with self.assertRaises(frappe.ValidationError):
             doc.validate()
         # 0 also rejected.
         doc.grn_status_id = 0
         with self.assertRaises(frappe.ValidationError):
             doc.validate()
+        # 5 (Harmony-observed Completed) — accepted.
+        doc.grn_status_id = 5
+        doc.validate()
         # NULL is fine (substrate may insert before pull fills the header).
         doc.grn_status_id = None
         doc.validate()  # no raise

@@ -646,24 +646,40 @@ def _resolve_for_receipt(
         "line_failures": [],
     }
 
-    # PO resolution — po_ref_num primary, ee_po_id fallback.
+    # PO resolution — po_ref_num primary, ee_po_id fallback. ONLY
+    # match against SUBMITTED POs (docstatus=1). A Draft PO with the
+    # same name (test residue, in-flight edit, etc.) must not be
+    # treated as "the ordered PO" — the PR-on-Draft-PO path explodes
+    # at ERPNext's PR submit validation. If po_ref_num matches a Draft
+    # / Cancelled PO, treat it as "no match" and fall through to the
+    # both-refs-miss → PR-anyway + Discrepancy path.
     po_ref_num = (grn_row.get("po_ref_num") or "").strip()
     ee_po_id = int(grn_row.get("po_id") or 0)
     po_name = None
     po_map_name = None
-    if po_ref_num and frappe.db.exists("Purchase Order", po_ref_num):
-        po_name = po_ref_num
-        po_map_name = frappe.db.get_value(
-            "EasyEcom PO Map", {"purchase_order": po_ref_num}, "name"
+    if po_ref_num:
+        candidate = frappe.db.get_value(
+            "Purchase Order", po_ref_num, ["docstatus"], as_dict=True
         )
-    elif ee_po_id:
+        if candidate and int(candidate.docstatus or 0) == 1:
+            po_name = po_ref_num
+            po_map_name = frappe.db.get_value(
+                "EasyEcom PO Map", {"purchase_order": po_ref_num}, "name"
+            )
+    if not po_name and ee_po_id:
         po_map_name = frappe.db.get_value(
             "EasyEcom PO Map", {"ee_po_id": ee_po_id}, "name"
         )
         if po_map_name:
-            po_name = frappe.db.get_value(
+            candidate_po = frappe.db.get_value(
                 "EasyEcom PO Map", po_map_name, "purchase_order"
             )
+            if candidate_po:
+                po_ds = frappe.db.get_value(
+                    "Purchase Order", candidate_po, "docstatus"
+                )
+                if int(po_ds or 0) == 1:
+                    po_name = candidate_po
     if not po_name:
         out["po_unknown_reason"] = (
             f"GRN for unknown PO: po_ref_num={po_ref_num!r} "
@@ -1425,16 +1441,41 @@ def _grn_receipt_trigger_status() -> int:
 
 
 def _resolve_location_for_warehouse_c_id(wh_c_id: int) -> dict | None:
-    """EE's `inwarded_warehouse_c_id` matches §8a Location's location_key
-    (both ints, EE-issued). Look it up."""
+    """EE's `inwarded_warehouse_c_id` is the EE-side company_id int
+    (live finding 2026-05-28 on Harmony — real GRN payloads have
+    inwarded_warehouse_c_id=99303 matching the location's company_id,
+    NOT the location_key string which has alphanumeric prefixes like
+    'ee9861085809'). The §9 packet's original claim that this matches
+    location_key was wrong.
+
+    Resolution: look up via EasyEcom Location.ee_company_id (the int
+    captured during §8a Discover Locations from EE payload field
+    `company_id`).
+    """
     if not wh_c_id:
         return None
+    # Primary: match by ee_company_id (real Harmony shape).
     row = frappe.db.get_value(
         "EasyEcom Location",
-        {"location_key": str(wh_c_id)},
-        ["name", "location_key", "mapped_warehouse", "workflow_state"],
+        {"ee_company_id": int(wh_c_id)},
+        ["name", "location_key", "mapped_warehouse", "workflow_state",
+         "ee_company_id"],
         as_dict=True,
     )
+    # Fallback: match by location_key (legacy / test-fixture shape
+    # where the synthetic Location's location_key happens to be the
+    # int the test sends as inwarded_warehouse_c_id). Real Harmony
+    # location_keys are strings with alpha prefixes (e.g. 'ee9861085809')
+    # so the string-equality fallback is harmless for production data
+    # — it can only match numeric location_keys.
+    if not row:
+        row = frappe.db.get_value(
+            "EasyEcom Location",
+            {"location_key": str(wh_c_id)},
+            ["name", "location_key", "mapped_warehouse", "workflow_state",
+             "ee_company_id"],
+            as_dict=True,
+        )
     if not row:
         return None
     if not row.mapped_warehouse:

@@ -27,7 +27,13 @@ VALID_STATUS_VALUES: frozenset[str] = frozenset(
     }
 )
 
-VALID_GRN_STATUS_IDS: frozenset[int] = frozenset({1, 2, 3, 4})
+# EE GRN lifecycle codes — live finding 2026-05-28: in addition to the
+# documented 1-4, real Harmony returns `5` on GRNs that have moved past
+# QC Complete into a settled / closed state. We tolerate the documented
+# 1-4 + observed 5 + a small safety margin (6-10) for any other
+# downstream statuses EE might add. Rejection is reserved for clearly
+# bogus values (0, negative, or > 10).
+VALID_GRN_STATUS_IDS: frozenset[int] = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
 
 class EasyEcomGRNMap(Document):
