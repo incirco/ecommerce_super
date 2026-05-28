@@ -106,6 +106,11 @@
   "po_push_section",
   "auto_push_pos_on_save",
   "push_all_pending_pos_action",
+  "grn_pull_section",
+  "grn_pull_cursor",
+  "grn_pull_cursor_at",
+  "grn_pull_high_watermark",
+  "grn_pull_total_seen",
   "go_live_section",
   "go_live_enable_auto_push_action",
   "go_live_col_2",
@@ -790,6 +795,40 @@
    "fieldtype": "Button",
    "label": "Push All Pending POs (§9 Onboarding Sweep)",
    "description": "§9 Stage 2 — batch sweep: enqueue a /WMS/Cart/CreatePurchaseOrder push for every candidate PO (target warehouse is EE-mapped, no EasyEcom PO Map row yet OR status != Mapped, PO docstatus=1 submitted, not cancelled). Async (long queue, parity with the round-2 discover-async pattern); returns immediately with the enqueued count. Per-PO progress lands in Sync Records / PO Map row status."
+  },
+  {
+   "fieldname": "grn_pull_section",
+   "fieldtype": "Section Break",
+   "label": "GRN Pull (§9 Stage 3)",
+   "collapsible": 1,
+   "description": "EE → ERPNext GRN pull: cursor-walks /Grn/V2/getGrnDetails per location, builds Purchase Receipts with the qc_fail-based accepted/rejected split, runs status reconciliation on linked POs, fires po_status=5 completion via Stage 2's status channel when cumulative receipt meets ordered (modulo allow_under_receipt_pct)."
+  },
+  {
+   "fieldname": "grn_pull_cursor",
+   "fieldtype": "Long Text",
+   "label": "GRN Pull Resume Cursor",
+   "read_only": 1,
+   "description": "EE getGrnDetails nextUrl. Persisted page-by-page so an interrupted walk resumes from the last completed page rather than restarting. Cleared on full-pull start; advanced after each page commits. Mirrors §8d's item_pull_cursor pattern. Per-account at this layer; the actual walk is per-location (Stage 4 will lift the cursor into a per-location table)."
+  },
+  {
+   "fieldname": "grn_pull_cursor_at",
+   "fieldtype": "Datetime",
+   "label": "GRN Cursor Updated At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "grn_pull_high_watermark",
+   "fieldtype": "Datetime",
+   "label": "GRN High Watermark (created_after)",
+   "read_only": 1,
+   "description": "Max grn_created_at observed in the last clean walk. Sent as `created_after` on the next sweep so the delta pull stays narrow. Bootstrap (NULL) → EE's default last-7-days backstop; steady state always passes the watermark."
+  },
+  {
+   "fieldname": "grn_pull_total_seen",
+   "fieldtype": "Int",
+   "label": "GRN Pull Total Seen",
+   "read_only": 1,
+   "description": "Running counter of GRN rows successfully processed (incl. Held-Pre-QC, STN-Routed, and Receipted) since this Account's lifetime. Operational visibility."
   },
   {
    "fieldname": "go_live_section",

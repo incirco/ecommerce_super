@@ -387,9 +387,9 @@ class TestGate0(FrappeTestCase):
             "Gate-0 miss must NOT create a Sync Record",
         )
 
-    def test_mixed_warehouse_validate_refused(self) -> None:
-        """A PO with no set_warehouse and lines targeting different
-        warehouses must be rejected at validate."""
+    def test_mixed_ee_and_non_ee_warehouses_refused(self) -> None:
+        """A PO that mixes an EE-mapped warehouse with a non-EE warehouse
+        is rejected — EE can't see a partial PO; user must split."""
         po = frappe.new_doc("Purchase Order")
         po.update(
             {
@@ -417,6 +417,72 @@ class TestGate0(FrappeTestCase):
         )
         with self.assertRaises(frappe.ValidationError):
             validate_pre_push(po)
+
+    def test_multi_line_same_ee_warehouse_passes_validate(self) -> None:
+        """§9 Stage 3 carry-in (a): a multi-line PO whose lines all
+        target the same EE-mapped warehouse must NOT be rejected — the
+        widened check resolves the warehouse-set to ONE EE Location,
+        which is the valid single-warehouse case."""
+        po = frappe.new_doc("Purchase Order")
+        po.update(
+            {
+                "supplier": self.supplier,
+                "company": self.company,
+                "transaction_date": frappe.utils.today(),
+                "schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
+                "currency": "INR",
+                "conversion_rate": 1,
+            }
+        )
+        # Two lines on the SAME EE warehouse, no header set_warehouse.
+        po.append(
+            "items",
+            {
+                "item_code": self.item, "qty": 1, "rate": 100,
+                "warehouse": self.ee_wh, "schedule_date": po.schedule_date,
+            },
+        )
+        po.append(
+            "items",
+            {
+                "item_code": self.item, "qty": 2, "rate": 50,
+                "warehouse": self.ee_wh, "schedule_date": po.schedule_date,
+            },
+        )
+        # Must not raise — same warehouse twice resolves to ONE Location.
+        validate_pre_push(po)
+
+    def test_multi_line_all_non_ee_passes_validate(self) -> None:
+        """Two distinct non-EE warehouses → zero EE Locations resolved →
+        silent (the per-call Gate-0 will skip at push time). Should
+        NOT throw at validate."""
+        wh2 = _ensure_warehouse(f"{_PREFIX}NON-EE-WH-2", company=self.company)
+        po = frappe.new_doc("Purchase Order")
+        po.update(
+            {
+                "supplier": self.supplier,
+                "company": self.company,
+                "transaction_date": frappe.utils.today(),
+                "schedule_date": frappe.utils.add_days(frappe.utils.today(), 7),
+                "currency": "INR",
+                "conversion_rate": 1,
+            }
+        )
+        po.append(
+            "items",
+            {
+                "item_code": self.item, "qty": 1, "rate": 100,
+                "warehouse": self.non_ee_wh, "schedule_date": po.schedule_date,
+            },
+        )
+        po.append(
+            "items",
+            {
+                "item_code": self.item, "qty": 1, "rate": 50,
+                "warehouse": wh2, "schedule_date": po.schedule_date,
+            },
+        )
+        validate_pre_push(po)
 
 
 class TestPreconditions(FrappeTestCase):

@@ -56,6 +56,9 @@ JOB_TYPE_HANDLERS: dict[str, str] = {
     # completion will land in Stage 3). Enqueued by the on_cancel hook
     # and Stage 3's GRN-driven completion trigger.
     "PO Status Push": "ecommerce_super.easyecom.flows.po_push.po_status_push_queue_handler",
+    # §9 Stage 3: GRN pull → PR + status reconciliation. Enqueued per
+    # location (Stage 4 wires the per-tick scheduler that fans out).
+    "GRN Pull": "ecommerce_super.easyecom.flows.grn_pull.grn_pull_queue_handler",
 }
 
 

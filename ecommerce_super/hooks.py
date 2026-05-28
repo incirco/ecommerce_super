@@ -296,6 +296,7 @@ doc_events: dict[str, dict[str, str]] = {
         "validate": "ecommerce_super.easyecom.flows.po_push.validate_pre_push",
         "on_submit": "ecommerce_super.easyecom.flows.po_push.enqueue_on_po_submit",
         "on_cancel": "ecommerce_super.easyecom.flows.po_push.enqueue_on_po_cancel",
+        "on_update_after_submit": "ecommerce_super.easyecom.flows.grn_pull.enqueue_on_po_close",
         "after_rename": "ecommerce_super.easyecom.flows.po_push.after_rename_po",
     },
 }

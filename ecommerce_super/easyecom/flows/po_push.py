@@ -833,25 +833,63 @@ def validate_pre_push(doc: Any, method: str | None = None) -> None:
 
 
 def _check_mixed_warehouses(doc: Any) -> None:
+    """§9 carry-in (Stage 3): resolve the SET of distinct warehouses
+    across header set_warehouse + line warehouses, map each to its EE
+    Location, then:
+      - exactly ONE Location resolves → proceed (a multi-line PO whose
+        lines all target the same physical warehouse is valid, even if
+        expressed per-line)
+      - TWO OR MORE Locations resolve → throw the split error (EE PO is
+        single-warehouse)
+      - ZERO Locations → silent skip (non-EE PO; validate hook returns,
+        the per-call Gate-0 in the push path handles the rest)
+    """
     if not doc.items:
         return
+
+    warehouses: set[str] = set()
     if doc.set_warehouse:
-        # Header-level warehouse wins. Allow lines to inherit silently.
+        warehouses.add(doc.set_warehouse)
+    for l in doc.items:
+        if l.warehouse:
+            warehouses.add(l.warehouse)
+    if not warehouses:
         return
-    line_whs = [(l.warehouse or "") for l in doc.items if (l.warehouse or "")]
-    if not line_whs:
-        return
-    distinct = set(line_whs)
-    if len(distinct) > 1:
+
+    # Map each distinct warehouse to its EE Location (if any).
+    locations: set[str] = set()
+    non_ee_warehouses: set[str] = set()
+    for wh in warehouses:
+        loc = frappe.db.get_value(
+            "EasyEcom Location", {"mapped_warehouse": wh}, "name"
+        )
+        if loc:
+            locations.add(loc)
+        else:
+            non_ee_warehouses.add(wh)
+
+    if len(locations) > 1:
         frappe.throw(
             frappe._(
-                "§9: Purchase Order spans multiple warehouses ({0}). EE "
-                "does not model multi-warehouse POs cleanly — split into "
-                "one PO per warehouse, OR set a single set_warehouse on "
-                "the PO header."
-            ).format(", ".join(sorted(distinct))),
+                "§9: Purchase Order spans multiple EasyEcom Locations "
+                "({0}). EE PO is single-warehouse — split into one PO per "
+                "Location."
+            ).format(", ".join(sorted(locations))),
             frappe.ValidationError,
         )
+    # One EE Location + some non-EE warehouses → also a split issue (a
+    # PO can't be half-in-scope, half-out). One EE + zero non-EE → fine.
+    if len(locations) == 1 and non_ee_warehouses:
+        frappe.throw(
+            frappe._(
+                "§9: Purchase Order mixes an EasyEcom-mapped warehouse "
+                "with non-EE warehouses ({0}). Split into separate POs — "
+                "EE only sees the EE-mapped portion."
+            ).format(", ".join(sorted(non_ee_warehouses))),
+            frappe.ValidationError,
+        )
+    # Zero EE locations: silent — validate hook returns; the push
+    # path's Gate-0 already short-circuits at runtime.
 
 
 def _check_warehouse_flip(doc: Any) -> None:
