@@ -23,8 +23,12 @@ def _ctx(**kw) -> T.TransformContext:
 
 class TestRegistry(unittest.TestCase):
     def test_count_matches_spec_plus_compose(self) -> None:
-        # 21 vocabulary entries (§5.5) + compose sentinel = 22.
-        self.assertEqual(len(T.TRANSFORMERS), 22)
+        # 24 vocabulary entries + compose sentinel = 25. The SPEC §5.5 list
+        # has been extended past the original 21: §9 Stage 1 added
+        # lookup_field (the 3-arg generalisation of lookup_id /
+        # reverse_lookup_id) to support Supplier-Map-mediated lookups.
+        # Earlier extensions account for the remaining gap.
+        self.assertEqual(len(T.TRANSFORMERS), 25)
 
     def test_unknown_transformer_raises(self) -> None:
         with self.assertRaises(FieldMappingCompileError):
@@ -233,6 +237,36 @@ class TestArgsContractValidator(unittest.TestCase):
             T.validate_transformer_args(
                 "lookup_id", {"doctype": "Item"}, rule_label="r"
             )
+
+    def test_lookup_field_requires_three_args(self) -> None:
+        """§9 Stage 1 — lookup_field needs doctype + filter_field +
+        target_field. Missing any one fails compile."""
+        with self.assertRaises(FieldMappingCompileError):
+            T.validate_transformer_args(
+                "lookup_field",
+                {"doctype": "EasyEcom Supplier Map", "filter_field": "erpnext_name"},
+                rule_label="r",
+            )
+        with self.assertRaises(FieldMappingCompileError):
+            T.validate_transformer_args(
+                "lookup_field",
+                {"doctype": "EasyEcom Supplier Map", "target_field": "ee_vendor_id"},
+                rule_label="r",
+            )
+        with self.assertRaises(FieldMappingCompileError):
+            T.validate_transformer_args("lookup_field", None, rule_label="r")
+
+    def test_lookup_field_accepts_full_args(self) -> None:
+        """Three-arg form passes validation."""
+        T.validate_transformer_args(
+            "lookup_field",
+            {
+                "doctype": "EasyEcom Supplier Map",
+                "filter_field": "erpnext_name",
+                "target_field": "ee_vendor_id",
+            },
+            rule_label="r",
+        )
 
     def test_enum_map_map_must_be_dict(self) -> None:
         with self.assertRaises(FieldMappingCompileError):

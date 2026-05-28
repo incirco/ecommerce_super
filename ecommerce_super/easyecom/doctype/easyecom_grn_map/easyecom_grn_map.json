@@ -1,0 +1,197 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-GRN-{ee_grn_id}",
+ "creation": "2026-05-28 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "ee_grn_id",
+  "status",
+  "header_section",
+  "grn_invoice_number",
+  "grn_invoice_date",
+  "grn_status_id",
+  "total_grn_value",
+  "ee_keys_section",
+  "inwarded_warehouse_c_id",
+  "vendor_c_id",
+  "po_link_col",
+  "po_ref_num",
+  "ee_po_id",
+  "routing_section",
+  "purchase_receipt",
+  "linked_po_map",
+  "routed_to_stn",
+  "last_observed_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "ee_grn_id",
+   "fieldtype": "Int",
+   "label": "EE grn_id",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "EasyEcom-assigned int — the natural primary key on /Grn/V2/getGrnDetails (`grn_id`). EE-born; we never invent these. UNIQUE: idempotency hinge for the Stage 3 pull (re-pulling the same grn_id is a no-op)."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nReceipted\nHeld-Pre-QC\nSTN-Routed\nFailed\nDiscrepancy\nDeleted-Post-Receipt",
+   "default": "Pending",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "§9 GRN-Map state. Pending = observed, not yet processable (e.g. Item/Supplier Map missing). Receipted = PR created + submitted. Held-Pre-QC = observed but grn_status_id < grn_receipt_trigger_status (re-evaluated next poll). STN-Routed = vendor_c_id == inwarded_warehouse_c_id; §10 STN-inward picks up. Failed = receipting attempted and failed (see linked Sync Record). Discrepancy = receipted but with line-level discrepancy (tolerance breach, HSN mismatch). Deleted-Post-Receipt = EE flipped grn_status_id to 4 after we already posted the PR."
+  },
+  {
+   "fieldname": "header_section",
+   "fieldtype": "Section Break",
+   "label": "GRN Header (observed)",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "grn_invoice_number",
+   "fieldtype": "Data",
+   "label": "GRN Invoice Number",
+   "description": "EE's `grn_invoice_number` — free-text, may be 'AutoGrn' / blank / junk ('123', 'jghvhgv' have been observed on Harmony). Captured raw; consumed by §9 Stage 3 as supplier_delivery_note on the resulting Purchase Receipt."
+  },
+  {
+   "fieldname": "grn_invoice_date",
+   "fieldtype": "Date",
+   "label": "GRN Invoice Date",
+   "description": "EE's `grn_invoice_date`. Consumed by §9 Stage 3 as ecs_supplier_invoice_date on the resulting Purchase Receipt."
+  },
+  {
+   "fieldname": "grn_status_id",
+   "fieldtype": "Int",
+   "label": "grn_status_id (latest observed)",
+   "in_list_view": 1,
+   "description": "EE GRN lifecycle: 1 CREATED · 2 QC Pending · 3 QC Complete · 4 Deleted. Compared against `grn_receipt_trigger_status` setting (default 3) to decide whether to receipt. Latest value observed — Stage 3 sweeps refresh this on every poll."
+  },
+  {
+   "fieldname": "total_grn_value",
+   "fieldtype": "Currency",
+   "label": "Total GRN Value (observed)",
+   "description": "EE's `total_grn_value` — cross-checked by §9 Stage 3 against the PR base_total to catch silent EE-side value-only edits."
+  },
+  {
+   "fieldname": "ee_keys_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Resolution Keys",
+   "collapsible": 1,
+   "description": "Three keys earn their place on this row: inwarded_warehouse_c_id (Gate-0 hinge — Location.location_key); vendor_c_id (Supplier Map READ key — note: different from PO push's WRITE key, by design); po_ref_num + ee_po_id (PO resolution — primary on po_ref_num=PO name, fallback on po_id when ref is blank/junk)."
+  },
+  {
+   "fieldname": "inwarded_warehouse_c_id",
+   "fieldtype": "Int",
+   "label": "Inwarded Warehouse c_id",
+   "in_list_view": 1,
+   "description": "EE's `inwarded_warehouse_c_id`. Gate-0 lookup hinge — must resolve via §8a EasyEcom Location.location_key to an EE-mapped Warehouse. Misses are silent-skipped (Stage 3) and never create a GRN Map row in the first place."
+  },
+  {
+   "fieldname": "vendor_c_id",
+   "fieldtype": "Int",
+   "label": "Vendor c_id (READ key)",
+   "description": "EE's `vendor_c_id` from the GRN payload. Resolves to ERPNext Supplier via Supplier Map.ee_vendor_c_id (READ key) — DIFFERENT field from PO push's Supplier Map.ee_vendor_id (WRITE key). The §8.3 two-id split pays off here: pull resolves on the read key, push targets the write key, both stored on the same Supplier Map row."
+  },
+  {
+   "fieldname": "po_link_col",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "po_ref_num",
+   "fieldtype": "Data",
+   "label": "PO Reference Number",
+   "description": "EE's `po_ref_num` — free-text, may be blank/junk. PRIMARY PO join key: if it resolves to an ERPNext Purchase Order name, link via PO Map. Real Harmony observations: grn 141653 has '' (empty), grn 141461 has 'jghvhgv' (junk) — fallback to ee_po_id covers those."
+  },
+  {
+   "fieldname": "ee_po_id",
+   "fieldtype": "Int",
+   "label": "EE po_id (fallback)",
+   "description": "FALLBACK PO join key when po_ref_num is blank/junk. Resolves via PO Map.ee_po_id → linked PO. Always populated by EE in the GRN payload (`po_id`)."
+  },
+  {
+   "fieldname": "routing_section",
+   "fieldtype": "Section Break",
+   "label": "Routing + Resolution"
+  },
+  {
+   "fieldname": "purchase_receipt",
+   "fieldtype": "Link",
+   "label": "Purchase Receipt",
+   "options": "Purchase Receipt",
+   "description": "The ERPNext Purchase Receipt created by §9 Stage 3 for this GRN. NULL when: status=Pending (not yet processable), status=Held-Pre-QC (below trigger), status=STN-Routed (§10's problem, no PR), status=Failed (receipting blew up). One-to-one with PR — never one-to-many."
+  },
+  {
+   "fieldname": "linked_po_map",
+   "fieldtype": "Link",
+   "label": "Linked PO Map",
+   "options": "EasyEcom PO Map",
+   "description": "The PO Map row this GRN's PO resolves to. NULL when the PO is EE-born and the §9 push hasn't created an ERPNext PO yet (out-of-order case — §9 Stage 3 raises a Discrepancy and the FDE links). NULL also when STN-Routed (no PO concept)."
+  },
+  {
+   "fieldname": "routed_to_stn",
+   "fieldtype": "Check",
+   "label": "Routed to STN",
+   "default": "0",
+   "description": "§9 ↔ §10 boundary marker. SET when vendor_c_id == inwarded_warehouse_c_id at observation time (EE-internal inward: batch loads, system transfers, opening stock — not procurement). When set, §9 creates NO PR; §10 STN-inward picks up. Real Harmony examples: grn 142698/142703/141936 all self-vendor 26564; 141936 has total_grn_value=49990 with real apparel SKU AW21ANDMCS834-Beige-XXL-Casual Regular — §10 must handle valued self-GRNs."
+  },
+  {
+   "fieldname": "last_observed_at",
+   "fieldtype": "Datetime",
+   "label": "Last Observed At",
+   "read_only": 1,
+   "description": "When this row was last refreshed by a §9 Stage 3 pull. Used to detect stale rows (e.g. GRN deleted upstream without status flip)."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-28 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom GRN Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

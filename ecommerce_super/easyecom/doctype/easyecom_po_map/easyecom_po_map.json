@@ -1,0 +1,202 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-PO-{purchase_order}",
+ "creation": "2026-05-28 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "reference_code",
+  "status",
+  "link_section",
+  "purchase_order",
+  "ee_keys_section",
+  "ee_po_id",
+  "status_drift_section",
+  "last_pushed_po_status",
+  "status_drift_col",
+  "ee_observed_po_status",
+  "ee_observed_at",
+  "flag_section",
+  "flag_reason",
+  "drift_section",
+  "drift_detected_at",
+  "drift_fields",
+  "exclude_section",
+  "exclude_fields"
+ ],
+ "fields": [
+  {
+   "fieldname": "reference_code",
+   "fieldtype": "Data",
+   "label": "Reference Code",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "description": "Content-channel key — = the linked ERPNext Purchase Order name. Stable from PO submit; ERPNext-born. The §9 push uses this as `referenceCode` on CreatePurchaseOrder so EE can dedupe + match content updates."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Mapped\nCreated-Flagged\nFlagged-Not-Created\nDrift\nDisabled",
+   "default": "Mapped",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "§9 review/exception state — same enum as §8 master maps. Mapped = pushed and clean; Created-Flagged = pushed with a soft issue (e.g. unmapped tax rule); Flagged-Not-Created = not pushed (Supplier Map missing, Item Map missing, Gate-0 non-EE warehouse); Drift = po_status divergence between ERPNext-pushed and EE-observed; Disabled = lifecycle-deactivated."
+  },
+  {
+   "fieldname": "link_section",
+   "fieldtype": "Section Break",
+   "label": "Linked ERPNext Purchase Order"
+  },
+  {
+   "fieldname": "purchase_order",
+   "fieldtype": "Link",
+   "label": "Purchase Order",
+   "options": "Purchase Order",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "The ERPNext PO this row tracks. Dynamic-link to Purchase Order; the §9 push uses doc.name as reference_code (autoname formula ties the two together). One PO Map row per in-scope PO (Gate-0: warehouse must map to an EE Location)."
+  },
+  {
+   "fieldname": "ee_keys_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Internal IDs",
+   "collapsible": 1,
+   "description": "§9 two-channel two-key model: reference_code (above) is the WRITE key on the content channel (CreatePurchaseOrder), ee_po_id is the WRITE key on the status channel (updatePoStatus). EE returns po_id from CreatePurchaseOrder data — captured then for all subsequent status pushes."
+  },
+  {
+   "fieldname": "ee_po_id",
+   "fieldtype": "Int",
+   "label": "EE po_id (status-channel key)",
+   "in_list_view": 1,
+   "description": "EasyEcom-assigned int returned by /WMS/Cart/CreatePurchaseOrder as data.poId. Status channel key on /wms/updatePoStatus. NULL until the first successful content push returns it. Re-pushes of content (createOrUpdate=U) do NOT reassign this — the int is sticky once captured."
+  },
+  {
+   "fieldname": "status_drift_section",
+   "fieldtype": "Section Break",
+   "label": "PO Status Tracking",
+   "collapsible": 1,
+   "description": "Drift surface for the status channel. PO content is submitted-immutable on the ERPNext side, so there is no content-snapshot field on this row — the only drift surface is po_status. Status drift is detected by comparing last_pushed_po_status (what ERPNext last asserted) against ee_observed_po_status (what GRN-pull most recently observed). Divergence indicating EE-side action contrary to ERPNext (e.g. EE→4 Rejected when ERPNext shows Approved=3) → Drift + Integration Discrepancy in §9 Stage 3."
+  },
+  {
+   "fieldname": "last_pushed_po_status",
+   "fieldtype": "Int",
+   "label": "Last Pushed po_status",
+   "description": "po_status int last sent via /wms/updatePoStatus. Idempotency guard for the §9 Stage 2 status pusher — skip the push if (target po_status) == last_pushed_po_status. NULL until the first status push. ERPNext-side status transitions: on_submit → 3 (Approved), receipts-complete → 5 (Completed), on_cancel → 7 (Cancelled)."
+  },
+  {
+   "fieldname": "status_drift_col",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ee_observed_po_status",
+   "fieldtype": "Int",
+   "label": "EE Observed po_status",
+   "read_only": 1,
+   "description": "po_status_id last observed via /Grn/V2/getGrnDetails (§9 Stage 3 sweep). Refreshed every time a GRN row carries this PO. The reconciliation compares against last_pushed_po_status; divergence indicating EE-side action contrary to ERPNext raises a Discrepancy. EE-internal codes (11-16 = shipping milestones) are recorded but NOT raised as Discrepancy."
+  },
+  {
+   "fieldname": "ee_observed_at",
+   "fieldtype": "Datetime",
+   "label": "Observed At",
+   "read_only": 1,
+   "description": "When ee_observed_po_status was last refreshed by the §9 Stage 3 GRN-pull sweep."
+  },
+  {
+   "fieldname": "flag_section",
+   "fieldtype": "Section Break",
+   "label": "Flag Details",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "flag_reason",
+   "fieldtype": "Small Text",
+   "label": "Flag Reason",
+   "description": "For Created-Flagged / Flagged-Not-Created / Drift rows: plain-English reason the FDE can act on (e.g. 'Supplier Map missing for supplier VEND-001', 'Gate-0 fail: warehouse not EE-mapped', 'tax_rule not configured on Item ITEM-X', 'po_status divergence: pushed 3, EE shows 7')."
+  },
+  {
+   "fieldname": "drift_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Details",
+   "collapsible": 1,
+   "depends_on": "eval:doc.status==='Drift'",
+   "description": "Populated by the §9 Stage 3 status reconciliation. Drift on a PO Map row is status-only by design — PO documents are submitted-immutable in ERPNext (content drift is structurally impossible). The Drift Fields table here holds at most one row: the po_status divergence."
+  },
+  {
+   "fieldname": "drift_detected_at",
+   "fieldtype": "Datetime",
+   "label": "Drift Detected At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "drift_fields",
+   "fieldtype": "Table",
+   "label": "Drift Fields",
+   "options": "EasyEcom Drift Field",
+   "description": "Per-field divergence. Reuses §8d/§8e/§8f's shared Drift Field child DocType — the §9 status drift case stores field='po_status', erpnext_value=last_pushed_po_status, ee_value=ee_observed_po_status."
+  },
+  {
+   "fieldname": "exclude_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Exclusions",
+   "collapsible": 1,
+   "description": "Fields the drift detector should IGNORE on this PO. Rarely populated for §9 (only po_status is even drift-comparable here). Reuses the shared Exclude Field child."
+  },
+  {
+   "fieldname": "exclude_fields",
+   "fieldtype": "Table",
+   "label": "Excluded Fields",
+   "options": "EasyEcom Exclude Field"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-28 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom PO Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

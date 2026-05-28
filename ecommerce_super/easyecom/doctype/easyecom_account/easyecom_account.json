@@ -61,6 +61,7 @@
   "allow_under_receipt_pct",
   "tax_variance_tolerance_pct",
   "lost_in_transit_threshold_days",
+  "grn_receipt_trigger_status",
   "grn_policy_col_2",
   "mandatory_batch_for_groups",
   "mandatory_serial_for_groups",
@@ -490,6 +491,15 @@
    "label": "Lost-in-Transit Threshold (days)",
    "default": "30",
    "reqd": 1
+  },
+  {
+   "fieldname": "grn_receipt_trigger_status",
+   "fieldtype": "Select",
+   "label": "GRN Receipt Trigger Status",
+   "options": "1 CREATED\n2 QC Pending\n3 QC Complete",
+   "default": "3 QC Complete",
+   "reqd": 1,
+   "description": "The grn_status_id threshold at or above which the GRN pull (§9 Stage 3) creates a Purchase Receipt. Below this, GRNs are observed but held (GRN Map status = Held-Pre-QC). Default 3 (QC Complete). Note: qc_fail-based reject split is only meaningful at status 3 — at 1 or 2, qc_fail is 0 by construction and the entire received_quantity is treated as accepted. Set to 3 unless the deployment does not run QC in EE."
   },
   {
    "fieldname": "grn_policy_col_2",

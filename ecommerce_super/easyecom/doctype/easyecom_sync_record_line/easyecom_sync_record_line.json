@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "source_line_ref",
+  "source_line_number",
   "target_field",
   "line_status",
   "reason",
@@ -19,6 +20,12 @@
    "label": "Source Line Ref",
    "reqd": 1,
    "description": "EasyEcom-side line identifier (e.g. SKU / line id) the parent Sync Record's source payload carried."
+  },
+  {
+   "fieldname": "source_line_number",
+   "fieldtype": "Int",
+   "label": "Source Line Number",
+   "description": "Ordinal of this line within the source document (§9 GRN payload's order: 1, 2, 3, …). Helps the FDE correlate this row back to a specific line on the upstream side when source_line_ref is non-unique or absent. Optional; flows may leave it 0 for upstream payloads that don't carry an ordinal."
   },
   {
    "fieldname": "target_field",

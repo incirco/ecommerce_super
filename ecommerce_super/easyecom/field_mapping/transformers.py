@@ -396,6 +396,45 @@ def _t_reverse_lookup_id(value: Any, *, args: dict, context: TransformContext) -
     return name
 
 
+def _t_lookup_field(value: Any, *, args: dict, context: TransformContext) -> Any:
+    """Find a Frappe doc by an arbitrary field and return some other field.
+
+    The 3-arg generalisation of lookup_id / reverse_lookup_id. Needed when
+    the join key is neither the docname nor a direct foreign id — e.g. §9
+    PO push resolves an ERPNext PO's supplier via the Supplier Map:
+
+        filter_field = "erpnext_name", target_field = "ee_vendor_id"
+
+    or §9 GRN pull reverses that:
+
+        filter_field = "ee_vendor_c_id", target_field = "erpnext_name"
+
+    args:
+      doctype       — the Frappe DocType to search
+      filter_field  — the field on the doc whose value matches `value`
+      target_field  — the field on the matched doc to return
+
+    Raises FieldMappingRuleError on miss; the §9 flow layer in Stage 2/3
+    catches and surfaces it as flag-not-pushed / flag-not-receipted.
+    """
+    if value is None or value == "":
+        return None
+    doctype = args["doctype"]
+    filter_field = args["filter_field"]
+    target_field = args["target_field"]
+    row = frappe.db.get_value(
+        doctype, {filter_field: value}, [target_field], as_dict=True
+    )
+    if row is None or row.get(target_field) in (None, ""):
+        raise FieldMappingRuleError(
+            f"lookup_field: no {doctype} with {filter_field}={value!r}, "
+            f"or its {target_field} is empty",
+            transform="lookup_field",
+            source_value=value,
+        )
+    return row[target_field]
+
+
 # ----- Enum / conditional constant -----
 
 
@@ -555,6 +594,16 @@ def _validate_reverse_lookup_id(name: str, args: dict | None) -> None:
     _require_keys(args, ["doctype", "source_field"], transformer=name)
 
 
+def _validate_lookup_field(name: str, args: dict | None) -> None:
+    if not args:
+        raise FieldMappingCompileError(
+            "Transformer 'lookup_field' requires args "
+            "{doctype, filter_field, target_field}",
+            parse_error="missing args",
+        )
+    _require_keys(args, ["doctype", "filter_field", "target_field"], transformer=name)
+
+
 def _validate_enum_map(name: str, args: dict | None) -> None:
     if not args:
         raise FieldMappingCompileError(
@@ -645,6 +694,7 @@ TRANSFORMERS: dict[str, tuple[Callable, Callable[[str, dict | None], None]]] = {
     "paise_to_currency": (_t_paise_to_currency, _validate_no_args),
     "lookup_id": (_t_lookup_id, _validate_lookup_id),
     "reverse_lookup_id": (_t_reverse_lookup_id, _validate_reverse_lookup_id),
+    "lookup_field": (_t_lookup_field, _validate_lookup_field),
     "enum_map": (_t_enum_map, _validate_enum_map),
     "conditional_constant": (_t_conditional_constant, _validate_conditional_constant),
     "computed": (_t_computed, _validate_computed),
