@@ -893,6 +893,21 @@ def _append_pr_line(
             f"{line_payload.get('grn_detail_id')}."
         )
 
+    # Resolve `purchase_order_item` — the docname of the specific PO
+    # line this PR line satisfies. ERPNext uses THIS field (not just
+    # `purchase_order`) to wire up the canonical PO→PR linkage:
+    #   - PO.per_received and PO Item.received_qty only update when
+    #     PR Item.purchase_order_item is set.
+    #   - PO form's Connections panel queries by purchase_order_item.
+    # Live finding 2026-05-28: without this, the PR is invisible from
+    # the PO's UI even though all our back-refs are populated.
+    po_item_name = None
+    if resolution.get("po_name"):
+        po_item_name = _resolve_po_item_for_pr_line(
+            po_name=resolution["po_name"],
+            item_code=item_code,
+        )
+
     line = pr_doc.append(
         "items",
         {
@@ -911,11 +926,10 @@ def _append_pr_line(
                 if rejected_qty > 0
                 else None
             ),
-            # Per-line PO link (PR Item carries purchase_order natively;
-            # PR header does NOT). Stage 4 may set purchase_order_item
-            # when we can resolve the exact PO line via po_detail_id +
-            # a Purchase Order Item custom-field mapping; deferred.
+            # ERPNext-canonical PO linkage (BOTH fields needed):
             "purchase_order": resolution.get("po_name") or None,
+            "purchase_order_item": po_item_name,
+            # EE-side back-refs for our flow:
             "ecs_easyecom_grn_detail_id": str(
                 line_payload.get("grn_detail_id") or ""
             ),
@@ -962,6 +976,30 @@ def _append_pr_line(
                     "grn_detail_id": line_payload.get("grn_detail_id"),
                 }
             )
+
+
+def _resolve_po_item_for_pr_line(
+    *, po_name: str, item_code: str
+) -> str | None:
+    """Find the docname of the Purchase Order Item line on `po_name`
+    matching `item_code`. Returns None if no match (the PR line stays
+    unlinked at the line level — the chain still works but the PO's
+    standard linkage is incomplete).
+
+    If multiple PO lines have the same item_code (multi-line same-SKU
+    POs), this returns the first by idx — Stage 4 can use the EE
+    purchase_order_detail_id back-ref for finer disambiguation if
+    those cases arise.
+    """
+    if not po_name or not item_code:
+        return None
+    row = frappe.db.get_value(
+        "Purchase Order Item",
+        {"parent": po_name, "item_code": item_code},
+        "name",
+        order_by="idx asc",
+    )
+    return row or None
 
 
 def _ensure_batch(
