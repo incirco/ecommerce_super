@@ -795,7 +795,15 @@ def _append_pr_line(
     qc_fail = flt(line_payload.get("qc_fail") or 0)
     accepted_qty = max(received_qty - qc_fail, 0)
     rejected_qty = qc_fail
-    rate = flt(line_payload.get("grn_detail_price") or 0)
+    # Live finding 2026-05-28 on Harmony GRN 2115440:
+    # `grn_detail_price` on the EE payload is the LINE TOTAL (gross),
+    # not the unit price. Real GRN: received_quantity=5, qc_fail=0,
+    # grn_detail_price=590, total_grn_value=590 — so 590 IS the line
+    # total, and the unit is 590/5 = 118. The §9 packet had this wrong
+    # (called it "PR rate, tax-inclusive" implying per-unit). Divide
+    # to derive the per-unit rate ERPNext PR Item.rate expects.
+    line_gross_total = flt(line_payload.get("grn_detail_price") or 0)
+    rate = (line_gross_total / received_qty) if received_qty else 0.0
 
     # Rejected qty handling: rejected_qty>0 with no
     # default_rejected_warehouse → flag-not-pushed (NOT a hard throw;

@@ -257,10 +257,13 @@ def _grn_payload(
     """Build a getGrnDetails-shape GRN row."""
     items = items or []
     if total_grn_value is None:
+        # grn_detail_price on real Harmony payloads is the LINE TOTAL
+        # (not unit price) — confirmed live 2026-05-28 on GRN 2115440
+        # where received_quantity=5, grn_detail_price=590,
+        # total_grn_value=590. The total is therefore the sum of per-
+        # line grn_detail_price values.
         total_grn_value = sum(
-            float(it.get("received_quantity", 0))
-            * float(it.get("grn_detail_price", 0))
-            for it in items
+            float(it.get("grn_detail_price", 0)) for it in items
         )
     return {
         "grn_id": grn_id,
