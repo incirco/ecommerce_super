@@ -1383,10 +1383,10 @@
   "direction": "Push",
   "active": 1,
   "missing_field_policy": "Permissive",
-  "version": 2,
+  "version": 3,
   "last_modified_by": "Administrator",
   "last_modified_at": "2026-05-28 00:00:00",
-  "change_reason": "\u00a79 Stage 1 repoint (2026-05-28). Was: supplier \u2194 vendor_id direct, treating supplier.name as the EE write key. Now: supplier resolves via EasyEcom Supplier Map.erpnext_name \u2192 ee_vendor_id (the \u00a78.3 two-id model's WRITE key, e.g. 'VN00001'). Uses the new lookup_field transformer (filter_field=erpnext_name, target_field=ee_vendor_id). Stage 2 wires the missing-Map-row fallback to flag-not-pushed; Stage 1 just repoints. Also renamed `po_reference` \u2192 `referenceCode` to match the live /WMS/Cart/CreatePurchaseOrder shape (per \u00a79 packet contract section). `vendor_id` \u2192 `vendorId` (camelCase, matches EE wire shape). transaction_date \u2192 expDeliveryDate via date_format (EE field name from packet; was po_date which doesn't exist on CreatePurchaseOrder). The line-item compose ruleset name stays EasyEcom-PO-Line-Push (built in Stage 2).",
+  "change_reason": "\u00a79 v3 (2026-05-28): LINE ARRAY KEY IS `items` NOT `lineItems`. Live finding via Postman-direct success on Harmony (poId 1971520 returned 200). Our prior `lineItems` payload caused EE backend to read items=[] and HTTP 500 with a generic Apache error page. The \u00a79 packet's reverse-engineering had the wrong field name; corrected here. v2 (\u00a79 Stage 1 repoint): supplier resolves via Supplier Map.erpnext_name \u2192 ee_vendor_id (WRITE key) using lookup_field transformer (filter_field=erpnext_name, target_field=ee_vendor_id); also corrected to `referenceCode` / `vendorId` / `expDeliveryDate` per live shape.",
   "rules": [
    {
     "erpnext_path": "name",
@@ -1419,7 +1419,7 @@
    },
    {
     "erpnext_path": "items",
-    "easyecom_path": "lineItems",
+    "easyecom_path": "items",
     "transform_push": "compose",
     "transform_pull": "compose",
     "transform_args": {

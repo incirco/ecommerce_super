@@ -626,9 +626,16 @@ class TestContentPush(FrappeTestCase):
         self.assertEqual(payload["vendorId"], "VN-CP-001")
         self.assertEqual(payload["createOrUpdate"], "I")
         self.assertEqual(payload["isCancel"], 0)
-        self.assertEqual(payload["updateTaxRate"], 0)
-        self.assertEqual(len(payload["lineItems"]), 1)
-        line = payload["lineItems"][0]
+        # updateTaxRate is OMITTED from the payload on first push (post
+        # live-finding fix 2026-05-28 — EE's working Postman create
+        # didn't include it; we only include on amends with tax change).
+        self.assertNotIn("updateTaxRate", payload)
+        # Line array key is `items` (NOT `lineItems` — live finding
+        # 2026-05-28: lineItems caused EE 500; items is the working key).
+        self.assertIn("items", payload)
+        self.assertNotIn("lineItems", payload)
+        self.assertEqual(len(payload["items"]), 1)
+        line = payload["items"][0]
         self.assertEqual(line["sku"], "SKU-CP-001")
         self.assertEqual(line["quantity"], 5.0)
         # tax_rate=0 with no Item Tax Template → unitPrice == rate.
@@ -690,13 +697,16 @@ class TestContentPush(FrappeTestCase):
         )
         # First push.
         push_one_po(po.name, client=mock, push_status_after_content=False)
-        # Re-push with no change → updateTaxRate must be 0.
+        # Re-push with no tax change → updateTaxRate must be OMITTED
+        # (we only include the flag on amends WHERE tax changed; the
+        # live-working EE Postman amend payload also omits it on
+        # no-change amends).
         mock.calls.clear()
         push_one_po(po.name, client=mock, push_status_after_content=False)
         _, payload = next(
             c for c in mock.calls if c[0] == "/WMS/Cart/CreatePurchaseOrder"
         )
-        self.assertEqual(payload["updateTaxRate"], 0)
+        self.assertNotIn("updateTaxRate", payload)
 
 
 # ============================================================

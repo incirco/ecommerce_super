@@ -522,29 +522,31 @@ def _do_content_push(
             }
         )
 
-    # Top-level payload — same trim philosophy: omit empty optional
-    # keys rather than send them blank. EE's PO creation crashed with
-    # HTTP 500 on present-but-empty fields during the 2026-05-28 live
-    # smoke.
+    # Top-level payload — live finding 2026-05-28: EE's CreatePurchaseOrder
+    # expects the line array under `items` (not `lineItems` as the §9
+    # packet's reverse-engineering had suggested). Sending `lineItems`
+    # causes EE to read items=[] and crash its Apache backend with a
+    # generic HTML 500. Confirmed by Postman-direct success vs our
+    # repeated 500s. docNumber + updateTaxRate also dropped — the
+    # working Postman payload omits them and EE accepts it.
     payload: dict[str, Any] = {
         "vendorId": vendor_id,
         "referenceCode": po.name,
         "expDeliveryDate": _fmt_date(po.schedule_date),
         "createOrUpdate": create_or_update,
         "isCancel": 0,  # never wired — cancel goes via updatePoStatus=7
-        "docNumber": po.name,
-        "updateTaxRate": 1 if (existing_ee_po_id and tax_changed) else 0,
-        "lineItems": line_items,
+        "items": line_items,
     }
-    addr = (warehouse_address or {}).get("address_line1")
-    if addr:
-        payload["address"] = addr
-    # shippingCost — only include if non-zero (and as int when possible).
-    # ERPNext PO has `taxes` table for shipping; for now we don't
-    # extract; Stage 4 may add this.
-    shipping_cost = 0
-    if shipping_cost:
-        payload["shippingCost"] = shipping_cost
+    # address is REQUIRED — EE crashes without it. Use warehouse
+    # address; fall back to a sane placeholder when none configured.
+    addr = (warehouse_address or {}).get("address_line1") or (
+        (warehouse_address or {}).get("city") or "Address pending"
+    )
+    payload["address"] = addr
+    # updateTaxRate — only include on amend WITH tax change (matches EE
+    # docs; the working Postman create omitted it entirely).
+    if existing_ee_po_id and tax_changed:
+        payload["updateTaxRate"] = 1
 
     try:
         response = client.post(PURCHASE_ORDER_CREATE, payload=payload)
