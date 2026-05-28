@@ -546,6 +546,42 @@ def process_one_grn(
         if disc:
             discrepancies.append(disc)
 
+    # Batch-on-non-batch-Item mismatch (live finding 2026-05-28): EE
+    # supplied a batch_code on a line whose Item.has_batch_no=0. The
+    # ecs_ee_batch_code custom field captured the data, but the native
+    # PR Item.batch_no can't be set (ERPNext rejects). Surface as
+    # informational Discrepancy.
+    batch_mismatch_lines = resolution.get("batch_mismatch_lines") or []
+    if batch_mismatch_lines:
+        lines_summary = "\n".join(
+            f"  - {bm['item_code']}: ee_batch_code={bm['ee_batch_code']!r} "
+            f"expire={bm['ee_expire_date'] or '(none)'} "
+            f"(grn_detail_id={bm['grn_detail_id']})"
+            for bm in batch_mismatch_lines
+        )
+        disc = _raise_discrepancy(
+            kind="batch_code on non-batch item",
+            reference_doctype="Purchase Receipt",
+            reference_name=pr_doc.name,
+            company=company,
+            reason=(
+                "§9 batch-data captured on a non-batch-managed Item. EE "
+                "supplied batch_code + expire_date on the GRN line(s) "
+                "below, but Item.has_batch_no=0 on ERPNext. The native "
+                "batch_no field on PR Item could not be set (ERPNext "
+                "rejects it on non-batch items). The EE-side data is "
+                "preserved in ecs_ee_batch_code / ecs_ee_expire_date "
+                "custom fields for audit + future migration to batch "
+                "tracking.\n\nAffected lines:\n" + lines_summary +
+                "\n\nFDE action: either enable Item.has_batch_no on the "
+                "affected items (then re-pull this GRN) and accept the "
+                "EE-side data, OR accept the loss-of-batch-context for "
+                "this PR and dismiss."
+            ),
+        )
+        if disc:
+            discrepancies.append(disc)
+
     # Tax variance check (post-build so the PR's actual decomposition
     # is on the doc).
     tax_disc = _check_tax_variance(
@@ -850,18 +886,43 @@ def _append_pr_line(
         },
     )
 
-    # Batch + expiry handling (skip serial-no for Stage 3 — wired in
-    # Stage 4 if needed).
-    if frappe.db.get_value("Item", item_code, "has_batch_no"):
-        batch_code = (line_payload.get("batch_code") or "").strip()
-        expire_date = _date_from_ee(line_payload.get("expire_date"))
-        if batch_code:
+    # Batch + expiry handling. Two-layer capture (live finding
+    # 2026-05-28):
+    #   1. ALWAYS capture EE's batch_code + expire_date into the
+    #      ecs_ee_batch_code / ecs_ee_expire_date custom fields on
+    #      PR Item — preserves audit trail regardless of whether the
+    #      ERPNext Item is batch-managed.
+    #   2. WHEN Item.has_batch_no=1, ALSO create/link a Batch doc and
+    #      set the native batch_no field (existing behavior).
+    #   3. WHEN Item.has_batch_no=0 AND EE supplied a batch_code,
+    #      raise an informational Discrepancy so the FDE sees the
+    #      mismatch (the flow returns this signal to process_one_grn
+    #      via the resolution dict's `batch_mismatch_lines` list).
+    batch_code = (line_payload.get("batch_code") or "").strip()
+    expire_date = _date_from_ee(line_payload.get("expire_date"))
+    if batch_code:
+        line.ecs_ee_batch_code = batch_code
+        if expire_date:
+            line.ecs_ee_expire_date = expire_date
+        if frappe.db.get_value("Item", item_code, "has_batch_no"):
             batch_name = _ensure_batch(
                 item_code=item_code,
                 batch_id=batch_code,
                 expiry_date=expire_date,
             )
             line.batch_no = batch_name
+        else:
+            # Surface the mismatch via the resolution dict; the chain
+            # raises a Discrepancy after PR submit (when we have a
+            # real PR docname to reference).
+            resolution.setdefault("batch_mismatch_lines", []).append(
+                {
+                    "item_code": item_code,
+                    "ee_batch_code": batch_code,
+                    "ee_expire_date": str(expire_date) if expire_date else "",
+                    "grn_detail_id": line_payload.get("grn_detail_id"),
+                }
+            )
 
 
 def _ensure_batch(
