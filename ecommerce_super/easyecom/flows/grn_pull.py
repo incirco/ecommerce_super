@@ -391,15 +391,22 @@ def process_one_grn(
     # A GRN counts as "already processed" if a PR exists (regardless of
     # whether the row landed clean Receipted or with Discrepancy). The
     # second-pull case should never create a duplicate PR.
+    #
+    # Two-layer check (live finding 2026-05-28):
+    #   (a) Map row in {Receipted, Discrepancy} with PR linked — fast path.
+    #   (b) A submitted PR with matching ecs_easyecom_grn_id exists —
+    #       slow-path safety net. Catches the case where the Map row
+    #       was manually wiped (FDE cleanup, debugging) but the PR
+    #       survived. Without this, re-pulling against a wiped Map
+    #       silently creates a duplicate PR + double-counts received
+    #       qty against the PO line.
     if (
         existing_map
         and existing_map.get("status") in ("Receipted", "Discrepancy")
         and existing_map.get("purchase_receipt")
     ):
-        # Already done. Refresh observed-status + last_observed_at.
         _refresh_observed_only(grn_map_name=existing_map["name"], grn_row=grn_row)
         _reconcile_po_status(grn_row=grn_row, ee_grn_id=ee_grn_id)
-        # linked_po lives on PR Item (per-line), not PR header.
         first_line_po = frappe.db.get_value(
             "Purchase Receipt Item",
             {"parent": existing_map["purchase_receipt"]},
@@ -411,6 +418,38 @@ def process_one_grn(
             operation="noop",
             grn_map_status=existing_map.get("status") or "Receipted",
             purchase_receipt=existing_map["purchase_receipt"],
+            linked_po=first_line_po or None,
+        )
+    # Slow-path: PR exists by back-ref even if Map row doesn't.
+    existing_pr = frappe.db.get_value(
+        "Purchase Receipt",
+        {"ecs_easyecom_grn_id": str(ee_grn_id), "docstatus": 1},
+        "name",
+    )
+    if existing_pr:
+        # Rebuild a minimal Map row if missing (the FDE wiped it).
+        if not existing_map:
+            _upsert_grn_map_receipted(
+                ee_grn_id=ee_grn_id,
+                grn_row=grn_row,
+                inwarded_wh_c_id=inwarded_wh_c_id,
+                vendor_c_id=vendor_c_id,
+                pr_name=existing_pr,
+                linked_po_map_name=None,
+                status="Receipted",
+            )
+        _reconcile_po_status(grn_row=grn_row, ee_grn_id=ee_grn_id)
+        first_line_po = frappe.db.get_value(
+            "Purchase Receipt Item",
+            {"parent": existing_pr},
+            "purchase_order",
+            order_by="idx asc",
+        )
+        return GRNOutcome(
+            ee_grn_id=ee_grn_id,
+            operation="noop",
+            grn_map_status="Receipted",
+            purchase_receipt=existing_pr,
             linked_po=first_line_po or None,
         )
 
