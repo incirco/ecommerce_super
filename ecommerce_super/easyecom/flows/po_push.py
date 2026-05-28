@@ -284,6 +284,39 @@ def push_po_status(
             sync_record_name=sr,
         )
 
+    # Live finding 2026-05-28: EE wraps refused status transitions in
+    # an HTTP-200 envelope with body code 400 + a descriptive message
+    # ("purchase orders that are in cancel/reject/completed status are
+    # not allowed to change the status", or "purchase order is already
+    # in Approved status"). The wire-level 200 doesn't mean the
+    # transition was applied. Inspect the body and treat code != 200
+    # as a soft-failure: don't update last_pushed_po_status (would
+    # break the idempotency guard) and surface it as a Failed outcome.
+    body_code = response.get("code") if isinstance(response, dict) else None
+    if body_code is not None and int(body_code) != 200:
+        body_msg = (response or {}).get("message") or "(no message)"
+        sr = write_po_push_sync_record(
+            entity_name=po_docname,
+            company=company,
+            status=STATUS_FAILED,
+            last_error=(
+                f"updatePoStatus {target_status} rejected by EE "
+                f"(body code {body_code}): {body_msg}"
+            ),
+        )
+        return POPushOutcome(
+            po_docname=po_docname,
+            operation="error",
+            pushed=False,
+            ee_po_id=int(map_row["ee_po_id"]),
+            po_map_status=map_row.get("status"),
+            flag_reasons=[
+                f"EE refused status={target_status}: {body_msg}"
+            ],
+            ee_status_payload=payload,
+            sync_record_name=sr,
+        )
+
     # Success — update last_pushed_po_status (idempotency guard for
     # subsequent pushes).
     frappe.db.set_value(
