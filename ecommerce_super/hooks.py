@@ -53,6 +53,32 @@ after_install = "ecommerce_super.install.after_install"
 
 
 # ============================================================
+# before_request — pre-auth header normalisation (gh#1)
+# ============================================================
+#
+# Frappe's validate_auth() (frappe/auth.py) raises AuthenticationError
+# whenever the request carries a 2-part `Authorization` header AND the
+# session user is still Guest at the end of its checks — even for
+# @whitelist(allow_guest=True) endpoints. This collides with SPEC §3.8
+# which mandates accepting webhook bearer tokens in either
+# `Access-token` OR `Authorization: Bearer` form on the EasyEcom
+# webhook receiver.
+#
+# `before_request` runs BEFORE validate_auth (frappe/app.py — init_request
+# fires before_request hooks, then application() calls validate_auth).
+# We use that window to MOVE a Bearer token from Authorization to
+# Access-token for the webhook URL only, so Frappe's auth middleware
+# sees no Authorization header and skips the final raise. Our
+# webhook.receive() then reads the token from Access-token and runs the
+# real constant-time webhook_token comparison — the auth contract is
+# unchanged, only the header carrier shifts.
+
+before_request = [
+    "ecommerce_super.easyecom.api.webhook.normalise_webhook_auth_header",
+]
+
+
+# ============================================================
 # DocType JS overrides (form-script add-ons for stock DocTypes)
 # ============================================================
 #

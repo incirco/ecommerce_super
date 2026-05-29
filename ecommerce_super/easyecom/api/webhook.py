@@ -17,6 +17,10 @@ SPEC §3.8 + §6.4 + §7.7:
     (§7.2).
   - This endpoint MUST be whitelisted with allow_guest=1 — that's the one
     allowed exception (CLAUDE.md "Specific Frappe v16 things to know").
+
+`normalise_webhook_auth_header` is wired as a `before_request` hook in
+hooks.py — see its docstring for the Frappe auth-middleware quirk it
+works around (gh#1).
 """
 
 from __future__ import annotations
@@ -37,6 +41,61 @@ from ecommerce_super.easyecom.doctype.easyecom_webhook_event.easyecom_webhook_ev
 from ecommerce_super.easyecom.utils.correlation import new_correlation_id
 from ecommerce_super.easyecom.utils.hashing import sha256_hex
 from ecommerce_super.easyecom.utils.redaction import redact
+
+# Path suffix the webhook endpoint resolves to under any site mount.
+# Used by the before_request header-rewrite hook below.
+WEBHOOK_RECEIVE_PATH = "/api/method/ecommerce_super.easyecom.api.webhook.receive"
+
+
+def normalise_webhook_auth_header() -> None:
+    """Pre-auth hook: shift `Authorization: Bearer <token>` → `Access-token`
+    for the webhook receiver path only (gh#1).
+
+    The why: Frappe's `validate_auth` (frappe/auth.py, end of function)
+    raises `AuthenticationError` whenever the request carries a 2-part
+    `Authorization` header AND the session user is still Guest after its
+    OAuth / API-key / hook chain — even for `@whitelist(allow_guest=True)`
+    endpoints. SPEC §3.8 explicitly mandates accepting webhook bearer
+    tokens via `Authorization: Bearer ...`, so we cannot just tell EE to
+    stop sending that header form.
+
+    This hook runs in the `before_request` phase, which fires inside
+    `init_request` BEFORE `application()` calls `validate_auth` — exactly
+    the window we need. For requests to the webhook URL only, we move
+    the Bearer token from `Authorization` to `Access-token` by mutating
+    the WSGI environ. The downstream `_extract_token` then reads
+    `Access-token` as usual, runs the real constant-time `webhook_token`
+    comparison, and rejects with 401 if the token is wrong — the
+    SPEC-mandated auth check still happens, only the header carrier
+    shifts. Non-Bearer Authorization shapes (Token / Basic) are left
+    alone since they aren't valid webhook auth anyway and the receiver
+    will reject them downstream.
+    """
+    try:
+        request = getattr(frappe.local, "request", None)
+        if request is None:
+            return
+        path = (getattr(request, "path", "") or "")
+        if not path.endswith(WEBHOOK_RECEIVE_PATH):
+            return
+        environ = request.environ
+        auth = environ.get("HTTP_AUTHORIZATION", "")
+        if not auth.lower().startswith("bearer "):
+            return
+        token = auth[7:].strip()
+        if not token:
+            return
+        # Don't clobber an explicit Access-token header the sender already
+        # set — if both are present, the explicit one wins (the receiver
+        # reads Access-token first per SPEC §3.8).
+        environ.setdefault("HTTP_ACCESS_TOKEN", token)
+        environ.pop("HTTP_AUTHORIZATION", None)
+    except Exception:
+        # before_request must NEVER block the request — leave the headers
+        # as-is on any unexpected error and let the downstream layers
+        # handle whatever comes through.
+        return
+
 
 # Event types we recognise. Unknown event_type produces a row with
 # processing_state=Failed and processing_error documenting the unknown type
