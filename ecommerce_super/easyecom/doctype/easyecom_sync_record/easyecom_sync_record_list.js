@@ -86,5 +86,21 @@ frappe.listview_settings["EasyEcom Sync Record"] = {
                 ]);
             },
         );
+        // §10 Stage 4 — surface §10 Stock Transfer Sync Records by
+        // entity_type. §10 outbound + inbound both key Sync Records on
+        // entity_doctype="Delivery Note" + entity_type="Delivery Note".
+        listview.page.add_menu_item(
+            __("Show only §10 Stock Transfer"),
+            () => {
+                listview.filter_area.add([
+                    [
+                        "EasyEcom Sync Record",
+                        "entity_type",
+                        "=",
+                        "Delivery Note",
+                    ],
+                ]);
+            },
+        );
     },
 };

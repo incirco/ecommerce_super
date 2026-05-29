@@ -173,6 +173,17 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Transfer Map",
+   "link_to": "EasyEcom Transfer Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
    "icon": "filter",
@@ -377,6 +388,45 @@
    "type": "Link",
    "url": null,
    "route_options": "{\"status\": \"STN-Routed\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Transfers - Drift",
+   "link_to": "EasyEcom Transfer Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Drift\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Transfers - EE-originated (open)",
+   "link_to": "EasyEcom Integration Discrepancy",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"kind\": \"EE-originated transfer (self-GRN)\", \"status\": \"Open\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Transfers - Late GRN (open)",
+   "link_to": "EasyEcom Integration Discrepancy",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"kind\": \"Late GRN after submitted DN\", \"status\": \"Open\"}"
   },
   {
    "child": 1,

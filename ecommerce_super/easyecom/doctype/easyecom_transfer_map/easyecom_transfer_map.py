@@ -162,3 +162,55 @@ class EasyEcomTransferMap(Document):
                     "transition status (e.g. to 'EE-Pushed')."
                 ).format(self.ee_order_id, self.ee_po_id)
             )
+
+
+@frappe.whitelist()
+def get_cumulative_receipt_summary(transfer_map: str) -> dict:
+    """§10 Stage 4 — server-authoritative per-Item summary for the
+    Transfer Map form's "Cumulative Receipt" dashboard chip. Reuses
+    transfer_inbound._cumulative_received_per_item so the math is the
+    same as the IPI/DN gap arithmetic."""
+    if not transfer_map or not frappe.db.exists(
+        "EasyEcom Transfer Map", transfer_map
+    ):
+        return {"rows": []}
+
+    tm = frappe.get_doc("EasyEcom Transfer Map", transfer_map)
+    from ecommerce_super.easyecom.flows.transfer_inbound import (
+        _cumulative_received_per_item,
+    )
+
+    # Dispatched qty source — SI if present (different-GSTIN), else DN.
+    if tm.sales_invoice and frappe.db.exists(
+        "Sales Invoice", tm.sales_invoice
+    ):
+        rows = frappe.db.sql(
+            """SELECT item_code, qty FROM `tabSales Invoice Item`
+               WHERE parent = %s""",
+            (tm.sales_invoice,),
+            as_dict=True,
+        )
+    else:
+        rows = frappe.db.sql(
+            """SELECT item_code, qty FROM `tabDelivery Note Item`
+               WHERE parent = %s""",
+            (tm.delivery_note,),
+            as_dict=True,
+        )
+    dispatched: dict[str, float] = {}
+    for r in rows:
+        dispatched[r["item_code"]] = (
+            dispatched.get(r["item_code"], 0) + float(r["qty"] or 0)
+        )
+    cumulative = _cumulative_received_per_item(tm)
+    return {
+        "transfer_map": transfer_map,
+        "rows": [
+            {
+                "item_code": code,
+                "dispatched": qty,
+                "received": cumulative.get(code, 0),
+            }
+            for code, qty in dispatched.items()
+        ],
+    }

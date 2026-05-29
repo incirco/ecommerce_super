@@ -821,6 +821,28 @@ def _draft_internal_purchase_invoice(transfer_map: Any) -> str | None:
     return pi.name
 
 
+def _add_tm_comment(transfer_map: Any, text: str) -> None:
+    """Stamp an audit Comment on the Transfer Map. Stage 4 §0 fix:
+    auto-cancel / revise events for the draft Debit Note land here
+    (the authoritative trail) rather than on the about-to-delete DN.
+
+    Defensive: log_error on failure rather than blow up the inbound
+    flow over an audit Comment write."""
+    try:
+        tm_doc = transfer_map
+        if not hasattr(tm_doc, "add_comment"):
+            tm_doc = frappe.get_doc(
+                "EasyEcom Transfer Map", transfer_map.name
+            )
+        tm_doc.add_comment(comment_type="Info", text=text)
+    except Exception as exc:
+        frappe.log_error(
+            title=f"§10 audit Comment failed on Transfer Map "
+            f"{getattr(transfer_map, 'name', '?')}",
+            message=f"{type(exc).__name__}: {exc}\n\nText:\n{text[:500]}",
+        )
+
+
 def _reconcile_draft_debit_note(transfer_map: Any) -> str | None:
     """Compute per-Item gap = dispatched − cumulative_received. Refresh
     the draft Debit Note's line qtys to match. If gap collapses to 0
@@ -845,20 +867,40 @@ def _reconcile_draft_debit_note(transfer_map: Any) -> str | None:
 
     existing_dn = transfer_map.draft_debit_note
     if not gap_per_item:
-        # Gap closed. Cancel existing draft DN.
+        # Gap closed. Delete the draft DN — but first stamp the audit
+        # trail on the Transfer Map. Stage 4 §0 fix: the prior
+        # implementation wrote the audit Comment on the draft DN
+        # ITSELF, which vanished with the doc on delete. Write to the
+        # Transfer Map (which survives) so the FDE asking "did this
+        # transfer have a gap that auto-resolved?" still has the
+        # answer.
         if existing_dn:
+            # Compute the original-gap snapshot for the audit Comment
+            # BEFORE deleting the DN — once gone, we can't recover the
+            # gap shape it represented.
+            original_gap_qty = 0.0
+            original_gap_lines = 0
             try:
                 doc = frappe.get_doc("Purchase Invoice", existing_dn)
                 if int(doc.docstatus or 0) == 0:
-                    doc.add_comment(
-                        comment_type="Info",
-                        text=(
-                            "<b>§10 Auto-cancelled</b>: cumulative receipt "
-                            "closed the gap — Debit Note no longer needed."
-                        ),
+                    for ln in doc.items or []:
+                        # Return-line qtys are stored negative in
+                        # ERPNext; absolute value gives the gap.
+                        original_gap_qty += abs(flt(ln.qty))
+                        original_gap_lines += 1
+                    audit_msg = (
+                        f"<b>§10 Auto-cancelled draft Debit Note "
+                        f"{existing_dn}</b> — cumulative receipt closed "
+                        "the gap. Original DN gap was "
+                        f"<b>{original_gap_qty:g}</b> units across "
+                        f"<b>{original_gap_lines}</b> line(s)."
                     )
-                    # Delete the draft so the cumulative-close case
-                    # doesn't leave a 0-qty draft floating.
+                    # Belt-and-suspenders: comment on the DN too (it's
+                    # about to delete; doesn't hurt to have written it
+                    # before).
+                    doc.add_comment(comment_type="Info", text=audit_msg)
+                    # Authoritative audit anchor — the Transfer Map.
+                    _add_tm_comment(transfer_map, audit_msg)
                     frappe.delete_doc(
                         "Purchase Invoice",
                         existing_dn,
@@ -876,6 +918,8 @@ def _reconcile_draft_debit_note(transfer_map: Any) -> str | None:
             if int(doc.docstatus or 0) != 0:
                 # Submitted — handled by §7 block separately, not here.
                 return existing_dn
+            # Snapshot old gap for the audit Comment.
+            old_gap_qty = sum(abs(flt(ln.qty)) for ln in doc.items or [])
             doc.set("items", [])
             for code, spec in gap_per_item.items():
                 doc.append(
@@ -889,13 +933,15 @@ def _reconcile_draft_debit_note(transfer_map: Any) -> str | None:
                     },
                 )
             doc.save(ignore_permissions=True)
-            doc.add_comment(
-                comment_type="Info",
-                text=(
-                    f"<b>§10 Draft DN revised</b>: gap recomputed across "
-                    f"{len(gap_per_item)} item(s)."
-                ),
+            new_gap_qty = sum(spec["qty"] for spec in gap_per_item.values())
+            audit_msg = (
+                f"<b>§10 Draft Debit Note {existing_dn} revised</b>: "
+                f"gap was <b>{old_gap_qty:g}</b> units, now "
+                f"<b>{new_gap_qty:g}</b> units across "
+                f"<b>{len(gap_per_item)}</b> line(s)."
             )
+            doc.add_comment(comment_type="Info", text=audit_msg)
+            _add_tm_comment(transfer_map, audit_msg)
             return existing_dn
         except Exception:
             pass
@@ -982,7 +1028,17 @@ def _cumulative_received_per_item(transfer_map: Any) -> dict[str, float]:
 
 
 def _compute_transfer_status_after_ipr_submit(transfer_map: Any) -> str:
-    """Walk SI items + cumulative receipts to decide Partial vs Fully."""
+    """Walk SI items + cumulative receipts to decide Partial vs Fully.
+
+    Stage 4 §7 correction: Fully-Received means "clean close" — all
+    dispatched qty arrived AND no draft Debit Note recognising an
+    unacknowledged loss. If a draft DN exists, the transfer is
+    structurally NOT fully received (the gap is on record, just not
+    acknowledged yet). Partial-Received covers that state.
+
+    Once the ERP user submits the draft DN (accepting loss), the
+    Purchase Invoice on_submit hook transitions to DN-Submitted-Locked
+    — a separate terminal state distinct from Fully-Received."""
     if not transfer_map.sales_invoice:
         # Same-GSTIN — use DN dispatched qty.
         dn_items = frappe.db.sql(
@@ -1010,6 +1066,10 @@ def _compute_transfer_status_after_ipr_submit(transfer_map: Any) -> str:
         if cumulative.get(code, 0) < qty:
             fully = False
             break
+    # If a draft DN exists, the gap is on record but not yet
+    # acknowledged — NOT a clean close.
+    if fully and transfer_map.draft_debit_note:
+        return "Partial-Received"
     return "Fully-Received" if fully else "Partial-Received"
 
 

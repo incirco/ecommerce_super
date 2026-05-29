@@ -165,6 +165,11 @@ fixtures = [
                 "GRNs Discrepancy",
                 "GRNs Held-Pre-QC",
                 "GRNs STN-Routed (pending §10 pickup)",
+                # §10 Stage 4 — Stock Transfer worklist cards
+                # (integration-health only per packet rule).
+                "Transfers in Drift",
+                "EE-originated Transfers (open)",
+                "Late GRN after submitted DN (open)",
             ]],
         ],
     },
@@ -441,6 +446,17 @@ scheduler_events = {
         # Reclaim Queue Job rows in state=Running with no live RQ job (§6.3.9).
         "0 */1 * * *": [
             "ecommerce_super.easyecom.queue.workers.reclaim_orphaned_jobs",
+        ],
+        # §10 Stage 4 — daily aged-GIT scan. Runs at 06:30 IST (after
+        # the §8f supplier pull at 06:00, before business hours start).
+        # Safe to wire by default: scan_all_aged_git only READS Transfer
+        # Map state + WRITES ToDo / Comment rows, no EE-side writes,
+        # no cold-start backstop risk (unlike §9 GRN-pull's high-
+        # watermark concern). Pause-respect baked in: scan skips
+        # paused accounts (ToDo creation IS an integration-driven
+        # write).
+        "30 6 * * *": [
+            "ecommerce_super.easyecom.flows.transfer_aged_git.scan_all_aged_git",
         ],
         # §9 Stage 4 — GRN-pull delta cron is INTENTIONALLY NOT YET
         # WIRED. The packet (line 94) authorises a 30-min cron, but

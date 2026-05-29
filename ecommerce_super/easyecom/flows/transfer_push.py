@@ -951,28 +951,33 @@ def _do_po_branch_push(
     sales_invoice: str | None,
     client: EasyEcomClient | None,
 ) -> TransferPushOutcome:
-    """PO branch: source NOT EE-mapped, target EE-mapped. The §9
-    push_one_po machinery expects an ERPNext Purchase Order. §10
-    doesn't create a real PO — instead, this branch builds a transient
-    request mirroring the DN's content + the resolved
-    source-Company vendor, and dispatches via the §9 wire helper.
+    """PO branch: source NOT EE-mapped, target EE-mapped. EE sees the
+    transfer as a PO arriving from outside its universe; the source-
+    Company vendor (the Internal Supplier's EE-side representation)
+    is the `vendorId`. referenceCode is the DN name — single-key
+    strategy parity with the STN branch.
 
-    Stage 2 scope intentionally LIMITS this branch to vendor-resolved
-    deployments. If you reach this code and the vendor isn't
-    resolvable, the precondition gate already flagged Drift — this
-    function should never be invoked in that case. Defensive: re-check
-    and refuse if it slips through.
-
-    NOTE: full PO-branch DN→PO bridging requires either creating a real
-    PO on the source Company (which violates the §10 model — source is
-    non-EE, so it shouldn't carry an integration-owned PO) or building
-    a synthetic-PO request shape that reuses just the §9 content
-    payload builder. Stage 2 ships the SHAPE (vendor resolved, branch
-    routed, Map row updated) but the actual wire call is deferred to
-    Stage 2 closeout pending integration smoke against a real
-    non-EE-source + EE-target deployment on Harmony. The Drift
-    fall-through documents this clearly.
+    Stage 4 §1 lifts the Stage 2 deferral: this function now fires
+    `/WMS/Cart/CreatePurchaseOrder` directly (parity with §9's
+    `_do_content_push` payload shape, reading from the DN instead of a
+    PO doc). The §9 helpers (`PURCHASE_ORDER_CREATE`, `compute_tax_type`)
+    are reused; only the source-doc-traversal differs.
     """
+    from ecommerce_super.easyecom.client.endpoints import (
+        PURCHASE_ORDER_CREATE,
+    )
+    from ecommerce_super.easyecom.exceptions import EasyEcomError
+    from ecommerce_super.easyecom.flows.po_push import (
+        _content_tax_signature,
+        _extract_ee_po_id,
+        _find_supplier_state,
+        _fmt_date,
+        _resolve_line_tax_rate,
+    )
+    from ecommerce_super.easyecom.tax.place_of_supply import (
+        compute_tax_type,
+    )
+
     src_company = _warehouse_company(source_wh)
     vendor_resolution = _resolve_po_branch_vendor(src_company)
     if not vendor_resolution.get("vendor_id"):
@@ -1003,40 +1008,189 @@ def _do_po_branch_push(
             status="Drift",
         )
 
-    # PO-branch wire dispatch is Stage 2 closeout work. At Stage 2
-    # ship-point, mark the Map row with ee_doctype="PO" + the resolved
-    # vendor on flag_reason so the FDE sees the routing decision and
-    # the integration smoke captures the deferred-wire status.
+    vendor_id = vendor_resolution["vendor_id"]
+    target_address = _resolve_warehouse_address(target_wh) or {}
+
+    # Tax setup. The PO is "incoming from outside EE's universe"; for
+    # tax purposes the source Company's GSTIN drives the supplier
+    # state. The Internal Supplier representing source carries the
+    # canonical state via India Compliance's Address linkage.
+    from ecommerce_super.easyecom.flows.transfer_inbound import (
+        _find_internal_supplier,
+    )
+    internal_supplier = _find_internal_supplier(
+        source_company=src_company,
+        target_company=_warehouse_company(target_wh),
+    )
+    supplier_state = (
+        _find_supplier_state(internal_supplier)
+        if internal_supplier
+        else None
+    )
+    supplier_country = "India"
+    warehouse_state = target_address.get("gst_state")
+
+    line_items: list[dict[str, Any]] = []
+    line_outcomes: list[dict[str, Any]] = []
+    for line in dn.items or []:
+        item_map = frappe.db.get_value(
+            "EasyEcom Item Map",
+            {"erpnext_doctype": "Item", "erpnext_name": line.item_code},
+            ["ee_sku"],
+            as_dict=True,
+        )
+        sku = item_map.ee_sku if item_map else line.item_code
+        tax_rate_pct, _decimal = _resolve_line_tax_rate(line)
+        tax_inclusive_unit_price = float(line.rate or 0) * (
+            1.0 + (tax_rate_pct / 100.0)
+        )
+        tax_value = (
+            float(line.rate or 0)
+            * (tax_rate_pct / 100.0)
+            * float(line.qty or 0)
+        )
+        tax_type = compute_tax_type(
+            supplier_state=supplier_state,
+            warehouse_state=warehouse_state,
+            supplier_country=supplier_country,
+        )
+        line_item: dict[str, Any] = {
+            "lineItemNumber": int(line.idx or 0),
+            "sku": sku,
+            "quantity": float(line.qty or 0),
+            "unitPrice": round(tax_inclusive_unit_price, 4),
+            "taxRate": tax_rate_pct,
+            "taxValue": round(tax_value, 4),
+            "taxType": int(tax_type),
+        }
+        line_items.append(line_item)
+        line_outcomes.append(
+            {
+                "source_line_ref": line.item_code,
+                "source_line_number": int(line.idx or 0),
+                "target_field": "sku",
+                "line_status": "OK",
+                "reason": None,
+            }
+        )
+
+    payload: dict[str, Any] = {
+        "vendorId": vendor_id,
+        "referenceCode": dn.name,  # parity with STN's orderNumber=DN
+        "expDeliveryDate": _fmt_date(
+            getattr(dn, "delivery_date", None) or dn.posting_date
+        ),
+        "createOrUpdate": "I",  # §10 outbound is always create-only
+        "isCancel": 0,
+        "items": line_items,
+        "address": (
+            target_address.get("address_line1")
+            or target_address.get("city")
+        ),
+    }
+
+    if client is None:
+        location_key = _location_key_for_warehouse(target_wh)
+        client = EasyEcomClient(
+            company=dn.company, location_key=location_key
+        )
+
+    try:
+        response = client.post(PURCHASE_ORDER_CREATE, payload=payload)
+    except EasyEcomError as exc:
+        flag_text = (
+            f"CreatePurchaseOrder rejected by EE: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        frappe.db.set_value(
+            "EasyEcom Transfer Map",
+            map_name,
+            {"status": "Drift", "flag_reason": flag_text[:1000]},
+            update_modified=True,
+        )
+        sr = write_transfer_push_sync_record(
+            dn_name=dn.name,
+            company=dn.company,
+            status=STATUS_FAILED,
+            last_error=flag_text,
+            line_outcomes=[
+                {
+                    **lo,
+                    "line_status": "Failed",
+                    "reason": f"{type(exc).__name__}",
+                }
+                for lo in line_outcomes
+            ],
+        )
+        return TransferPushOutcome(
+            dn_name=dn.name,
+            operation="error",
+            transfer_map=map_name,
+            sales_invoice=sales_invoice,
+            ee_doctype="PO",
+            flag_reasons=[f"{type(exc).__name__}: {exc}"],
+            ee_payload=payload,
+            sync_record_name=sr,
+            status="Drift",
+        )
+
+    ee_po_id = _extract_ee_po_id(response)
+
+    # Same status decision as STN branch: SI-Pending if SI exists (the
+    # ee_po_id presence signals EE-pushed); EE-Pushed otherwise.
+    new_status = "SI-Pending" if sales_invoice else "EE-Pushed"
     frappe.db.set_value(
         "EasyEcom Transfer Map",
         map_name,
         {
             "ee_doctype": "PO",
-            "status": "Mapped",  # PO-branch wire not yet sent
-            "flag_reason": (
-                "PO branch routed (vendor_id = "
-                f"{vendor_resolution['vendor_id']!r}). Wire dispatch "
-                "to §9 CreatePurchaseOrder is Stage 2 closeout — "
-                "deferred pending Harmony non-EE-source smoke."
-            )[:1000],
+            "ee_po_id": int(ee_po_id or 0),
+            "status": new_status,
             "ecs_pending_ee_push": 0,
+            "flag_reason": None,
         },
         update_modified=True,
     )
+    # Back-fill the DN's §10 back-ref.
+    if frappe.get_meta("Delivery Note").get_field(
+        "ecs_section10_transfer_map"
+    ):
+        frappe.db.set_value(
+            "Delivery Note",
+            dn.name,
+            "ecs_section10_transfer_map",
+            map_name,
+            update_modified=False,
+        )
+    if sales_invoice and frappe.get_meta("Sales Invoice").get_field(
+        "ecs_section10_transfer_map"
+    ):
+        frappe.db.set_value(
+            "Sales Invoice",
+            sales_invoice,
+            "ecs_section10_transfer_map",
+            map_name,
+            update_modified=False,
+        )
+
     sr = write_transfer_push_sync_record(
         dn_name=dn.name,
         company=dn.company,
         status=STATUS_SUCCESS,
         last_error=None,
+        line_outcomes=line_outcomes,
     )
+
     return TransferPushOutcome(
         dn_name=dn.name,
         operation="po_pushed",
         transfer_map=map_name,
         sales_invoice=sales_invoice,
+        ee_po_id=int(ee_po_id or 0) or None,
         ee_doctype="PO",
+        ee_payload=payload,
         sync_record_name=sr,
-        status="Mapped",
+        status=new_status,
     )
 
 
