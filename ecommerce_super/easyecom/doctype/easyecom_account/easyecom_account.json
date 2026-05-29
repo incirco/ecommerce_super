@@ -66,6 +66,10 @@
   "mandatory_batch_for_groups",
   "mandatory_serial_for_groups",
   "mandatory_expiry_for_groups",
+  "section10_defaults_section",
+  "stn_default_payment_mode",
+  "section10_defaults_col_2",
+  "stn_default_shipping_method",
   "item_master_mode_section",
   "item_master_mode",
   "item_master_flipped_at",
@@ -530,6 +534,35 @@
    "fieldtype": "Table",
    "label": "Mandatory Expiry For Item Groups",
    "options": "EasyEcom Item Group MultiSelect"
+  },
+  {
+   "fieldname": "section10_defaults_section",
+   "fieldtype": "Section Break",
+   "label": "Stock Transfer (§10) Defaults",
+   "collapsible": 1,
+   "description": "EE-required placeholder values for STN order-creation payloads. Internal transfers have no real payment / shipping semantics; EE's order-creation endpoint requires these fields regardless. Defaults match §10.G grounded values (live Harmony round-trip 2026-05-29). FDE override if a deployment's EE config differs."
+  },
+  {
+   "fieldname": "stn_default_payment_mode",
+   "fieldtype": "Select",
+   "label": "STN Default Payment Mode",
+   "options": "2 COD\n5 Prepaid",
+   "default": "5 Prepaid",
+   "reqd": 1,
+   "description": "Sent as integer `paymentMode` on the STN createOrder payload. Internal transfers have no real payment mode; this is the EE-required placeholder. Default 5 (Prepaid)."
+  },
+  {
+   "fieldname": "section10_defaults_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "stn_default_shipping_method",
+   "fieldtype": "Select",
+   "label": "STN Default Shipping Method",
+   "options": "1 Standard COD\n3 Standard Prepaid",
+   "default": "1 Standard COD",
+   "reqd": 1,
+   "description": "Sent as integer `shippingMethod` on the STN createOrder payload. Internal transfers have no real shipping method; this is the EE-required placeholder. Default 1 (Standard COD)."
   },
   {
    "fieldname": "item_master_mode_section",

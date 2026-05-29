@@ -59,6 +59,9 @@ JOB_TYPE_HANDLERS: dict[str, str] = {
     # §9 Stage 3: GRN pull → PR + status reconciliation. Enqueued per
     # location (Stage 4 wires the per-tick scheduler that fans out).
     "GRN Pull": "ecommerce_super.easyecom.flows.grn_pull.grn_pull_queue_handler",
+    # §10 Stage 2: Stock Transfer outbound. Enqueued by DN on_submit +
+    # the push_all_pending_transfers batch sweep.
+    "Transfer Push": "ecommerce_super.easyecom.flows.transfer_push.transfer_push_queue_handler",
 }
 
 

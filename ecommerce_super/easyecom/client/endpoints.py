@@ -105,6 +105,20 @@ PURCHASE_ORDER_STATUS_UPDATE: str = "/wms/updatePoStatus"  # POST (§9 Stage 2)
 # `/wms/getGrnDetails` referenced in SPEC §9.5.1).
 GRN_DETAILS_V2_GET: str = "/Grn/V2/getGrnDetails"  # GET (§9 Stage 3; nextUrl)
 
+
+# ----- Order creation (§10 / §11 / §12) -----
+
+# Unified order-creation endpoint per §10.G (grounded 2026-05-29 against
+# live Harmony round-trip). `orderType` body field discriminates:
+#   - "stocktransferorder"  → §10 STN (Stock Transfer Note)
+#   - "B2C" / "B2B"         → §11/§12 sales orders (later)
+#   - "ProductionOrder"     → out of scope
+# Constant name is generic; the discriminator goes in the body, not the
+# URL. Bearer JWT only (no x-api-key per the §10.G live test). Returns
+# OrderID/SuborderID/InvoiceID as strings — capture all three on the
+# §10 Transfer Map row.
+CREATE_ORDER: str = "/webhook/v2/createOrder"  # POST (§10 Stage 2 STN)
+
 # Pre-§9-packet constants — RETAINED to avoid breaking any references
 # in older SPEC sections / fixtures. Not used by §9 code paths.
 PO_CREATE: str = "/Wms/Purchase/createPO"  # POST (stale; replaced by PURCHASE_ORDER_CREATE)

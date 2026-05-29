@@ -206,6 +206,7 @@ def go_live_enable_auto_push(
     # during the pause window. Safe to call even when pos wasn't
     # in the transition list (the runner self-checks).
     fired_summary = None
+    fired_transfers_summary = None
     if enable_pos:
         from ecommerce_super.easyecom.flows.po_push import (
             fire_pending_po_status_pushes,
@@ -217,6 +218,21 @@ def go_live_enable_auto_push(
                 f"Pending po_status push fire-on-unpause raised "
                 f"{type(exc).__name__}: {exc}. Re-invoke manually via "
                 "fire_pending_po_status_pushes()."
+            )
+        # §10 Stage 2 — same un-pause symmetry for the outbound
+        # Transfer flow. Auto_push_pos_on_save also gates §10 pushes
+        # (per §10 packet's pause-respects-all-three rule + FIX 2's
+        # pos-toggle scope correction).
+        from ecommerce_super.easyecom.flows.transfer_push import (
+            fire_pending_transfer_pushes,
+        )
+        try:
+            fired_transfers_summary = fire_pending_transfer_pushes()
+        except Exception as exc:
+            warnings.append(
+                f"Pending §10 transfer push fire-on-unpause raised "
+                f"{type(exc).__name__}: {exc}. Re-invoke manually via "
+                "fire_pending_transfer_pushes()."
             )
 
     return {
@@ -231,6 +247,7 @@ def go_live_enable_auto_push(
         },
         "warnings": warnings,
         "fired_pending_status_pushes": fired_summary,
+        "fired_pending_transfer_pushes": fired_transfers_summary,
         "message": (
             f"Auto-push enabled for {', '.join(transitioned)}. "
             f"Recorded as a Comment on the Account doc for audit."

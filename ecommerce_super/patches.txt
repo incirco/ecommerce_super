@@ -33,3 +33,4 @@ ecommerce_super.patches.v0_1.refresh_easyecom_workspace_sidebar_s8f
 ecommerce_super.patches.v0_1.add_ecs_grn_pull_fields
 ecommerce_super.patches.v0_1.add_ecs_grn_pull_batch_fields
 ecommerce_super.patches.v0_1.refresh_easyecom_workspace_s9_buying
+ecommerce_super.patches.v0_1.add_ecs_section10_back_refs

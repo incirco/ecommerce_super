@@ -1,0 +1,32 @@
+{
+ "actions": [],
+ "creation": "2026-05-29 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "internal_purchase_receipt"
+ ],
+ "fields": [
+  {
+   "fieldname": "internal_purchase_receipt",
+   "fieldtype": "Link",
+   "label": "Internal Purchase Receipt",
+   "options": "Purchase Receipt",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "Link to one of the §10 Internal Purchase Receipt rows on the Transfer Map's parent row. Multi-GRN partial receipts produce multiple IPRs against the same DN/SI; each one lands as a row here. Stage 3 populates these."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-29 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Transfer IPR Link",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

@@ -22,7 +22,14 @@
 
 **Gate 0 (lifecycle-wide):** integration acts iff source OR target WH is EE-mapped. Both non-EE → silently inert (pure ERPNext Stock Entry, integration not involved). Same Gate-0 pattern as §9.
 
-**Internal Customer + Internal Supplier pair (auto-created at setup):** for every pair of EE-linked Companies, the integration auto-creates the Internal Customer (on source's books, `is_internal_customer=1`, `represents_company`=target) and Internal Supplier (on destination's books, `is_internal_supplier=1`, `represents_company`=source). Idempotent. ERPNext's `is_internal_*` flags drive correct GL behaviour (suppresses COGS-on-supply, enables Internal Sales Invoice / Internal Purchase Invoice machinery).
+**Internal Customer + Internal Supplier pair (auto-created at setup):** for every EE-linked Company, the integration auto-creates:
+- **One Internal Customer per destination Company** (`is_internal_customer=1`, `represents_company`=that Company), with the `companies` ("Allowed To Transact With") child table enumerating every OTHER EE-linked Company permitted to sell to it.
+- **One Internal Supplier per source Company** (`is_internal_supplier=1`, `represents_company`=that Company), symmetric — `companies` child lists every other Company permitted to buy from it.
+- Naming: `INTL-CUST-for-{destination}` / `INTL-SUPP-from-{source}`.
+- Cardinality: N Internal Customers + N Internal Suppliers for N EE-linked Companies (NOT N×(N−1) — ERPNext enforces at-most-one Internal Customer per `represents_company`).
+- Idempotent: re-running adds missing pairs and reconciles `companies` children additively (does not strip rows the FDE may have added manually).
+- ERPNext's `is_internal_*` flags drive correct GL behaviour (suppresses COGS-on-supply, enables Internal Sales Invoice / Internal Purchase Invoice machinery).
+- **Lookup at runtime (used by Stage 2 DN-submit hook):** to find the Internal Customer for a transfer from Company A to Company B, look up `Customer` where `is_internal_customer=1` AND `represents_company=B` AND `A in companies[*].company`.
 
 **GIT (Goods-in-Transit) always:** stock parks in destination Company's GIT warehouse on DN submit (DN's standard posting). Stock moves GIT → destination WH only when IPR submits, only for received qty. Balance stays in GIT for variance tracking. **Always** — no bypass for same-location moves; EE tells us what arrived, that's the authoritative trigger.
 

@@ -1,0 +1,311 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-XFER-{delivery_note}",
+ "creation": "2026-05-29 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "delivery_note",
+  "status",
+  "link_section",
+  "sales_invoice",
+  "warehouse_section",
+  "source_warehouse",
+  "target_warehouse",
+  "warehouse_col_2",
+  "source_company_gstin",
+  "target_company_gstin",
+  "gstin_different",
+  "ee_section",
+  "ee_doctype",
+  "ee_order_id",
+  "ee_section_col_2",
+  "ee_suborder_id",
+  "ee_invoice_id",
+  "ee_po_id",
+  "ecs_pending_ee_push",
+  "downstream_section",
+  "internal_purchase_invoice",
+  "draft_debit_note",
+  "downstream_col_2",
+  "git_balance",
+  "ipr_section",
+  "internal_purchase_receipts",
+  "flag_section",
+  "flag_reason",
+  "last_observed_at",
+  "drift_section",
+  "drift_fields",
+  "exclude_section",
+  "exclude_fields"
+ ],
+ "fields": [
+  {
+   "fieldname": "delivery_note",
+   "fieldtype": "Link",
+   "label": "Delivery Note",
+   "options": "Delivery Note",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "search_index": 1,
+   "description": "Outbound anchor — always present (DN is required for §10 by construction). Single-key strategy per packet decision: orderNumber on the EE STN payload = DN name; idempotency hinge on re-push."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Mapped\nSI-Pending\nSI-Submitted\nEE-Pushed\nPartial-Received\nFully-Received\nDN-Submitted-Locked\nDrift\nDisabled",
+   "default": "Mapped",
+   "reqd": 1,
+   "in_list_view": 1,
+   "description": "§10 transfer lifecycle. Mapped = row created on DN submit, pre-EE-push. SI-Pending = different-GSTIN, SI auto-drafted, awaiting ERP user submit. SI-Submitted = different-GSTIN, SI submitted (IPR auto-submit gate now clear). EE-Pushed = STN/PO sent to EE. Partial-Received = some IPRs landed, draft DN shrunk. Fully-Received = cumulative received >= dispatched. DN-Submitted-Locked = ERP user accepted loss; late-GRN handling now in manual-reconciliation mode. Drift = unexpected EE-side state or config gap. Disabled = FDE muted (e.g. cancelled transfer)."
+  },
+  {
+   "fieldname": "link_section",
+   "fieldtype": "Section Break",
+   "label": "Linked Documents"
+  },
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Sales Invoice",
+   "options": "Sales Invoice",
+   "description": "Populated only when GSTINs differ — Stage 2 auto-drafts the Internal SI sized to dispatched qty. Null in same-GSTIN flows (DN alone handles outbound)."
+  },
+  {
+   "fieldname": "warehouse_section",
+   "fieldtype": "Section Break",
+   "label": "Warehouses + GSTINs"
+  },
+  {
+   "fieldname": "source_warehouse",
+   "fieldtype": "Link",
+   "label": "Source Warehouse",
+   "options": "Warehouse",
+   "reqd": 1,
+   "description": "Where stock leaves on DN submit. Together with target_warehouse determines EE-side routing: source EE-mapped → STN; source not EE-mapped, target EE-mapped → PO; both non-EE → Gate-0 inert (no Map row created)."
+  },
+  {
+   "fieldname": "target_warehouse",
+   "fieldtype": "Link",
+   "label": "Target Warehouse",
+   "options": "Warehouse",
+   "reqd": 1,
+   "description": "Where stock lands on IPR submit. Stock parks in destination Company's GIT in transit (DN's standard posting); GIT → target_warehouse on IPR submit, only for received_qty."
+  },
+  {
+   "fieldname": "warehouse_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "source_company_gstin",
+   "fieldtype": "Data",
+   "label": "Source Company GSTIN",
+   "read_only": 1,
+   "description": "Computed in validate from source_warehouse → Company → gstin. Single-level fetch_from doesn't span two Link hops (Warehouse → Company → gstin), so the controller fills this. Compared with target_company_gstin to derive gstin_different."
+  },
+  {
+   "fieldname": "target_company_gstin",
+   "fieldtype": "Data",
+   "label": "Target Company GSTIN",
+   "read_only": 1,
+   "description": "Computed in validate from target_warehouse → Company → gstin."
+  },
+  {
+   "fieldname": "gstin_different",
+   "fieldtype": "Check",
+   "label": "GSTINs Differ",
+   "read_only": 1,
+   "description": "Derived in validate: source_company_gstin != target_company_gstin. Drives the full SI/IPI/DN machinery (Schedule I supply event) vs. pure stock-movement (no SI) routing."
+  },
+  {
+   "fieldname": "ee_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Side"
+  },
+  {
+   "fieldname": "ee_doctype",
+   "fieldtype": "Select",
+   "label": "EE DocType",
+   "options": "\nSTN\nPO",
+   "description": "Determined by source-WH-EE-mapping at Stage 2 push time. STN = source EE-mapped, EE-native internal transfer. PO = source NOT EE-mapped, target EE-mapped, reuses §9 CreatePurchaseOrder. Empty pre-EE-push."
+  },
+  {
+   "fieldname": "ee_order_id",
+   "fieldtype": "Data",
+   "label": "EE OrderID (STN)",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Per §10.G, captured from createOrder response. PRIMARY status-channel key (analogous to §9's po_id on updatePoStatus). Stored as Data because EE returns all three order ids as strings."
+  },
+  {
+   "fieldname": "ee_section_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "ee_suborder_id",
+   "fieldtype": "Data",
+   "label": "EE SuborderID (STN line)",
+   "read_only": 1,
+   "description": "Line-level EE id from createOrder response. Used for downstream fulfillment cross-refs."
+  },
+  {
+   "fieldname": "ee_invoice_id",
+   "fieldtype": "Data",
+   "label": "EE InvoiceID (STN)",
+   "read_only": 1,
+   "description": "EE-side invoice id from createOrder response. Used for downstream fulfillment cross-refs."
+  },
+  {
+   "fieldname": "ee_po_id",
+   "fieldtype": "Int",
+   "label": "EE po_id (PO path)",
+   "read_only": 1,
+   "description": "Used only when ee_doctype='PO' (PO path reuses §9 CreatePurchaseOrder which returns data.poId as int). Stage 2 decides PO-path keying. Null on STN-path transfers."
+  },
+  {
+   "fieldname": "ecs_pending_ee_push",
+   "fieldtype": "Check",
+   "label": "EE Push Pending (paused)",
+   "read_only": 1,
+   "description": "§10 Stage 2 pause-defer flag. Set to 1 when DN.on_submit fires while auto_push_pos_on_save=0 (paused): Transfer Map + SI draft still land (ERPNext-side state), but the EE create-order call is deferred. fire_pending_transfer_pushes() picks up rows with this flag set after un-pause and fires the push. Binary (not a status target like §9's ecs_pending_po_status_push) because §10 outbound is a single createOrder call, not a multi-state status channel."
+  },
+  {
+   "fieldname": "downstream_section",
+   "fieldtype": "Section Break",
+   "label": "Downstream Documents"
+  },
+  {
+   "fieldname": "internal_purchase_invoice",
+   "fieldtype": "Link",
+   "label": "Internal Purchase Invoice",
+   "options": "Purchase Invoice",
+   "description": "Auto-drafted in Stage 3 (different-GSTIN only) after first IPR submit. Sized to dispatched qty (mirrors submitted SI) for full ITC claim on GSTR-2B."
+  },
+  {
+   "fieldname": "draft_debit_note",
+   "fieldtype": "Link",
+   "label": "Draft Debit Note",
+   "options": "Purchase Invoice",
+   "description": "Auto-drafted in Stage 3 (different-GSTIN AND received < dispatched). Sized to the gap; tax breakdown mirrors IPI. ERPNext Debit Note is a Purchase Invoice with is_return=1."
+  },
+  {
+   "fieldname": "downstream_col_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "git_balance",
+   "fieldtype": "Float",
+   "label": "GIT Balance (reported)",
+   "read_only": 1,
+   "description": "Reported value — cumulative dispatched minus cumulative received across all linked IPRs. NOT the stock-ledger position (the real GIT balance lives in the destination Company's in-transit Warehouse). For variance / aged-GIT detection only."
+  },
+  {
+   "fieldname": "ipr_section",
+   "fieldtype": "Section Break",
+   "label": "Internal Purchase Receipts",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "internal_purchase_receipts",
+   "fieldtype": "Table",
+   "label": "Linked IPRs",
+   "options": "EasyEcom Transfer IPR Link",
+   "description": "Multi-GRN partial receipts produce multiple IPRs against the same DN/SI. Stage 3 appends rows here as each GRN arrives."
+  },
+  {
+   "fieldname": "flag_section",
+   "fieldtype": "Section Break",
+   "label": "Flag / Observation"
+  },
+  {
+   "fieldname": "flag_reason",
+   "fieldtype": "Small Text",
+   "label": "Flag Reason",
+   "description": "Populated when status = Drift / Disabled, or when a transfer is in a non-pushable state. Carries the operator-facing explanation."
+  },
+  {
+   "fieldname": "last_observed_at",
+   "fieldtype": "Datetime",
+   "label": "Last Observed At",
+   "read_only": 1,
+   "description": "Last time the integration refreshed this row from EE (Stage 3 GRN pull, Stage 2 STN-status reconciliation, etc.)."
+  },
+  {
+   "fieldname": "drift_section",
+   "fieldtype": "Section Break",
+   "label": "Drift Fields",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "drift_fields",
+   "fieldtype": "Table",
+   "label": "Drift Fields",
+   "options": "EasyEcom Drift Field",
+   "description": "Field-level drift findings — reuses §8f's shared Drift Field child DocType. Populated by §10 drift detection when EE-observed state diverges from ERPNext-pushed state."
+  },
+  {
+   "fieldname": "exclude_section",
+   "fieldtype": "Section Break",
+   "label": "Excluded Fields",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "exclude_fields",
+   "fieldtype": "Table",
+   "label": "Excluded Fields",
+   "options": "EasyEcom Exclude Field",
+   "description": "Fields the FDE has explicitly opted out of drift detection — reuses §8f's shared Exclude Field child DocType."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-29 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Transfer Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

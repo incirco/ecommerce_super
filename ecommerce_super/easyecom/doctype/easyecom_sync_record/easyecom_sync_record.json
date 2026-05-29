@@ -70,7 +70,7 @@
    "fieldname": "entity_type",
    "fieldtype": "Select",
    "label": "Entity Type",
-   "options": "Item\nCustomer\nSupplier\nWarehouse\nTax Category\nChannel\nSales Order\nPurchase Order\nSales Invoice\nPurchase Receipt\nStock Entry\nOrder\nGRN\nReturn\nCancellation\nManifest\nDispatch",
+   "options": "Item\nCustomer\nSupplier\nWarehouse\nTax Category\nChannel\nSales Order\nPurchase Order\nSales Invoice\nPurchase Receipt\nStock Entry\nDelivery Note\nOrder\nGRN\nReturn\nCancellation\nManifest\nDispatch",
    "reqd": 1
   },
   {

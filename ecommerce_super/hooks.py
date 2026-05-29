@@ -310,6 +310,23 @@ doc_events: dict[str, dict[str, str]] = {
         "on_update_after_submit": "ecommerce_super.easyecom.flows.grn_pull.enqueue_on_po_close",
         "after_rename": "ecommerce_super.easyecom.flows.po_push.after_rename_po",
     },
+    # §10 Stage 2 — Delivery Note outbound flow.
+    #   - validate: refuses DNs with multiple distinct (source, target)
+    #     warehouse pairs on internal-customer transfers (BLOCKING —
+    #     same "split, don't auto-multiplex" rule as §9).
+    #   - on_submit: Gate-0 (internal-customer + at-least-one EE WH);
+    #     enqueues §10 outbound (Transfer Map row, SI draft if
+    #     different-GSTIN, STN or PO branch to EE).
+    #   - on_cancel: stub-blocker for DNs with an EE-pushed Transfer
+    #     Map (EE cancelOrder payload UNGROUNDED per §10.G). DNs
+    #     not yet pushed pass through.
+    #   - on_update_after_submit: same stub-blocker for amends.
+    "Delivery Note": {
+        "validate": "ecommerce_super.easyecom.flows.transfer_push.validate_pre_submit",
+        "on_submit": "ecommerce_super.easyecom.flows.transfer_push.enqueue_on_dn_submit",
+        "on_cancel": "ecommerce_super.easyecom.flows.transfer_push.block_dn_cancel",
+        "on_update_after_submit": "ecommerce_super.easyecom.flows.transfer_push.block_dn_amend_after_submit",
+    },
 }
 
 

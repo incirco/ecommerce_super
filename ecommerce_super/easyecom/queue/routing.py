@@ -31,6 +31,8 @@ QUEUE_FOR_JOB_TYPE: dict[str, str] = {
     "GRN Pull": "default",
     "Return Pull": "default",
     "Field Mapping Compile": "default",
+    # §10 Stage 2 — outbound transfer (DN → STN/PO + EE create-order).
+    "Transfer Push": "default",
     # Long queue (bulk and scheduled compute)
     "Inventory Pull": "long",
     "Master Sync Bulk": "long",
@@ -53,6 +55,7 @@ TIMEOUT_FOR_JOB_TYPE: dict[str, int] = {
     "Order Pull": 180,
     "GRN Pull": 180,
     "Return Pull": 180,
+    "Transfer Push": 120,
     "Inventory Pull": 1500,
     "Master Sync Bulk": 3600,
     "Replay Plan Step": 300,
@@ -79,6 +82,7 @@ MAX_ATTEMPTS_FOR_JOB_TYPE: dict[str, int] = {
     "Order Pull": 5,
     "GRN Pull": 5,
     "Return Pull": 5,
+    "Transfer Push": 5,
     "Inventory Pull": 3,  # long, expensive — fewer retries
     "Master Sync Bulk": 3,
     "Replay Plan Step": 5,
