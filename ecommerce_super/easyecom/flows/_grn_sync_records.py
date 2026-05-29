@@ -128,10 +128,56 @@ def write_grn_pull_sync_record(
     return sr.name
 
 
+def write_grn_drift_sync_record(
+    *,
+    ee_grn_id: int,
+    company: str,
+    status: str,
+    last_error: str | None,
+) -> str | None:
+    """Corrective commit 2026-05-29 (FIX 1) — Sync Record for the
+    unknown-PO drift case. Distinct from `write_grn_pull_sync_record`
+    because there is NO PR to key the Sync Record's entity link to;
+    we key on the GRN Map row instead. Upsert is idempotent on re-pull
+    (composite uniqueness on company + entity_doctype + entity_name +
+    direction)."""
+    grn_map_name = f"ECS-GRN-{ee_grn_id}"
+    correlation_id = new_correlation_id()
+    idem_key = internal_job_key(
+        job_type="grn_pull_drift",
+        company=company,
+        target_doctype="EasyEcom GRN Map",
+        target_name=grn_map_name,
+        payload={"ee_grn_id": int(ee_grn_id)},
+    )
+    sr = sync_record_mod.upsert(
+        company=company,
+        entity_doctype="EasyEcom GRN Map",
+        entity_name=grn_map_name,
+        entity_type=ENTITY_TYPE_GRN,
+        direction="Pull",
+        correlation_id=correlation_id,
+        idempotency_key=idem_key,
+    )
+    sr.db_set(
+        {
+            "status": status,
+            "last_attempt_at": frappe.utils.now_datetime(),
+            "correlation_id": correlation_id,
+            "attempts": (sr.attempts or 0) + 1,
+            "last_error": (last_error or "")[:1000] or None,
+        },
+        update_modified=True,
+        commit=False,
+    )
+    return sr.name
+
+
 __all__ = [
     "ENTITY_TYPE_GRN",
     "STATUS_DISCREPANCY",
     "STATUS_FAILED",
     "STATUS_SUCCESS",
     "write_grn_pull_sync_record",
+    "write_grn_drift_sync_record",
 ]

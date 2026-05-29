@@ -14,6 +14,7 @@
   "ee_po_id",
   "status_drift_section",
   "last_pushed_po_status",
+  "ecs_pending_po_status_push",
   "status_drift_col",
   "ee_observed_po_status",
   "ee_observed_at",
@@ -87,6 +88,13 @@
    "fieldtype": "Int",
    "label": "Last Pushed po_status",
    "description": "po_status int last sent via /wms/updatePoStatus. Idempotency guard for the §9 Stage 2 status pusher — skip the push if (target po_status) == last_pushed_po_status. NULL until the first status push. ERPNext-side status transitions: on_submit → 3 (Approved), receipts-complete → 5 (Completed), on_cancel → 7 (Cancelled)."
+  },
+  {
+   "fieldname": "ecs_pending_po_status_push",
+   "fieldtype": "Int",
+   "label": "Pending po_status Push (paused)",
+   "read_only": 1,
+   "description": "Corrective commit 2026-05-29 (FIX 2). Pause-deferred po_status target. When auto_push_pos_on_save=0 (Account paused), the would-be status push (3/5/7) is recorded here instead of being sent. On un-pause, the pending value is fired once (idempotency guard last_pushed_po_status still applies) and the field is cleared. Latest-state-wins: if multiple transitions happen during a pause window (e.g. submit then cancel), this field reflects the LATEST intended state (overwrite, not queue)."
   },
   {
    "fieldname": "status_drift_col",

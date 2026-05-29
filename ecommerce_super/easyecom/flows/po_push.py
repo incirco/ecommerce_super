@@ -398,6 +398,27 @@ def _run_preconditions(
     """
     errs: list[str] = []
 
+    # (1) Warehouse address resolvable (Stage 4 carry-in: refuse,
+    #     don't placeholder). EE's CreatePurchaseOrder requires a
+    #     non-empty `address` field. Stage 3 fell back to "Address
+    #     pending" which sent a meaningless string to EE. Now we
+    #     refuse the push instead — FDE configures the address on
+    #     the warehouse + re-pushes.
+    warehouse = location_row.get("mapped_warehouse")
+    if warehouse:
+        wh_addr = _resolve_warehouse_address(warehouse)
+        addr_value = (wh_addr or {}).get("address_line1") or (
+            (wh_addr or {}).get("city") or ""
+        )
+        if not addr_value.strip():
+            errs.append(
+                f"Warehouse address not configured for {warehouse!r} — "
+                "EE CreatePurchaseOrder requires a non-empty address. "
+                "FDE: link an Address (with address_line1 or city) to "
+                "the Warehouse via Address.links, then re-push."
+            )
+            return errs
+
     # (2) Supplier Map row exists with ee_vendor_id populated.
     supplier = po.supplier
     if not supplier:
@@ -572,10 +593,14 @@ def _do_content_push(
     }
     # address is REQUIRED — EE crashes without it. Use warehouse
     # address; fall back to a sane placeholder when none configured.
-    addr = (warehouse_address or {}).get("address_line1") or (
-        (warehouse_address or {}).get("city") or "Address pending"
+    # Stage 4: precondition guarantees a non-empty address by the
+    # time we reach payload build. Placeholder fallback removed (was
+    # "Address pending" — caught the EE-side validation only because
+    # EE happened to accept any non-empty string).
+    payload["address"] = (
+        (warehouse_address or {}).get("address_line1")
+        or (warehouse_address or {}).get("city")
     )
-    payload["address"] = addr
     # updateTaxRate — only include on amend WITH tax change (matches EE
     # docs; the working Postman create omitted it entirely).
     if existing_ee_po_id and tax_changed:
@@ -997,16 +1022,31 @@ def enqueue_on_po_submit(doc: Any, method: str | None = None) -> None:
 
     Ping-pong guard: skip when a §9 push is mid-flight (avoid hook
     re-firing on intra-flow saves).
+
+    Corrective commit 2026-05-29 (FIX 2): when paused
+    (auto_push_pos_on_save=0), record ecs_pending_po_status_push=3
+    on the PO Map so the deferred push fires on un-pause. The PO Map
+    row needs to exist for this — if it doesn't, the content push
+    that creates it would also have been gated, so there's nothing
+    to record. (Submit-without-content-push is impossible in the
+    paused state because both share the same gate.)
     """
     if doc.doctype != "Purchase Order":
         return
     if getattr(frappe.flags, PING_PONG_FLAG, False):
         return
-    if not _auto_push_enabled():
-        return
     # Don't enqueue if Gate-0 would fail — keeps the queue clean.
     loc = _resolve_po_warehouse_to_location(doc.name)
     if loc is None:
+        return
+    if not _auto_push_enabled():
+        # FIX 2 — record pending if a PO Map row exists (i.e., the PO
+        # was pushed in a prior un-paused window and is now being
+        # re-submitted under pause).
+        if _get_po_map_row(doc.name):
+            _record_pending_status_push(
+                po_docname=doc.name, target_status=PO_STATUS_APPROVED
+            )
         return
     _enqueue_push(po_docname=doc.name, push_status_after_content=True)
 
@@ -1015,11 +1055,12 @@ def enqueue_on_po_cancel(doc: Any, method: str | None = None) -> None:
     """Purchase Order.on_cancel hook. Fires updatePoStatus=7 (Cancelled)
     when the PO is in §9 scope AND has been pushed (ee_po_id captured).
 
-    NOTE: this is NOT gated on auto_push_pos_on_save. Cancellation
-    needs to propagate even if auto-push is off, because the EE-side
-    PO already exists (it was created during onboarding or before the
-    pause). A paused account that doesn't propagate cancels would leave
-    EE with stale orders.
+    Corrective commit 2026-05-29 (FIX 2 — Option A consistent
+    semantics): cancellation IS a write to EE, so it ALSO respects
+    pause. Under pause, record ecs_pending_po_status_push=7 on the
+    PO Map; fire on un-pause. This corrects the prior "cancels always
+    fire" model — pause now means "no EE writes" uniformly across
+    all three status pushes (3 / 5 / 7).
     """
     if doc.doctype != "Purchase Order":
         return
@@ -1028,6 +1069,14 @@ def enqueue_on_po_cancel(doc: Any, method: str | None = None) -> None:
     map_row = _get_po_map_row(doc.name)
     if not map_row or not map_row.get("ee_po_id"):
         return  # never pushed → nothing to cancel on EE
+    if _is_paused():
+        # FIX 2 — defer the cancel push under pause. Latest-state-wins
+        # overwrite: if a pending=3 was recorded just before this
+        # cancel, the pending field now reflects 7 (the latest intent).
+        _record_pending_status_push(
+            po_docname=doc.name, target_status=PO_STATUS_CANCELLED
+        )
+        return
     _enqueue_status_push(po_docname=doc.name, target_status=PO_STATUS_CANCELLED)
 
 
@@ -1089,6 +1138,109 @@ def _auto_push_enabled() -> bool:
         as_dict=True,
     )
     return bool(account and int(account.auto_push_pos_on_save or 0))
+
+
+def _is_paused() -> bool:
+    """Corrective commit 2026-05-29 (FIX 2) — pause detection.
+
+    "Pause" = the FDE clicked pause_all_auto_push, which zeros all
+    three auto_push_*_on_save toggles. For PO-side writes, this
+    reduces to: auto_push_pos_on_save = 0. The complement of
+    _auto_push_enabled().
+
+    Why a separate helper instead of just `not _auto_push_enabled()`:
+    semantic clarity at the call site. "_auto_push_enabled()" guards
+    the auto-fire path; "_is_paused()" guards the deferred-write path.
+    They share the same Account field but communicate different
+    intent.
+    """
+    return not _auto_push_enabled()
+
+
+def _record_pending_status_push(*, po_docname: str, target_status: int) -> None:
+    """Corrective commit 2026-05-29 (FIX 2) — pause-deferred write.
+
+    Latest-state-wins overwrite (not queue). If a submit (3) and a
+    cancel (7) both happen during the same pause window, the field
+    ends at 7 — fire on un-pause sends 7.
+
+    Idempotency note: this stores INTENT, not a queue entry. The
+    on-fire path consults `last_pushed_po_status` to skip no-op
+    pushes (e.g. pending=3 but last_pushed=3 → no fire).
+    """
+    map_row = _get_po_map_row(po_docname)
+    if not map_row:
+        return
+    frappe.db.set_value(
+        "EasyEcom PO Map",
+        map_row["name"],
+        "ecs_pending_po_status_push",
+        int(target_status),
+        update_modified=False,
+    )
+
+
+def _clear_pending_status_push(po_docname: str) -> None:
+    map_row = _get_po_map_row(po_docname)
+    if not map_row:
+        return
+    frappe.db.set_value(
+        "EasyEcom PO Map",
+        map_row["name"],
+        "ecs_pending_po_status_push",
+        0,
+        update_modified=False,
+    )
+
+
+def fire_pending_po_status_pushes() -> dict[str, Any]:
+    """Corrective commit 2026-05-29 (FIX 2) — un-pause runner.
+
+    Walks every PO Map row with ecs_pending_po_status_push != 0, fires
+    push_po_status for each, clears the pending on success. Idempotency
+    guard last_pushed_po_status still applies — a stored pending value
+    that matches last_pushed is a no-op (still cleared).
+
+    Returns a summary dict for the caller (Account.on_update or a
+    future scheduler tick). Safe to call when not paused; the gate
+    in each push fires anyway.
+    """
+    if _is_paused():
+        # Defensive — if pause is still on, the called push would
+        # re-defer to the same field. No-op.
+        return {
+            "ok": False,
+            "message": "Still paused — fire_pending no-ops.",
+            "fired": 0,
+        }
+    fired = 0
+    skipped: list[str] = []
+    pending_rows = frappe.db.get_all(
+        "EasyEcom PO Map",
+        filters={"ecs_pending_po_status_push": ("!=", 0)},
+        fields=["name", "purchase_order", "ecs_pending_po_status_push"],
+    )
+    for row in pending_rows:
+        target = int(row.get("ecs_pending_po_status_push") or 0)
+        if not target or not row.purchase_order:
+            continue
+        try:
+            push_po_status(
+                po_docname=row.purchase_order,
+                target_status=target,
+            )
+            _clear_pending_status_push(row.purchase_order)
+            fired += 1
+        except Exception as exc:
+            skipped.append(
+                f"{row.purchase_order} (target={target}): "
+                f"{type(exc).__name__}: {exc}"
+            )
+    return {
+        "ok": True,
+        "fired": fired,
+        "skipped": skipped,
+    }
 
 
 def _enqueue_push(*, po_docname: str, push_status_after_content: bool) -> None:

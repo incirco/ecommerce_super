@@ -88,9 +88,11 @@ class TestGoLiveEnableAutoPush(FrappeTestCase):
         self.assertIn("not found", r["message"].lower())
 
     def test_refuses_when_all_three_falsy(self) -> None:
+        # Corrective commit 2026-05-29 (FIX 2): pos=0 too so the
+        # 4-toggle signature still resolves to "nothing to enable".
         r = go_live_enable_auto_push(
             account=self.account,
-            items=0, customers=0, suppliers=0,
+            items=0, customers=0, suppliers=0, pos=0,
             confirm=1,
         )
         self.assertFalse(r["ok"])
@@ -99,7 +101,11 @@ class TestGoLiveEnableAutoPush(FrappeTestCase):
     def test_all_three_default_enables_all(self) -> None:
         r = go_live_enable_auto_push(account=self.account, confirm=1)
         self.assertTrue(r["ok"])
-        self.assertEqual(r["state"], {"items": 1, "customers": 1, "suppliers": 1})
+        # Corrective commit 2026-05-29 (FIX 2): state dict now has 4
+        # keys (added 'pos'). Defaults enable all four.
+        self.assertEqual(
+            r["state"], {"items": 1, "customers": 1, "suppliers": 1, "pos": 1}
+        )
         # DB confirms.
         row = frappe.db.get_value(
             "EasyEcom Account",
@@ -108,21 +114,25 @@ class TestGoLiveEnableAutoPush(FrappeTestCase):
                 "auto_push_on_save",
                 "auto_push_customers_on_save",
                 "auto_push_suppliers_on_save",
+                "auto_push_pos_on_save",
             ],
             as_dict=True,
         )
         self.assertEqual(int(row.auto_push_on_save), 1)
         self.assertEqual(int(row.auto_push_customers_on_save), 1)
         self.assertEqual(int(row.auto_push_suppliers_on_save), 1)
+        self.assertEqual(int(row.auto_push_pos_on_save), 1)
 
     def test_selective_enable_customers_only(self) -> None:
         r = go_live_enable_auto_push(
             account=self.account,
-            items=0, customers=1, suppliers=0,
+            items=0, customers=1, suppliers=0, pos=0,
             confirm=1,
         )
         self.assertTrue(r["ok"])
-        self.assertEqual(r["state"], {"items": 0, "customers": 1, "suppliers": 0})
+        self.assertEqual(
+            r["state"], {"items": 0, "customers": 1, "suppliers": 0, "pos": 0}
+        )
         self.assertEqual(r["transitioned"], ["Customers"])
 
     def test_warns_when_master_mode_still_onboarding(self) -> None:
@@ -211,7 +221,10 @@ class TestPauseAllAutoPush(FrappeTestCase):
     def setUp(self) -> None:
         _wipe_test_account()
         self.account = _make_test_account()
-        # Start with all three ON so the pause has something to flip.
+        # Corrective commit 2026-05-29 (FIX 2): start with all FOUR
+        # ON so the pause has the §9 PO toggle to flip too. The prior
+        # 3-toggle setup left auto_push_pos_on_save uncovered — fixed
+        # under §9 corrective scope.
         frappe.db.set_value(
             "EasyEcom Account",
             self.account,
@@ -219,6 +232,7 @@ class TestPauseAllAutoPush(FrappeTestCase):
                 "auto_push_on_save": 1,
                 "auto_push_customers_on_save": 1,
                 "auto_push_suppliers_on_save": 1,
+                "auto_push_pos_on_save": 1,
             },
             update_modified=False,
         )
@@ -232,16 +246,21 @@ class TestPauseAllAutoPush(FrappeTestCase):
         self.assertFalse(r["ok"])
         self.assertIn("confirm", r["message"].lower())
 
-    def test_pause_flips_all_three_off(self) -> None:
+    def test_pause_flips_all_four_off(self) -> None:
+        # Corrective commit 2026-05-29 (FIX 2): pause now flips FOUR
+        # toggles. Renamed from test_pause_flips_all_three_off.
         r = pause_all_auto_push(
             account=self.account, reason="Test", confirm=1
         )
         self.assertTrue(r["ok"])
         self.assertEqual(
-            r["state"], {"items": 0, "customers": 0, "suppliers": 0}
+            r["state"], {"items": 0, "customers": 0, "suppliers": 0, "pos": 0}
         )
         # Reports what was active.
-        self.assertEqual(set(r["was_active"]), {"Items", "Customers", "Suppliers"})
+        self.assertEqual(
+            set(r["was_active"]),
+            {"Items", "Customers", "Suppliers", "POs"},
+        )
 
     def test_pause_idempotent_on_already_paused(self) -> None:
         # Pause once.

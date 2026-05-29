@@ -24,6 +24,9 @@ VALID_STATUS_VALUES: frozenset[str] = frozenset(
         "Failed",
         "Discrepancy",
         "Deleted-Post-Receipt",
+        # Corrective commit 2026-05-29: unknown-PO drift dismissed by
+        # FDE (the GRN should not be received — noise / duplicate).
+        "Dismissed",
     }
 )
 

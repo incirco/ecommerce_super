@@ -23,7 +23,8 @@
   "purchase_receipt",
   "linked_po_map",
   "routed_to_stn",
-  "last_observed_at"
+  "last_observed_at",
+  "ecs_grn_payload_json"
  ],
  "fields": [
   {
@@ -39,11 +40,11 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
-   "options": "Pending\nReceipted\nHeld-Pre-QC\nSTN-Routed\nFailed\nDiscrepancy\nDeleted-Post-Receipt",
+   "options": "Pending\nReceipted\nHeld-Pre-QC\nSTN-Routed\nFailed\nDiscrepancy\nDeleted-Post-Receipt\nDismissed",
    "default": "Pending",
    "reqd": 1,
    "in_list_view": 1,
-   "description": "§9 GRN-Map state. Pending = observed, not yet processable (e.g. Item/Supplier Map missing). Receipted = PR created + submitted. Held-Pre-QC = observed but grn_status_id < grn_receipt_trigger_status (re-evaluated next poll). STN-Routed = vendor_c_id == inwarded_warehouse_c_id; §10 STN-inward picks up. Failed = receipting attempted and failed (see linked Sync Record). Discrepancy = receipted but with line-level discrepancy (tolerance breach, HSN mismatch). Deleted-Post-Receipt = EE flipped grn_status_id to 4 after we already posted the PR."
+   "description": "§9 GRN-Map state. Pending = observed, not yet processable (e.g. Item/Supplier Map missing). Receipted = PR created + submitted. Held-Pre-QC = observed but grn_status_id < grn_receipt_trigger_status (re-evaluated next poll). STN-Routed = vendor_c_id == inwarded_warehouse_c_id; §10 STN-inward picks up. Failed = receipting attempted and failed (see linked Sync Record). Discrepancy: receipted-with-line-discrepancy (tolerance/HSN) OR unknown-PO drift (no auto-PR, FDE-driven resolution via 'Create PR from this GRN'); the linked Integration Discrepancy disambiguates via `kind`. Deleted-Post-Receipt = EE flipped grn_status_id to 4 after we already posted the PR. Dismissed = FDE-driven close of an unknown-PO drift (corrective commit 2026-05-29) — GRN should not be received."
   },
   {
    "fieldname": "header_section",
@@ -144,6 +145,14 @@
    "label": "Last Observed At",
    "read_only": 1,
    "description": "When this row was last refreshed by a §9 Stage 3 pull. Used to detect stale rows (e.g. GRN deleted upstream without status flip)."
+  },
+  {
+   "fieldname": "ecs_grn_payload_json",
+   "fieldtype": "Long Text",
+   "label": "GRN Payload (preserved, JSON)",
+   "read_only": 1,
+   "hidden": 1,
+   "description": "Corrective commit 2026-05-29 (unknown-PO drift). Stores the raw EE GRN payload (grn_row + line items: received_quantity, qc_fail, grn_detail_price, batch_code, expire_date, grn_detail_id, sku, ean, etc.) at pull time so the FDE 'Create PR from this GRN' action can rebuild a Purchase Receipt later without re-pulling. Populated ONLY on unknown-PO drift; normal Receipted/Held/STN paths leave this empty."
   }
  ],
  "index_web_pages_for_search": 0,

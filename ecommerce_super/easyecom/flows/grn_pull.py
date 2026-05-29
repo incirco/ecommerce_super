@@ -64,6 +64,7 @@ from ecommerce_super.easyecom.flows._grn_sync_records import (
     STATUS_DISCREPANCY,
     STATUS_FAILED,
     STATUS_SUCCESS,
+    write_grn_drift_sync_record,
     write_grn_pull_sync_record,
 )
 from ecommerce_super.easyecom.flows.po_push import (
@@ -101,6 +102,10 @@ GRNOp = Literal[
     "deleted_post_receipt",  # grn_status_id=4 + PR exists → Discrepancy
     "receipted",  # PR created
     "failed",  # supplier/item miss, PR submit failed
+    # Corrective commit 2026-05-29 (FIX 1):
+    "drift",  # unknown-PO drift — no auto-PR, FDE-driven resolution
+    "noop_drift",  # re-pull of an already-drift GRN (no re-raise)
+    "noop_dismissed",  # re-pull of an FDE-dismissed drift
 ]
 
 
@@ -392,14 +397,40 @@ def process_one_grn(
     # whether the row landed clean Receipted or with Discrepancy). The
     # second-pull case should never create a duplicate PR.
     #
-    # Two-layer check (live finding 2026-05-28):
+    # Three-layer check:
     #   (a) Map row in {Receipted, Discrepancy} with PR linked — fast path.
     #   (b) A submitted PR with matching ecs_easyecom_grn_id exists —
     #       slow-path safety net. Catches the case where the Map row
     #       was manually wiped (FDE cleanup, debugging) but the PR
     #       survived. Without this, re-pulling against a wiped Map
     #       silently creates a duplicate PR + double-counts received
-    #       qty against the PO line.
+    #       qty against the PO line. (live finding 2026-05-28)
+    #   (c) Map row in unknown-PO drift state (status=Discrepancy with
+    #       no PR linked AND payload preserved AND linked_po_map empty)
+    #       — refresh last_observed_at, do NOT re-raise the Discrepancy.
+    #       Corrective commit 2026-05-29 (FIX 1 idempotency guard).
+    #   (d) Map row in Dismissed state — FDE-closed drift; refresh and
+    #       no-op.
+    if (
+        existing_map
+        and existing_map.get("status") == "Discrepancy"
+        and not existing_map.get("purchase_receipt")
+        and not existing_map.get("linked_po_map")
+    ):
+        # Unknown-PO drift no-op: refresh observed, don't re-raise.
+        _refresh_observed_only(grn_map_name=existing_map["name"], grn_row=grn_row)
+        return GRNOutcome(
+            ee_grn_id=ee_grn_id,
+            operation="noop_drift",
+            grn_map_status="Discrepancy",
+        )
+    if existing_map and existing_map.get("status") == "Dismissed":
+        _refresh_observed_only(grn_map_name=existing_map["name"], grn_row=grn_row)
+        return GRNOutcome(
+            ee_grn_id=ee_grn_id,
+            operation="noop_dismissed",
+            grn_map_status="Dismissed",
+        )
     if (
         existing_map
         and existing_map.get("status") in ("Receipted", "Discrepancy")
@@ -475,6 +506,57 @@ def process_one_grn(
         location_row=location_row,
         company=company,
     )
+
+    # Corrective commit 2026-05-29 (FIX 1): unknown-PO GRN is DRIFT —
+    # no auto-PR. Per packet step (5) + Open Decision #4 (both updated
+    # 2026-05-28): if NO ERPNext-created PO resolves, the integration
+    # ONLY PULLS in this direction — you cannot retroactively create
+    # and push a PO after goods arrived. Resolution is FDE-driven
+    # ERPNext-side via the "Create PR from this GRN" action (standalone
+    # PR by default; optional PO link). Preserve the raw GRN payload
+    # on the Map row so the action can rebuild the PR later without
+    # re-pulling. Checked BEFORE supplier_missing / line_failures
+    # because the unknown-PO drift contract supersedes those — the
+    # FDE may resolve the GRN even when its resolution would also have
+    # been Failed in the auto-receipt path (their resolution action
+    # re-runs the same chain and reports specific resolution errors
+    # back to the FDE then).
+    if resolution.get("po_unknown_reason"):
+        # Insert GRN Map row FIRST so the Integration Discrepancy's
+        # Dynamic Link (reference_doctype/reference_name) resolves at
+        # save-time. _raise_discrepancy silently returns None if the
+        # link target doesn't exist.
+        _upsert_grn_map_unknown_po_drift(
+            ee_grn_id=ee_grn_id,
+            grn_row=grn_row,
+            inwarded_wh_c_id=inwarded_wh_c_id,
+            vendor_c_id=vendor_c_id,
+        )
+        disc_name = _raise_discrepancy(
+            kind="GRN for unknown PO",
+            reference_doctype="EasyEcom GRN Map",
+            reference_name=f"ECS-GRN-{ee_grn_id}",
+            company=company,
+            reason=resolution["po_unknown_reason"],
+        )
+        # Sync Record reflects drift, not Receipted/Failed. Keyed on
+        # the GRN Map row (no PR exists). Idempotent on re-pull.
+        sr_name = write_grn_drift_sync_record(
+            ee_grn_id=ee_grn_id,
+            company=company,
+            status=STATUS_DISCREPANCY,
+            last_error=resolution["po_unknown_reason"],
+        )
+        return GRNOutcome(
+            ee_grn_id=ee_grn_id,
+            operation="drift",
+            grn_map_status="Discrepancy",
+            purchase_receipt=None,
+            linked_po=None,
+            flag_reasons=[resolution["po_unknown_reason"]],
+            discrepancies=[disc_name] if disc_name else [],
+            sync_record_name=sr_name,
+        )
 
     if resolution.get("supplier_missing"):
         # Failed — write Map row + Sync Record (PR=None → no SR write
@@ -571,19 +653,6 @@ def process_one_grn(
             grn_map_status="Failed",
             flag_reasons=[f"PR submit: {type(exc).__name__}: {exc}"],
         )
-
-    # PO-unknown discrepancy (linked_po_map empty + flag_reason).
-    # Raised AFTER submit so the reference_name resolves to a real PR.
-    if resolution.get("po_unknown_reason"):
-        disc = _raise_discrepancy(
-            kind="GRN for unknown PO",
-            reference_doctype="Purchase Receipt",
-            reference_name=pr_doc.name,
-            company=company,
-            reason=resolution["po_unknown_reason"],
-        )
-        if disc:
-            discrepancies.append(disc)
 
     # Batch-on-non-batch-Item mismatch (live finding 2026-05-28): EE
     # supplied a batch_code on a line whose Item.has_batch_no=0. The
@@ -1304,6 +1373,16 @@ def _maybe_fire_completion(
 
     If client is None and no live EE Account exists, skip — tests that
     don't mock the client should not be triggering live EE calls.
+
+    PAUSE SEMANTICS — corrective commit 2026-05-29 (FIX 2 Option A):
+    completion push DEFERS under pause. Consistent semantics with
+    submit (3) and cancel (7) — pause means "no EE writes". When
+    paused, record ecs_pending_po_status_push=5 on the PO Map; the
+    pending fires on un-pause via fire_pending_po_status_pushes()
+    (idempotency guard last_pushed_po_status still applies).
+    Supersedes the prior Stage-3 "always-fire" rationale documented
+    pre-corrective. Per user direction 2026-05-28 — pause windows
+    are bounded; cross-system divergence resolves on un-pause.
     """
     if not po_name or not frappe.db.exists("Purchase Order", po_name):
         return
@@ -1374,6 +1453,21 @@ def _maybe_fire_completion(
             complete = False
             break
     if not complete:
+        return
+
+    # FIX 2 (2026-05-29) — pause gate. Under pause, record the
+    # pending push and return; fire_pending_po_status_pushes() will
+    # fire it on un-pause. Idempotency via last_pushed_po_status
+    # still applies, so a pending=5 against a PO already at 5 is a
+    # no-op flush.
+    from ecommerce_super.easyecom.flows.po_push import (
+        _is_paused,
+        _record_pending_status_push,
+    )
+    if _is_paused():
+        _record_pending_status_push(
+            po_docname=po_name, target_status=PO_STATUS_COMPLETED
+        )
         return
 
     # Fire Stage 2 status push. The push_po_status function has its
@@ -1511,6 +1605,35 @@ def _upsert_grn_map_failed(
             )
         except Exception:
             pass
+
+
+def _upsert_grn_map_unknown_po_drift(
+    *,
+    ee_grn_id: int,
+    grn_row: dict,
+    inwarded_wh_c_id: int,
+    vendor_c_id: int,
+) -> None:
+    """Corrective commit 2026-05-29 (FIX 1): unknown-PO GRN drift state.
+    GRN Map row with status=Discrepancy, linked_po_map empty,
+    purchase_receipt empty, and the full grn_row payload preserved on
+    ecs_grn_payload_json so the FDE 'Create PR from this GRN' action
+    can rebuild a PR without re-pulling. Idempotent: re-pulling the
+    same drift GRN refreshes last_observed_at via the upsert."""
+    base = _grn_map_base_fields(
+        grn_row=grn_row,
+        inwarded_wh_c_id=inwarded_wh_c_id,
+        vendor_c_id=vendor_c_id,
+    )
+    base.update(
+        {
+            "status": "Discrepancy",
+            "purchase_receipt": None,
+            "linked_po_map": None,
+            "ecs_grn_payload_json": frappe.as_json(grn_row),
+        }
+    )
+    _upsert_grn_map(ee_grn_id=ee_grn_id, fields=base)
 
 
 def _upsert_grn_map_receipted(

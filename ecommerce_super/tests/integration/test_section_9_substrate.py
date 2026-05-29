@@ -236,6 +236,12 @@ class TestGRNMapSchema(FrappeTestCase):
         meta = frappe.get_meta("EasyEcom GRN Map")
         opts = set((meta.get_field("status").options or "").split("\n"))
         self.assertEqual(opts, GRN_MAP_STATUSES)
+        # The 7-state set per packet step (5) PLUS the 'Dismissed'
+        # state added by the 2026-05-29 corrective commit (FIX 1) —
+        # FDE-closed unknown-PO drift. The packet's Open Decision #4
+        # (resolved 2026-05-28) authorises the FDE dismiss action;
+        # this dedicated state lets the worklist filter "open drift"
+        # without lumping in closed dismissals.
         self.assertEqual(
             opts,
             {
@@ -246,8 +252,10 @@ class TestGRNMapSchema(FrappeTestCase):
                 "Failed",
                 "Discrepancy",
                 "Deleted-Post-Receipt",
+                "Dismissed",
             },
-            "§9 GRN Map enum must match the 7-state set in the packet",
+            "§9 GRN Map enum must match the 7-state packet set + "
+            "Dismissed (FIX 1 corrective).",
         )
 
     def test_autoname_uses_ee_grn_id(self) -> None:
@@ -483,6 +491,51 @@ class TestGRNInwardPolicySettings(FrappeTestCase):
         meta = frappe.get_meta("EasyEcom Account")
         f = meta.get_field("grn_receipt_trigger_status")
         self.assertTrue(f.reqd, "grn_receipt_trigger_status is reqd (§9 packet)")
+
+
+class TestGRNPullSchedulerIntentionallyUnwired(FrappeTestCase):
+    """§9 Stage 4 — the GRN-pull cron is INTENTIONALLY not registered.
+    Auto-firing on an Account with NULL grn_pull_high_watermark would
+    drag in 7 days of historical GRNs from EE's backstop and create
+    PRs for already-manually-receipted POs. The handler ships; the
+    cron auto-fire is deferred to §9 closeout (separate packet) once
+    the cold-start safety gates land. This test pins the deferral so
+    a future contributor doesn't silently restore the cron and ship
+    an unsafe surprise on the next migrate."""
+
+    def test_grn_pull_cron_is_NOT_registered(self) -> None:
+        from ecommerce_super.hooks import scheduler_events
+
+        cron = scheduler_events.get("cron") or {}
+        target = (
+            "ecommerce_super.easyecom.flows."
+            "grn_pull.scheduled_grn_pull"
+        )
+        all_entries = [
+            (sched, fn)
+            for sched, fns in cron.items()
+            for fn in fns
+            if fn == target
+        ]
+        self.assertEqual(
+            len(all_entries),
+            0,
+            f"scheduled_grn_pull is wired into cron — found "
+            f"{all_entries}. This was deliberately deferred to the "
+            "§9 closeout pending cold-start safety gates. If you're "
+            "re-wiring, make sure the gates landed first AND update "
+            "this test (rename to TestGRNPullSchedulerRegistration).",
+        )
+
+    def test_grn_pull_handler_still_callable(self) -> None:
+        """The handler itself ships and is manually invokable —
+        only the cron auto-fire is deferred."""
+        from ecommerce_super.easyecom.flows import grn_pull
+
+        self.assertTrue(
+            callable(grn_pull.scheduled_grn_pull),
+            "scheduled_grn_pull must remain manually callable.",
+        )
 
 
 class TestRulesetRepoints(FrappeTestCase):

@@ -62,22 +62,25 @@ def go_live_enable_auto_push(
     items: int | bool = True,
     customers: int | bool = True,
     suppliers: int | bool = True,
+    pos: int | bool = True,
     confirm: int | bool | str = False,
 ) -> dict[str, Any]:
     """Enable the auto-push toggles for the chosen entities in a single
     audit-logged action. Refuses cleanly if confirm is falsy.
 
-    `items` / `customers` / `suppliers` default to truthy so the
-    common path (enable all three) is the no-args invocation. Pass
-    `items=0, customers=1, suppliers=0` to enable selectively (e.g.
-    you've flipped Customer master to erpnext_mastered but Item is
-    still onboarding).
+    `items` / `customers` / `suppliers` / `pos` default to truthy so
+    the common path (enable all four) is the no-args invocation. Pass
+    selectively to enable just one channel (e.g. you've flipped
+    Customer master to erpnext_mastered but Item is still onboarding).
+
+    `pos` added 2026-05-29 (corrective scope) — symmetric with
+    pause_all_auto_push which now also zeros auto_push_pos_on_save.
 
     Returns:
       {
         "ok": True/False,
         "message": "...",
-        "state": {"items": 1, "customers": 1, "suppliers": 1},
+        "state": {"items": 1, "customers": 1, "suppliers": 1, "pos": 1},
         "warnings": [...]  # only populated when steady-state checks
                            #   surfaced something the FDE should know.
       }
@@ -104,14 +107,15 @@ def go_live_enable_auto_push(
     enable_items = _truthy(items)
     enable_customers = _truthy(customers)
     enable_suppliers = _truthy(suppliers)
+    enable_pos = _truthy(pos)
 
-    if not any((enable_items, enable_customers, enable_suppliers)):
+    if not any((enable_items, enable_customers, enable_suppliers, enable_pos)):
         return {
             "ok": False,
             "message": (
-                "Nothing to enable — items / customers / suppliers all "
-                "falsy. Either pick one or call pause_all_auto_push if "
-                "you meant to turn things OFF."
+                "Nothing to enable — items / customers / suppliers / "
+                "pos all falsy. Either pick one or call "
+                "pause_all_auto_push if you meant to turn things OFF."
             ),
         }
 
@@ -159,6 +163,9 @@ def go_live_enable_auto_push(
     if enable_suppliers:
         updates["auto_push_suppliers_on_save"] = 1
         transitioned.append("Suppliers")
+    if enable_pos:
+        updates["auto_push_pos_on_save"] = 1
+        transitioned.append("POs")
 
     frappe.db.set_value(
         "EasyEcom Account", account, updates, update_modified=True
@@ -189,9 +196,28 @@ def go_live_enable_auto_push(
             "auto_push_on_save",
             "auto_push_customers_on_save",
             "auto_push_suppliers_on_save",
+            "auto_push_pos_on_save",
         ],
         as_dict=True,
     )
+
+    # Corrective commit 2026-05-29 (FIX 2) — if POs were re-enabled,
+    # fire any pause-deferred po_status pushes that were recorded
+    # during the pause window. Safe to call even when pos wasn't
+    # in the transition list (the runner self-checks).
+    fired_summary = None
+    if enable_pos:
+        from ecommerce_super.easyecom.flows.po_push import (
+            fire_pending_po_status_pushes,
+        )
+        try:
+            fired_summary = fire_pending_po_status_pushes()
+        except Exception as exc:
+            warnings.append(
+                f"Pending po_status push fire-on-unpause raised "
+                f"{type(exc).__name__}: {exc}. Re-invoke manually via "
+                "fire_pending_po_status_pushes()."
+            )
 
     return {
         "ok": True,
@@ -201,8 +227,10 @@ def go_live_enable_auto_push(
             "items": int(new_state.auto_push_on_save or 0),
             "customers": int(new_state.auto_push_customers_on_save or 0),
             "suppliers": int(new_state.auto_push_suppliers_on_save or 0),
+            "pos": int(new_state.auto_push_pos_on_save or 0),
         },
         "warnings": warnings,
+        "fired_pending_status_pushes": fired_summary,
         "message": (
             f"Auto-push enabled for {', '.join(transitioned)}. "
             f"Recorded as a Comment on the Account doc for audit."
@@ -250,6 +278,12 @@ def pause_all_auto_push(
             "auto_push_on_save",
             "auto_push_customers_on_save",
             "auto_push_suppliers_on_save",
+            # Corrective commit 2026-05-29 (FIX 2 audit) — the §9 PO
+            # push toggle was added after pause_all_auto_push shipped
+            # and the prior version didn't include it. Without this,
+            # pause-all left PO writes (po_status 3 / 5 / 7) firing.
+            # Fixed under §9 corrective scope per user direction.
+            "auto_push_pos_on_save",
         ],
         as_dict=True,
     )
@@ -259,6 +293,7 @@ def pause_all_auto_push(
             ("Items", prior.auto_push_on_save),
             ("Customers", prior.auto_push_customers_on_save),
             ("Suppliers", prior.auto_push_suppliers_on_save),
+            ("POs", prior.auto_push_pos_on_save),
         )
         if int(val or 0) == 1
     ]
@@ -270,6 +305,7 @@ def pause_all_auto_push(
             "auto_push_on_save": 0,
             "auto_push_customers_on_save": 0,
             "auto_push_suppliers_on_save": 0,
+            "auto_push_pos_on_save": 0,
         },
         update_modified=True,
     )
@@ -293,7 +329,7 @@ def pause_all_auto_push(
         "ok": True,
         "account": account,
         "was_active": was_active,
-        "state": {"items": 0, "customers": 0, "suppliers": 0},
+        "state": {"items": 0, "customers": 0, "suppliers": 0, "pos": 0},
         "message": (
             "All auto-push toggles disabled."
             + (

@@ -537,6 +537,14 @@ class TestReceiptGateAndIdempotency(FrappeTestCase):
         _make_supplier_map(cls.supplier, ee_vendor_c_id="500001")
         cls.item = _ensure_item(f"{_PREFIX}ITEM-RGI")
         _make_item_map(cls.item, ee_sku=f"{_PREFIX}SKU-RGI")
+        # FIX 1 (2026-05-29) — Submitted PO so GRN payloads bypass
+        # unknown-PO drift and reach the receipt-gate / idempotency
+        # path these tests exercise.
+        cls.po = _make_po(
+            supplier=cls.supplier,
+            warehouse=cls.ee_wh,
+            items=[{"item_code": cls.item, "qty": 100, "rate": 100}],
+        )
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -578,6 +586,7 @@ class TestReceiptGateAndIdempotency(FrappeTestCase):
                 vendor_c_id=500001,
                 inwarded_warehouse_c_id=700002,
                 grn_status_id=1,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -595,6 +604,7 @@ class TestReceiptGateAndIdempotency(FrappeTestCase):
                 vendor_c_id=500001,
                 inwarded_warehouse_c_id=700002,
                 grn_status_id=3,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -620,6 +630,7 @@ class TestReceiptGateAndIdempotency(FrappeTestCase):
                 vendor_c_id=500001,
                 inwarded_warehouse_c_id=700002,
                 grn_status_id=3,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -641,6 +652,7 @@ class TestReceiptGateAndIdempotency(FrappeTestCase):
                 vendor_c_id=500001,
                 inwarded_warehouse_c_id=700002,
                 grn_status_id=3,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -677,6 +689,13 @@ class TestDeletedHandling(FrappeTestCase):
         _make_supplier_map(cls.supplier, ee_vendor_c_id="500002")
         cls.item = _ensure_item(f"{_PREFIX}ITEM-DEL")
         _make_item_map(cls.item, ee_sku=f"{_PREFIX}SKU-DEL")
+        # FIX 1 (2026-05-29) — Submitted PO so the deleted_post_receipt
+        # test's first-pull reaches receipted (bypasses unknown-PO drift).
+        cls.po = _make_po(
+            supplier=cls.supplier,
+            warehouse=cls.ee_wh,
+            items=[{"item_code": cls.item, "qty": 100, "rate": 100}],
+        )
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -720,6 +739,7 @@ class TestDeletedHandling(FrappeTestCase):
                 vendor_c_id=500002,
                 inwarded_warehouse_c_id=700003,
                 grn_status_id=3,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -773,13 +793,15 @@ class TestQtyModelAndBuckets(FrappeTestCase):
             mapped_warehouse=cls.ee_wh,
             frappe_company=cls.company,
         )
-        # Set default_rejected_warehouse for the qc_fail tests.
-        acct = frappe.db.get_value(
-            "EasyEcom Account", {"enabled": 1}, "name"
-        )
+        # Set default_rejected_warehouse on the PER-TEST account by
+        # name. NEVER use {"enabled": 1} as a lookup filter here —
+        # cross-test runs may have multiple accounts enabled (Harmony
+        # on a dev site + test-account) and the wrong row can win,
+        # corrupting production config. Live finding from Stage 3
+        # smoke 2026-05-28.
         frappe.db.set_value(
             "EasyEcom Account",
-            acct,
+            "test-account",
             "default_rejected_warehouse",
             cls.rejected_wh,
             update_modified=False,
@@ -788,6 +810,13 @@ class TestQtyModelAndBuckets(FrappeTestCase):
         _make_supplier_map(cls.supplier, ee_vendor_c_id="500003")
         cls.item = _ensure_item(f"{_PREFIX}ITEM-QTY")
         _make_item_map(cls.item, ee_sku=f"{_PREFIX}SKU-QTY")
+        # FIX 1 (2026-05-29) — Submitted PO so qty-model tests reach
+        # the build/submit path (bypass unknown-PO drift).
+        cls.po = _make_po(
+            supplier=cls.supplier,
+            warehouse=cls.ee_wh,
+            items=[{"item_code": cls.item, "qty": 1000, "rate": 10}],
+        )
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -821,6 +850,7 @@ class TestQtyModelAndBuckets(FrappeTestCase):
                 grn_id=200030,
                 vendor_c_id=500003,
                 inwarded_warehouse_c_id=700004,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -847,6 +877,7 @@ class TestQtyModelAndBuckets(FrappeTestCase):
                 grn_id=200031,
                 vendor_c_id=500003,
                 inwarded_warehouse_c_id=700004,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -880,6 +911,7 @@ class TestQtyModelAndBuckets(FrappeTestCase):
                 grn_id=141653,
                 vendor_c_id=500003,
                 inwarded_warehouse_c_id=700004,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -911,11 +943,11 @@ class TestQtyModelAndBuckets(FrappeTestCase):
 
     def test_rejected_without_default_warehouse_throws(self) -> None:
         """qc_fail>0 with default_rejected_warehouse unset → clear error."""
-        # Clear the setting.
-        acct = frappe.db.get_value("EasyEcom Account", {"enabled": 1}, "name")
+        # Clear the setting on the PER-TEST account by name (NOT by
+        # enabled-flag lookup; see Stage 3 isolation note).
         frappe.db.set_value(
             "EasyEcom Account",
-            acct,
+            "test-account",
             "default_rejected_warehouse",
             None,
             update_modified=False,
@@ -926,6 +958,7 @@ class TestQtyModelAndBuckets(FrappeTestCase):
                     grn_id=200032,
                     vendor_c_id=500003,
                     inwarded_warehouse_c_id=700004,
+                    po_ref_num=self.po.name,
                     items=[
                         {
                             "grn_detail_id": 1,
@@ -943,7 +976,7 @@ class TestQtyModelAndBuckets(FrappeTestCase):
         finally:
             frappe.db.set_value(
                 "EasyEcom Account",
-                acct,
+                "test-account",
                 "default_rejected_warehouse",
                 self.rejected_wh,
                 update_modified=False,
@@ -1032,9 +1065,19 @@ class TestPOResolution(FrappeTestCase):
         self.assertEqual(outcome.operation, "receipted")
         self.assertEqual(outcome.linked_po, po.name)
 
-    def test_both_refs_miss_pr_created_with_discrepancy(self) -> None:
-        """po_ref_num blank/junk + ee_po_id unmatched → PR created,
-        linked_po empty, Discrepancy raised (kind 'GRN for unknown PO')."""
+    def test_both_refs_miss_no_auto_pr_drift_discrepancy(self) -> None:
+        """Corrective commit 2026-05-29 (FIX 1): po_ref_num blank/junk +
+        ee_po_id unmatched → NO auto-PR. GRN Map status=Discrepancy
+        with linked_po_map=null, purchase_receipt=null, payload
+        preserved on ecs_grn_payload_json. Integration Discrepancy
+        kind='GRN for unknown PO' raised. Sync Record reflects drift.
+
+        Per packet step (5) + Open Decision #4 (both updated 2026-05-28):
+        the integration only PULLS in this direction — you cannot
+        retroactively create-and-push a PO after goods arrived.
+        Resolution is FDE-driven via the 'Create PR from this GRN' action.
+        This test SUPERSEDES the prior Stage-3 behaviour
+        (test_both_refs_miss_pr_created_with_discrepancy)."""
         outcome = process_one_grn(
             _grn_payload(
                 grn_id=200042,
@@ -1052,14 +1095,94 @@ class TestPOResolution(FrappeTestCase):
                 ],
             )
         )
-        self.assertEqual(outcome.operation, "receipted")
+        # New contract: drift, not receipted.
+        self.assertEqual(outcome.operation, "drift")
+        self.assertEqual(outcome.grn_map_status, "Discrepancy")
+        self.assertIsNone(outcome.purchase_receipt)
         self.assertIsNone(outcome.linked_po)
-        # Discrepancy raised.
+        # No auto-PR — assert ZERO Purchase Receipts exist for this GRN.
+        prs = frappe.db.get_all(
+            "Purchase Receipt",
+            filters={"ecs_easyecom_grn_id": "200042"},
+            pluck="name",
+        )
+        self.assertEqual(
+            prs, [],
+            f"FIX 1 contract violated: unknown-PO GRN created auto-PR(s) {prs}",
+        )
+        # Discrepancy raised on GRN Map (not PR).
         self.assertEqual(len(outcome.discrepancies), 1)
         disc = frappe.get_doc(
             "EasyEcom Integration Discrepancy", outcome.discrepancies[0]
         )
         self.assertEqual(disc.kind, "GRN for unknown PO")
+        self.assertEqual(disc.reference_doctype, "EasyEcom GRN Map")
+        self.assertEqual(disc.reference_name, "ECS-GRN-200042")
+        self.assertEqual(disc.status, "Open")
+        # GRN Map row created with payload preserved.
+        grn_map = frappe.get_doc("EasyEcom GRN Map", "ECS-GRN-200042")
+        self.assertEqual(grn_map.status, "Discrepancy")
+        self.assertFalse(grn_map.purchase_receipt)
+        self.assertFalse(grn_map.linked_po_map)
+        self.assertTrue(
+            grn_map.ecs_grn_payload_json,
+            "GRN payload must be preserved for FDE 'Create PR from this GRN'",
+        )
+        payload = frappe.parse_json(grn_map.ecs_grn_payload_json)
+        self.assertEqual(int(payload.get("grn_id") or 0), 200042)
+
+    def test_repulled_drift_grn_does_not_duplicate_discrepancy(self) -> None:
+        """Corrective commit 2026-05-29 (FIX 1) — re-pull idempotency.
+        Pulling the same unknown-PO GRN twice must NOT create a second
+        Discrepancy or a PR. Refresh last_observed_at; no-op."""
+        payload = _grn_payload(
+            grn_id=200043,
+            vendor_c_id=500004,
+            inwarded_warehouse_c_id=700005,
+            po_ref_num="alsojunk",
+            ee_po_id=999998,
+            items=[
+                {
+                    "grn_detail_id": 1,
+                    "sku": f"{_PREFIX}SKU-POR",
+                    "received_quantity": 5,
+                    "grn_detail_price": 50,
+                }
+            ],
+        )
+        # First pull — drift.
+        first = process_one_grn(payload)
+        self.assertEqual(first.operation, "drift")
+        first_disc_count = frappe.db.count(
+            "EasyEcom Integration Discrepancy",
+            filters={
+                "kind": "GRN for unknown PO",
+                "reference_name": "ECS-GRN-200043",
+            },
+        )
+        self.assertEqual(first_disc_count, 1)
+        # Second pull — noop_drift, no re-raise.
+        second = process_one_grn(payload)
+        self.assertEqual(second.operation, "noop_drift")
+        second_disc_count = frappe.db.count(
+            "EasyEcom Integration Discrepancy",
+            filters={
+                "kind": "GRN for unknown PO",
+                "reference_name": "ECS-GRN-200043",
+            },
+        )
+        self.assertEqual(
+            second_disc_count, 1,
+            "Re-pull of unknown-PO drift must NOT raise a duplicate "
+            "Discrepancy — guard refresh_observed_only is missing.",
+        )
+        # Still no PR.
+        prs = frappe.db.get_all(
+            "Purchase Receipt",
+            filters={"ecs_easyecom_grn_id": "200043"},
+            pluck="name",
+        )
+        self.assertEqual(prs, [])
 
 
 class TestSupplierAndItemMisses(FrappeTestCase):
@@ -1074,6 +1197,17 @@ class TestSupplierAndItemMisses(FrappeTestCase):
             location_key="700006",
             mapped_warehouse=cls.ee_wh,
             frappe_company=cls.company,
+        )
+        # FIX 1 (2026-05-29) — these tests verify supplier/item miss
+        # behaviour but the new contract makes drift fire FIRST when
+        # PO is unknown. Build a Submitted PO so the GRN payloads
+        # bypass drift and reach the supplier/item resolution path.
+        cls.po_supplier = _ensure_supplier(f"{_PREFIX}SUP-MISS-BASE")
+        cls.po_item = _ensure_item(f"{_PREFIX}ITEM-MISS-BASE")
+        cls.po = _make_po(
+            supplier=cls.po_supplier,
+            warehouse=cls.ee_wh,
+            items=[{"item_code": cls.po_item, "qty": 1, "rate": 1}],
         )
 
     @classmethod
@@ -1090,6 +1224,7 @@ class TestSupplierAndItemMisses(FrappeTestCase):
                 grn_id=200050,
                 vendor_c_id=8888888,  # no Supplier Map for this c_id
                 inwarded_warehouse_c_id=700006,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 1,
@@ -1116,6 +1251,7 @@ class TestSupplierAndItemMisses(FrappeTestCase):
                 grn_id=200051,
                 vendor_c_id=500005,
                 inwarded_warehouse_c_id=700006,
+                po_ref_num=self.po.name,
                 items=[
                     {
                         "grn_detail_id": 99,
@@ -1269,6 +1405,21 @@ class TestCompletionTrigger(FrappeTestCase):
     def tearDownClass(cls) -> None:
         super().tearDownClass()
         _wipe_test_state()
+
+    def setUp(self) -> None:
+        # FIX 2 (2026-05-29) — completion push now defers under pause.
+        # Ensure auto_push_pos_on_save=1 so the un-paused fire path
+        # (which these tests assert) is exercised. A sibling test
+        # module (test_pause_gate_status_pushes) leaves the toggle
+        # zeroed, so re-enable here.
+        if frappe.db.exists("EasyEcom Account", "test-account"):
+            frappe.db.set_value(
+                "EasyEcom Account",
+                "test-account",
+                {"enabled": 1, "auto_push_pos_on_save": 1},
+                update_modified=False,
+            )
+            frappe.db.commit()
 
     def tearDown(self) -> None:
         _wipe_ephemeral_state()
@@ -1493,14 +1644,12 @@ class TestSyncRecordLineDiscrepancyLink(FrappeTestCase):
     def tearDown(self) -> None:
         _wipe_ephemeral_state()
 
-    def test_pr_for_unknown_po_links_discrepancy_in_sync_record(self) -> None:
-        """An unknown-PO Discrepancy is raised; the per-line outcome on
-        the Sync Record points to a Discrepancy via the §23 stub link
-        field. (Sync Record line_status doesn't include the
-        unknown-PO discrepancy explicitly — that's PR-level — but the
-        Stage 3 flow tags at least one disc-line on any discrepancy
-        case via tax_disc surfacing. This test validates Sync Record
-        was written + Line child populated.)"""
+    def test_unknown_po_drift_writes_sync_record_keyed_on_grn_map(self) -> None:
+        """Corrective commit 2026-05-29 (FIX 1): unknown-PO drift writes
+        a Sync Record keyed on the GRN Map row (not a PR — no PR
+        exists). Status = Discrepancy. SUPERSEDES the prior assertion
+        (test_pr_for_unknown_po_links_discrepancy_in_sync_record) that
+        a PR existed for the unknown-PO Sync Record."""
         outcome = process_one_grn(
             _grn_payload(
                 grn_id=200100,
@@ -1518,8 +1667,13 @@ class TestSyncRecordLineDiscrepancyLink(FrappeTestCase):
                 ],
             )
         )
-        self.assertEqual(outcome.operation, "receipted")
+        self.assertEqual(outcome.operation, "drift")
+        self.assertIsNone(outcome.purchase_receipt)
         self.assertIsNotNone(outcome.sync_record_name)
         sr = frappe.get_doc("EasyEcom Sync Record", outcome.sync_record_name)
-        # At least one line populated.
-        self.assertGreaterEqual(len(sr.lines), 1)
+        # Keyed on the GRN Map row, not a PR.
+        self.assertEqual(sr.entity_doctype, "EasyEcom GRN Map")
+        self.assertEqual(sr.entity_name, "ECS-GRN-200100")
+        self.assertEqual(sr.entity_type, "GRN")
+        self.assertEqual(sr.direction, "Pull")
+        self.assertEqual(sr.status, "Discrepancy")

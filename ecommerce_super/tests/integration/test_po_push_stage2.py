@@ -58,24 +58,70 @@ def _company() -> str:
 def _ensure_warehouse(name: str, *, company: str) -> str:
     """Returns the *resolved* docname. ERPNext autonames Warehouse as
     `{warehouse_name} - {company.abbr}` so the raw name is NOT the
-    docname. Look up by warehouse_name + company; insert if missing."""
+    docname. Look up by warehouse_name + company; insert if missing.
+
+    Also ensures an Address with address_line1 is linked to the
+    Warehouse — Stage 4's _run_preconditions warehouse-address check
+    refuses to push a PO whose warehouse has no resolvable address.
+    Test fixtures need a non-empty address attached or every push
+    test hits the precondition gate."""
     existing = frappe.db.get_value(
         "Warehouse",
         {"warehouse_name": name, "company": company},
         "name",
     )
-    if existing:
-        return existing
-    w = frappe.new_doc("Warehouse")
-    w.update(
+    if not existing:
+        w = frappe.new_doc("Warehouse")
+        w.update(
+            {
+                "warehouse_name": name,
+                "company": company,
+                "is_group": 0,
+            }
+        )
+        w.insert(ignore_permissions=True)
+        existing = w.name
+    _ensure_warehouse_address(existing)
+    return existing
+
+
+def _ensure_warehouse_address(warehouse: str) -> None:
+    """Attach a non-empty Address to a Warehouse if it doesn't already
+    have one. Idempotent."""
+    has_addr = frappe.db.sql(
+        """
+        SELECT 1 FROM `tabDynamic Link` dl
+        JOIN `tabAddress` a ON a.name = dl.parent
+        WHERE dl.parenttype = 'Address'
+          AND dl.link_doctype = 'Warehouse'
+          AND dl.link_name = %s
+          AND (COALESCE(a.address_line1, '') != ''
+               OR COALESCE(a.city, '') != '')
+        LIMIT 1
+        """,
+        (warehouse,),
+    )
+    if has_addr:
+        return
+    addr = frappe.get_doc(
         {
-            "warehouse_name": name,
-            "company": company,
-            "is_group": 0,
+            "doctype": "Address",
+            "address_title": f"Addr-{warehouse}",
+            "address_type": "Shipping",
+            "address_line1": "Test Industrial Estate",
+            "city": "Bengaluru",
+            "state": "Karnataka",
+            "pincode": "560001",
+            "country": "India",
+            "links": [
+                {
+                    "link_doctype": "Warehouse",
+                    "link_name": warehouse,
+                }
+            ],
         }
     )
-    w.insert(ignore_permissions=True)
-    return w.name
+    addr.insert(ignore_permissions=True)
 
 
 def _ensure_supplier_group() -> str:
@@ -1091,11 +1137,12 @@ class TestTriggersAndSweep(FrappeTestCase):
     def test_hook_skips_when_auto_push_off(self) -> None:
         """on_submit hook with auto_push_pos_on_save=0 must NOT enqueue."""
         # Ensure off.
-        account_name = frappe.db.get_value(
-            "EasyEcom Account", filters={"enabled": 1}, fieldname="name"
-        )
+        # Per-test account by name — NEVER {"enabled": 1} as filter
+        # (test-isolation: cross-test multi-enabled state would write
+        # to the wrong account, potentially clobbering production
+        # Harmony config on a dev site).
         frappe.db.set_value(
-            "EasyEcom Account", account_name, "auto_push_pos_on_save", 0,
+            "EasyEcom Account", "test-account", "auto_push_pos_on_save", 0,
             update_modified=False,
         )
         po = _make_po(
@@ -1114,15 +1161,19 @@ class TestTriggersAndSweep(FrappeTestCase):
             enqueue_on_po_submit(po)
         self.assertEqual(called, [], "auto-push OFF must skip enqueue")
 
-    def test_cancel_hook_propagates_even_when_auto_push_off(self) -> None:
-        """Cancellation must propagate independent of auto_push_pos_on_save
-        — the EE-side PO exists from earlier and must be cancelled."""
-        # Ensure off.
-        account_name = frappe.db.get_value(
-            "EasyEcom Account", filters={"enabled": 1}, fieldname="name"
-        )
+    def test_cancel_hook_defers_under_pause_records_pending_7(self) -> None:
+        """Corrective commit 2026-05-29 (FIX 2 Option A): cancellation
+        DEFERS under pause. Consistent semantics with submit (3) and
+        completion (5) — pause means 'no EE writes'. The would-be
+        cancel push records ecs_pending_po_status_push=7 on the PO
+        Map; fire_pending_po_status_pushes() fires it on un-pause.
+
+        SUPERSEDES the prior Stage-2 contract
+        (test_cancel_hook_propagates_even_when_auto_push_off) which
+        asserted cancel always fires regardless of the toggle."""
+        # Ensure paused.
         frappe.db.set_value(
-            "EasyEcom Account", account_name, "auto_push_pos_on_save", 0,
+            "EasyEcom Account", "test-account", "auto_push_pos_on_save", 0,
             update_modified=False,
         )
         po = _make_po(
@@ -1148,8 +1199,58 @@ class TestTriggersAndSweep(FrappeTestCase):
             called.append(kw)
         with patch.object(mod, "_enqueue_status_push", _spy):
             enqueue_on_po_cancel(po)
+        # FIX 2 contract: under pause, NO immediate enqueue.
+        self.assertEqual(
+            len(called), 0,
+            "Cancel under pause must NOT enqueue an EE write — it must "
+            "defer via the pending field.",
+        )
+        # Pending field set to 7 on the PO Map.
+        pending = frappe.db.get_value(
+            "EasyEcom PO Map",
+            {"purchase_order": po.name},
+            "ecs_pending_po_status_push",
+        )
+        self.assertEqual(int(pending or 0), PO_STATUS_CANCELLED)
+
+    def test_cancel_hook_fires_when_not_paused(self) -> None:
+        """Sanity check — when NOT paused, cancel goes straight to the
+        queue (no pending recorded). Complement of the deferred-under-
+        pause test."""
+        frappe.db.set_value(
+            "EasyEcom Account", "test-account", "auto_push_pos_on_save", 1,
+            update_modified=False,
+        )
+        po = _make_po(
+            self.supplier, warehouse=self.ee_wh,
+            items=[{"item_code": self.item}],
+        )
+        m = frappe.new_doc("EasyEcom PO Map")
+        m.update(
+            {
+                "reference_code": po.name,
+                "purchase_order": po.name,
+                "status": "Mapped",
+                "ee_po_id": 5051,
+            }
+        )
+        m.insert(ignore_permissions=True)
+
+        import ecommerce_super.easyecom.flows.po_push as mod
+
+        called = []
+        def _spy(**kw):
+            called.append(kw)
+        with patch.object(mod, "_enqueue_status_push", _spy):
+            enqueue_on_po_cancel(po)
         self.assertEqual(len(called), 1)
         self.assertEqual(called[0]["target_status"], PO_STATUS_CANCELLED)
+        pending = frappe.db.get_value(
+            "EasyEcom PO Map",
+            {"purchase_order": po.name},
+            "ecs_pending_po_status_push",
+        )
+        self.assertEqual(int(pending or 0), 0)
 
 
 # ============================================================

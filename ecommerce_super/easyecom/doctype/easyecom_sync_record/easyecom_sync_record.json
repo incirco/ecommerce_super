@@ -37,7 +37,8 @@
   "ecs_replay_plan",
   "ecs_replay_strategy",
   "lines_section",
-  "lines"
+  "lines",
+  "ecs_lines_summary"
  ],
  "fields": [
   {
@@ -245,6 +246,15 @@
    "fieldtype": "Table",
    "label": "Lines",
    "options": "EasyEcom Sync Record Line"
+  },
+  {
+   "fieldname": "ecs_lines_summary",
+   "fieldtype": "Data",
+   "label": "Lines Summary",
+   "read_only": 1,
+   "hidden": 1,
+   "in_list_view": 0,
+   "description": "Auto-derived line outcome breakdown (e.g. '8/10 OK · 2 Discrepancy'). Recomputed on every save from the `lines` child. Surfaces in the Sync Record list view via a chip formatter; hidden on the form (lines are visible in the Lines child table directly)."
   }
  ],
  "index_web_pages_for_search": 0,

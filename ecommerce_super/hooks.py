@@ -128,6 +128,17 @@ fixtures = [
                 "Open Sync Records (Failed)",
                 "API Calls (last hour)",
                 "Queue Job Depth",
+                # §8f — Supplier Map worklist cards.
+                "Suppliers in Drift",
+                "Suppliers Created-Flagged",
+                "Suppliers Flagged-Not-Created",
+                # §9 Stage 4 — Buying worklist cards.
+                "POs Flagged-Not-Created",
+                "POs in Drift",
+                "GRNs Failed",
+                "GRNs Discrepancy",
+                "GRNs Held-Pre-QC",
+                "GRNs STN-Routed (pending §10 pickup)",
             ]],
         ],
     },
@@ -375,6 +386,21 @@ scheduler_events = {
         "0 */1 * * *": [
             "ecommerce_super.easyecom.queue.workers.reclaim_orphaned_jobs",
         ],
+        # §9 Stage 4 — GRN-pull delta cron is INTENTIONALLY NOT YET
+        # WIRED. The packet (line 94) authorises a 30-min cron, but
+        # auto-firing scheduled_grn_pull on an existing Account is
+        # unsafe by default: NULL grn_pull_high_watermark falls back
+        # to EE's 7-day backstop, so the first cron tick on Harmony
+        # would create PRs for already-manually-receipted historical
+        # GRNs. Pull is not gated on auto_push_pos_on_save (push
+        # flag, doesn't apply to pull), and scheduled_grn_pull
+        # currently doesn't gate on sync_enabled_grn either. Wiring
+        # is held until the cold-start safety gates land in the §9
+        # closeout (separate packet) — gate on sync_enabled_grn,
+        # refuse on NULL watermark, and require an explicit FDE
+        # kickoff action that primes the watermark. The handler
+        # `scheduled_grn_pull` ships and is manually invokable per
+        # the test suite; only the cron auto-fire is deferred.
     },
 }
 

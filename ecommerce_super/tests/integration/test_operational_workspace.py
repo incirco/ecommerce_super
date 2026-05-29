@@ -70,6 +70,27 @@ EXPECTED_SIDEBAR_FDE_WORKLIST_LABELS = {
     "Items - Flagged-Not-Created",
 }
 
+# §9 Stage 4 — Buying worklist labels (sidebar) + their card-name
+# counterparts (workspace number_cards). The lockstep guard below
+# asserts both surfaces stay in sync.
+EXPECTED_BUYING_SIDEBAR_LABELS = {
+    "POs - Flagged-Not-Created",
+    "POs - Drift",
+    "GRNs - Failed",
+    "GRNs - Discrepancy",
+    "GRNs - Held-Pre-QC",
+    "GRNs - STN-Routed (pending)",
+}
+
+EXPECTED_BUYING_NUMBER_CARDS = {
+    "POs Flagged-Not-Created",
+    "POs in Drift",
+    "GRNs Failed",
+    "GRNs Discrepancy",
+    "GRNs Held-Pre-QC",
+    "GRNs STN-Routed (pending §10 pickup)",
+}
+
 
 def _workspace() -> "frappe.model.document.Document":
     return frappe.get_doc("Workspace", WORKSPACE)
@@ -375,3 +396,92 @@ class TestUnifiedWorklistRow(FrappeTestCase):
         ]
         dups = [n for n in nc_refs if nc_refs.count(n) > 1]
         self.assertFalse(set(dups), f"Number Cards referenced twice: {set(dups)}")
+
+
+# ============================================================
+# 5. §9 Stage 4 — Buying worklist lockstep
+# ============================================================
+
+
+class TestBuyingWorklistRow(FrappeTestCase):
+    """§9 Stage 4 adds a Buying sub-row to the FDE Worklist (under the
+    existing FDE Worklists Card Break — no new section). Pin both
+    surfaces in lockstep: sidebar entries ↔ workspace number cards.
+    Adding/removing/renaming on one side without the matching change
+    on the other is a config drift the FDE sees, and surfaces here."""
+
+    SIDEBAR_NAME = "EasyEcom"
+
+    def test_buying_number_cards_exist_as_documents(self) -> None:
+        for card_name in EXPECTED_BUYING_NUMBER_CARDS:
+            self.assertTrue(
+                frappe.db.exists("Number Card", card_name),
+                f"§9 Stage 4 Number Card {card_name!r} missing — "
+                "patch refresh_easyecom_workspace_s9_buying should "
+                "have ensured it via the fixtures pipeline.",
+            )
+
+    def test_buying_cards_referenced_by_workspace(self) -> None:
+        ws = _workspace()
+        nc_names = {nc.number_card_name for nc in (ws.number_cards or [])}
+        missing = EXPECTED_BUYING_NUMBER_CARDS - nc_names
+        self.assertFalse(
+            missing,
+            f"Buying Number Cards not in workspace number_cards array: {missing}",
+        )
+
+    def test_buying_cards_appear_in_content_layout(self) -> None:
+        blocks = _content_blocks()
+        nc_blocks = {
+            b["data"]["number_card_name"]
+            for b in blocks if b["type"] == "number_card"
+        }
+        missing = EXPECTED_BUYING_NUMBER_CARDS - nc_blocks
+        self.assertFalse(
+            missing,
+            f"Buying cards not in workspace content blocks: {missing}",
+        )
+
+    def test_sidebar_has_buying_worklist_links(self) -> None:
+        items = frappe.db.get_all(
+            "Workspace Sidebar Item",
+            filters={"parent": self.SIDEBAR_NAME, "type": "Link"},
+            fields=["label", "link_type", "link_to", "route_options"],
+        )
+        labels = {i.label for i in items if i.label in EXPECTED_BUYING_SIDEBAR_LABELS}
+        missing = EXPECTED_BUYING_SIDEBAR_LABELS - labels
+        self.assertFalse(
+            missing,
+            f"Buying sidebar worklist labels missing: {missing}",
+        )
+
+    def test_sidebar_has_po_map_and_grn_map_under_masters(self) -> None:
+        items = frappe.db.get_all(
+            "Workspace Sidebar Item",
+            filters={"parent": self.SIDEBAR_NAME, "type": "Link"},
+            fields=["label", "link_to"],
+        )
+        labels_to_targets = {i.label: i.link_to for i in items}
+        self.assertEqual(
+            labels_to_targets.get("PO Map"),
+            "EasyEcom PO Map",
+            "Sidebar 'PO Map' link missing or wrong link_to.",
+        )
+        self.assertEqual(
+            labels_to_targets.get("GRN Map"),
+            "EasyEcom GRN Map",
+            "Sidebar 'GRN Map' link missing or wrong link_to.",
+        )
+
+    def test_buying_sidebar_count_matches_workspace_count(self) -> None:
+        """The lockstep guard — count of Buying sidebar worklist links
+        must equal count of Buying number cards. Drift on either side
+        fails this assertion."""
+        self.assertEqual(
+            len(EXPECTED_BUYING_SIDEBAR_LABELS),
+            len(EXPECTED_BUYING_NUMBER_CARDS),
+            "Lockstep violated: Buying sidebar label count != number "
+            "card count. When a card is added/removed, BOTH the "
+            "sidebar JSON and the number_card / workspace JSON must "
+            "be updated in the same change.",
+        )

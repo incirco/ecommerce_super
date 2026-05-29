@@ -151,6 +151,28 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "PO Map",
+   "link_to": "EasyEcom PO Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "GRN Map",
+   "link_to": "EasyEcom GRN Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
    "icon": "filter",
@@ -277,6 +299,84 @@
    "type": "Link",
    "url": null,
    "route_options": "{\"status\": \"Flagged-Not-Created\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "POs - Flagged-Not-Created",
+   "link_to": "EasyEcom PO Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Flagged-Not-Created\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "POs - Drift",
+   "link_to": "EasyEcom PO Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Drift\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "GRNs - Failed",
+   "link_to": "EasyEcom GRN Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Failed\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "GRNs - Discrepancy",
+   "link_to": "EasyEcom GRN Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Discrepancy\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "GRNs - Held-Pre-QC",
+   "link_to": "EasyEcom GRN Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"Held-Pre-QC\"}"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "GRNs - STN-Routed (pending)",
+   "link_to": "EasyEcom GRN Map",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link",
+   "url": null,
+   "route_options": "{\"status\": \"STN-Routed\"}"
   },
   {
    "child": 1,

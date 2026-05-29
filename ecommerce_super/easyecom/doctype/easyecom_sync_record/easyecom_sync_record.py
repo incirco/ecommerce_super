@@ -46,6 +46,33 @@ class EasyEcomSyncRecord(Document):
         self._validate_entity_doctype_exists()
         self._validate_status_transition()
         self._validate_company_not_changed()
+        self._recompute_lines_summary()
+
+    def _recompute_lines_summary(self) -> None:
+        """§9 Stage 4 — line-child outcome chip for the list view.
+
+        The Sync Record's `lines` child carries per-line outcomes for
+        nested-document flows (GRN line × N). The list view needs a
+        compact, sortable indicator like '8/10 OK · 2 Discrepancy'
+        without loading the child table for every row. We derive it
+        on save and store on the parent.
+        """
+        lines = self.get("lines") or []
+        total = len(lines)
+        if total == 0:
+            self.ecs_lines_summary = ""
+            return
+        counts = {"OK": 0, "Failed": 0, "Discrepancy": 0}
+        for ln in lines:
+            st = (ln.line_status or "").strip()
+            if st in counts:
+                counts[st] += 1
+        parts = [f"{counts['OK']}/{total} OK"]
+        if counts["Failed"]:
+            parts.append(f"{counts['Failed']} Failed")
+        if counts["Discrepancy"]:
+            parts.append(f"{counts['Discrepancy']} Discrepancy")
+        self.ecs_lines_summary = " · ".join(parts)
 
     def _validate_entity_doctype_exists(self) -> None:
         if self.entity_doctype and not frappe.db.exists("DocType", self.entity_doctype):

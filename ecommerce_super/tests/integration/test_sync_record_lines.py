@@ -138,6 +138,59 @@ class TestSyncRecordLineSchema(FrappeTestCase):
         parent_name = self._make_parent("empty")
         reloaded = frappe.get_doc("EasyEcom Sync Record", parent_name)
         self.assertEqual(len(reloaded.lines), 0)
+        # §9 Stage 4 — empty lines → empty summary (no "0/0 OK" noise).
+        self.assertEqual(reloaded.ecs_lines_summary or "", "")
+
+    def test_lines_summary_derived_on_save(self) -> None:
+        """§9 Stage 4 line-child outcome chip — the Sync Record list
+        renders `ecs_lines_summary` as a coloured pill. The field is
+        recomputed in validate() from the lines child, so FDEs see
+        the rollout immediately after the flow handler writes the
+        lines."""
+        parent_name = self._make_parent("summary-1")
+        parent = frappe.get_doc("EasyEcom Sync Record", parent_name)
+        for ln in (
+            ("SKU-A", "OK"),
+            ("SKU-B", "OK"),
+            ("SKU-C", "OK"),
+            ("SKU-D", "Discrepancy"),
+            ("SKU-E", "Failed"),
+        ):
+            parent.append(
+                "lines",
+                {
+                    "source_line_ref": ln[0],
+                    "target_field": "item_code",
+                    "line_status": ln[1],
+                },
+            )
+        parent.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        reloaded = frappe.get_doc("EasyEcom Sync Record", parent_name)
+        self.assertEqual(
+            reloaded.ecs_lines_summary,
+            "3/5 OK · 1 Failed · 1 Discrepancy",
+        )
+
+    def test_lines_summary_all_ok_omits_failed_and_discrepancy(self) -> None:
+        """When every line is OK, the chip shows only the OK count —
+        no '0 Failed · 0 Discrepancy' clutter."""
+        parent_name = self._make_parent("summary-ok")
+        parent = frappe.get_doc("EasyEcom Sync Record", parent_name)
+        for i in range(4):
+            parent.append(
+                "lines",
+                {
+                    "source_line_ref": f"SKU-OK-{i}",
+                    "target_field": "item_code",
+                    "line_status": "OK",
+                },
+            )
+        parent.save(ignore_permissions=True)
+        frappe.db.commit()
+        reloaded = frappe.get_doc("EasyEcom Sync Record", parent_name)
+        self.assertEqual(reloaded.ecs_lines_summary, "4/4 OK")
 
 
 class TestSyncRecordStatusIsBinary(FrappeTestCase):
