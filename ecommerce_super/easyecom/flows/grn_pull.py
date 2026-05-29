@@ -340,6 +340,29 @@ def process_one_grn(
             grn_row=grn_row,
             inwarded_wh_c_id=inwarded_wh_c_id,
         )
+        # §10 Stage 3: EE-originated standalone IPR. The self-GRN is
+        # an EE-internal inward with no ERPNext-side originating DN/
+        # Transfer Map. Hand off to §10 for a Draft IPR + Discrepancy
+        # (FDE picks Internal Supplier and submits manually). Same
+        # hands-off principle as §9's drift Create-PR-from-GRN.
+        # If §10 can't process (e.g. flag config missing), this
+        # gracefully degrades to the existing STN-Routed Map state.
+        try:
+            from ecommerce_super.easyecom.flows.transfer_inbound import (
+                handle_ee_originated_grn,
+            )
+
+            handle_ee_originated_grn(
+                grn_row=grn_row,
+                ee_grn_id=ee_grn_id,
+                inwarded_wh_c_id=inwarded_wh_c_id,
+                vendor_c_id=vendor_c_id,
+            )
+        except Exception as exc:
+            frappe.log_error(
+                title=f"§10 EE-originated handler failed for GRN {ee_grn_id}",
+                message=f"{type(exc).__name__}: {exc}",
+            )
         return GRNOutcome(
             ee_grn_id=ee_grn_id,
             operation="stn_routed",
@@ -506,6 +529,38 @@ def process_one_grn(
         location_row=location_row,
         company=company,
     )
+
+    # §10 Stage 3 routing handoff (2026-05-30). The GRN's po_ref_num
+    # field carries EE's `referenceCode` — §9 sets this to the ERPNext
+    # PO name, §10 Stage 2 sets it to the Delivery Note name (per the
+    # §10.G grounded payload). If po_ref_num matches a DN with a
+    # §10 Transfer Map, this GRN is a §10 inbound event — hand off to
+    # transfer_inbound. §9's normal/drift logic skips entirely.
+    # Checked BEFORE the unknown-PO drift branch because §10 DNs
+    # never have a matching ERPNext Purchase Order (the resolution
+    # would set po_unknown_reason and incorrectly route to §9's drift
+    # path).
+    po_ref_num = (grn_row.get("po_ref_num") or "").strip()
+    if po_ref_num:
+        transfer_map_name = frappe.db.get_value(
+            "EasyEcom Transfer Map",
+            {"delivery_note": po_ref_num},
+            "name",
+        )
+        if transfer_map_name:
+            from ecommerce_super.easyecom.flows.transfer_inbound import (
+                process_inbound_grn,
+            )
+
+            return process_inbound_grn(
+                grn_row=grn_row,
+                ee_grn_id=ee_grn_id,
+                inwarded_wh_c_id=inwarded_wh_c_id,
+                vendor_c_id=vendor_c_id,
+                location_row=location_row,
+                company=company,
+                transfer_map_name=transfer_map_name,
+            )
 
     # Corrective commit 2026-05-29 (FIX 1): unknown-PO GRN is DRIFT —
     # no auto-PR. Per packet step (5) + Open Decision #4 (both updated

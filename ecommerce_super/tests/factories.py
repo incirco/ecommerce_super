@@ -139,6 +139,15 @@ def make_location(
     return doc.name
 
 
+def cleanup_internal_pair_fabric() -> None:
+    """Public-facing wipe for §10 Internal pair fabric — exposed so
+    individual test classes' tearDownClass can call it without doing
+    the full cleanup_easyecom_state (which also drops EE Locations /
+    Accounts the test class may want to keep across its own tests)."""
+    _cleanup_internal_pair_fabric()
+    frappe.db.commit()
+
+
 def cleanup_easyecom_state() -> None:
     """Tear-down helper - deletes ONLY test-pattern rows.
 
@@ -251,4 +260,92 @@ def cleanup_easyecom_state() -> None:
         except Exception:
             pass
 
+    # 6. §10 Stage 3 isolation hardening (2026-05-30) — §10's
+    # ensure_internal_party_pairs creates ERPNext Customer/Supplier rows
+    # named `INTL-CUST-for-{tgt}` / `INTL-SUPP-from-{src}` plus their
+    # EasyEcom Customer Map / Supplier Map back-refs. Prior cleanups
+    # missed these; cross-test pollution from a sibling §10 test would
+    # leave Internal pair rows with wrong companies-child entries,
+    # breaking unrelated tests' Internal Customer lookups by §10's
+    # cross-Company query path. Scoped to the convention's name
+    # prefixes — never touches user-created Customer/Supplier rows.
+    _cleanup_internal_pair_fabric()
+
     frappe.db.commit()
+
+
+def _cleanup_internal_pair_fabric() -> None:
+    """Wipe §10 Internal Customer / Internal Supplier + their Maps
+    scoped by the auto-creation naming convention. Idempotent."""
+    # EasyEcom Customer Map rows linked to Internal Customers — wipe
+    # FIRST so the Customer rows can be deleted afterwards.
+    for n in frappe.db.sql(
+        """
+        SELECT cm.name
+        FROM `tabEasyEcom Customer Map` cm
+        JOIN `tabCustomer` c ON c.name = cm.erpnext_name
+        WHERE c.customer_name LIKE 'INTL-CUST-%%'
+          AND cm.erpnext_doctype = 'Customer'
+        """,
+        as_dict=True,
+    ):
+        try:
+            frappe.delete_doc(
+                "EasyEcom Customer Map",
+                n["name"],
+                force=True,
+                ignore_permissions=True,
+            )
+        except Exception:
+            pass
+
+    # EasyEcom Supplier Map rows linked to Internal Suppliers.
+    for n in frappe.db.sql(
+        """
+        SELECT sm.name
+        FROM `tabEasyEcom Supplier Map` sm
+        JOIN `tabSupplier` s ON s.name = sm.erpnext_name
+        WHERE s.supplier_name LIKE 'INTL-SUPP-%%'
+          AND sm.erpnext_doctype = 'Supplier'
+        """,
+        as_dict=True,
+    ):
+        try:
+            frappe.delete_doc(
+                "EasyEcom Supplier Map",
+                n["name"],
+                force=True,
+                ignore_permissions=True,
+            )
+        except Exception:
+            pass
+
+    # Internal Customer rows themselves. Frappe refuses delete if the
+    # row has linked submitted transactions — accept the leak in that
+    # case (tests shouldn't leave submitted SI/DN on Internal Customers
+    # in the first place; if they do, the next layer of cleanup needs
+    # to wipe those upstream).
+    for n in frappe.db.get_all(
+        "Customer",
+        filters={"customer_name": ("like", "INTL-CUST-%")},
+        pluck="name",
+    ):
+        try:
+            frappe.delete_doc(
+                "Customer", n, force=True, ignore_permissions=True
+            )
+        except Exception:
+            pass
+
+    # Internal Supplier rows.
+    for n in frappe.db.get_all(
+        "Supplier",
+        filters={"supplier_name": ("like", "INTL-SUPP-%")},
+        pluck="name",
+    ):
+        try:
+            frappe.delete_doc(
+                "Supplier", n, force=True, ignore_permissions=True
+            )
+        except Exception:
+            pass

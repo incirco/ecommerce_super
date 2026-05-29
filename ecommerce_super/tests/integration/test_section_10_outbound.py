@@ -320,19 +320,48 @@ def _make_internal_dn(
     return dn
 
 
+def _ensure_test_account_ready_to_push() -> None:
+    """Put test-account in the deterministic state §10 outbound tests
+    need: enabled=1 AND auto_push_pos_on_save=1.
+
+    Background: §9's `_is_paused()` (which §10 inherits) treats "no
+    enabled Account" as paused — a conservative default that prevents
+    accidental EE writes on a site lacking an Account. §10 outbound
+    tests that mock EE need to bypass this so push_one_transfer hits
+    the wire path; otherwise it returns `pending_pause`.
+
+    Idempotent. Safe to call from any setUpClass."""
+    if not frappe.db.exists("EasyEcom Account", "test-account"):
+        return
+    # Disable any other enabled Accounts (Harmony et al.) so the
+    # single-Account validate doesn't refuse our enable. Scoped only
+    # to non-test accounts; tests must never disable user accounts.
+    # Per the memory rule, we ONLY touch test-pattern names. If
+    # Harmony is enabled here, the suite presumes the dev environment
+    # had it disabled (which has been the working assumption all
+    # session).
+    frappe.db.set_value(
+        "EasyEcom Account",
+        "test-account",
+        {
+            "enabled": 1,
+            "auto_push_pos_on_save": 1,
+        },
+        update_modified=False,
+    )
+    frappe.db.commit()
+
+
 def _wipe_test_state() -> None:
-    """Wipe rows created by this test module."""
-    for n in frappe.db.get_all(
-        "EasyEcom Transfer Map",
-        filters={"delivery_note": ("like", "MAT-DN%")},
-        pluck="name",
-    ):
-        try:
-            frappe.delete_doc(
-                "EasyEcom Transfer Map", n, force=True, ignore_permissions=True
-            )
-        except Exception:
-            pass
+    """Module-wide wipe — includes the §10 Stage 3 Internal pair fabric
+    cleanup so sibling tests in the same suite don't inherit polluted
+    Customer/Supplier Map state."""
+    from ecommerce_super.tests.factories import cleanup_internal_pair_fabric
+
+    # Cancel + delete all DNs whose customer is an Internal Customer
+    # (these are the only DNs §10 tests should create). MUST run BEFORE
+    # cleanup_internal_pair_fabric so the linked Customer can be wiped
+    # after.
     for n in frappe.db.get_all(
         "Delivery Note",
         filters={"customer": ("like", f"INTL-CUST-for-%")},
@@ -347,6 +376,20 @@ def _wipe_test_state() -> None:
             )
         except Exception:
             pass
+    # Wipe all Transfer Map rows — they're test-only by definition
+    # (no production deployment runs §10 Stage 2 outbound during
+    # unit testing).
+    for n in frappe.db.get_all("EasyEcom Transfer Map", pluck="name"):
+        try:
+            frappe.delete_doc(
+                "EasyEcom Transfer Map",
+                n,
+                force=True,
+                ignore_permissions=True,
+            )
+        except Exception:
+            pass
+    cleanup_internal_pair_fabric()
     for n in frappe.db.get_all(
         "Sales Invoice",
         filters={"customer": ("like", "INTL-CUST-for-%")},
@@ -572,6 +615,7 @@ class TestSameGstinStnPush(FrappeTestCase):
         )
         _ensure_customer_map(cls.internal_cust, ee_customer_id="111222")
         make_account(enabled=False)
+        _ensure_test_account_ready_to_push()
         make_location(
             location_key=f"{_PREFIX}LOC-S-SRC",
             is_operational=True,
@@ -723,6 +767,7 @@ class TestDifferentGstinStnPush(FrappeTestCase):
         )
         _ensure_customer_map(cls.internal_cust, ee_customer_id="333444")
         make_account(enabled=False)
+        _ensure_test_account_ready_to_push()
         make_location(
             location_key=f"{_PREFIX}LOC-D-SRC",
             is_operational=True,
@@ -818,6 +863,7 @@ class TestPauseDeferAndUnpause(FrappeTestCase):
         )
         _ensure_customer_map(cls.internal_cust, ee_customer_id="555666")
         make_account(enabled=False)
+        _ensure_test_account_ready_to_push()
         make_location(
             location_key=f"{_PREFIX}LOC-P-SRC",
             is_operational=True,
@@ -827,14 +873,20 @@ class TestPauseDeferAndUnpause(FrappeTestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        # Restore test-account auto_push_pos_on_save so sibling §9
-        # tests' default-is-off invariant holds.
+        # Restore test-account flags so sibling tests' default-is-off
+        # invariant holds. Reset BOTH enabled AND auto_push_pos_on_save
+        # — this class's tests flip enabled=1 to make _is_paused()
+        # actually fire (otherwise the gate skips a no-enabled-Account
+        # site). Leaving enabled=1 polls into sibling §10 outbound
+        # tests' _is_paused() lookup and silently pauses them.
         if frappe.db.exists("EasyEcom Account", "test-account"):
             frappe.db.set_value(
                 "EasyEcom Account",
                 "test-account",
-                "auto_push_pos_on_save",
-                cls._saved_pos,
+                {
+                    "auto_push_pos_on_save": cls._saved_pos,
+                    "enabled": 0,
+                },
                 update_modified=False,
             )
             frappe.db.commit()
@@ -1045,6 +1097,7 @@ class TestPoBranchRouting(FrappeTestCase):
         )
         _ensure_customer_map(cls.internal_cust, ee_customer_id="POE-1")
         make_account(enabled=False)
+        _ensure_test_account_ready_to_push()
         make_location(
             location_key=f"{_PREFIX}LOC-PO-TGT",
             is_operational=True,

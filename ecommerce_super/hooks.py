@@ -327,6 +327,19 @@ doc_events: dict[str, dict[str, str]] = {
         "on_cancel": "ecommerce_super.easyecom.flows.transfer_push.block_dn_cancel",
         "on_update_after_submit": "ecommerce_super.easyecom.flows.transfer_push.block_dn_amend_after_submit",
     },
+    # §10 Stage 3 — Sales Invoice on_submit: auto-retry §10 drafted
+    # IPRs whose source-side SI just crystallised. No-op for non-§10
+    # SIs (the ecs_section10_transfer_map back-ref empty check guards).
+    "Sales Invoice": {
+        "on_submit": "ecommerce_super.easyecom.flows.transfer_inbound.on_sales_invoice_submit",
+    },
+    # §10 Stage 3 — Purchase Invoice on_submit: when a draft Debit Note
+    # becomes Submitted, transition Transfer Map to DN-Submitted-Locked
+    # so subsequent GRNs hit the §7 late-GRN block. No-op for non-return
+    # PIs.
+    "Purchase Invoice": {
+        "on_submit": "ecommerce_super.easyecom.flows.transfer_inbound.on_purchase_invoice_submit",
+    },
 }
 
 

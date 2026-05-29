@@ -22,6 +22,7 @@
   "routing_section",
   "purchase_receipt",
   "linked_po_map",
+  "linked_transfer_map",
   "routed_to_stn",
   "last_observed_at",
   "ecs_grn_payload_json"
@@ -131,6 +132,14 @@
    "label": "Linked PO Map",
    "options": "EasyEcom PO Map",
    "description": "The PO Map row this GRN's PO resolves to. NULL when the PO is EE-born and the §9 push hasn't created an ERPNext PO yet (out-of-order case — §9 Stage 3 raises a Discrepancy and the FDE links). NULL also when STN-Routed (no PO concept)."
+  },
+  {
+   "fieldname": "linked_transfer_map",
+   "fieldtype": "Link",
+   "label": "Linked Transfer Map (§10)",
+   "options": "EasyEcom Transfer Map",
+   "read_only": 1,
+   "description": "§10 Stage 3 — the EasyEcom Transfer Map this GRN routed to. SET when the GRN's po_ref_num matched an Internal-Customer Delivery Note with a §10 Transfer Map row, at which point §9 hands off PR creation to §10's IPR-with-Internal-Supplier path. NULL for normal §9 PO-backed GRNs and for unknown-PO drift."
   },
   {
    "fieldname": "routed_to_stn",

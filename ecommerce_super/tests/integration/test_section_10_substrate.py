@@ -528,6 +528,13 @@ class TestInternalPartyPairs(FrappeTestCase):
 
     @classmethod
     def _wipe_test_state(cls) -> None:
+        # §10 Stage 3 isolation hardening — also wipe the EasyEcom
+        # Customer Map / Supplier Map rows linked to the Internal pair
+        # so the next test class can re-push from a clean state.
+        from ecommerce_super.tests.factories import (
+            cleanup_internal_pair_fabric,
+        )
+        cleanup_internal_pair_fabric()
         # Wipe Internal Customer/Supplier rows we created — broaden
         # filter so the ERPNext-aligned 'INTL-CUST-for-X' /
         # 'INTL-SUPP-from-X' naming convention is caught.
