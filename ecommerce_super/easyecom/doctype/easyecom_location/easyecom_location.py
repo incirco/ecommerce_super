@@ -30,6 +30,7 @@ JWT cache (§3.7.2):
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -37,6 +38,12 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils.password import decrypt, encrypt
+
+# Master-field formats (gh#5). All are validated only when the field is set —
+# a blank value is allowed (the form's `reqd` flags own mandatory-ness, this
+# layer only owns the shape of supplied data).
+_EE_COMPANY_ID_RE = re.compile(r"^\d+$")
+_PINCODE_RE = re.compile(r"^\d{6}$")
 
 # Default JWT validity in days (EasyEcom JWTs are valid for 90 days per §3.6).
 JWT_VALIDITY_DAYS: int = 90
@@ -75,6 +82,7 @@ class EasyEcomLocation(Document):
         self._validate_exactly_one_primary()
         self._validate_company_matches_workflow_state()
         self._validate_mapped_warehouse_in_company()
+        self._validate_master_field_formats()
 
     def _derive_is_operational_from_workflow_state(self) -> None:
         """is_operational is workflow-derived (§8.4.1). Live → 1; else → 0.
@@ -188,6 +196,37 @@ class EasyEcomLocation(Document):
                 _(
                     "Mapped Warehouse {0} belongs to Company {1}, but this Location resolves to {2}."
                 ).format(self.mapped_warehouse, wh_company, self.frappe_company)
+            )
+
+    def _validate_master_field_formats(self) -> None:
+        """Shape validation for FDE-set master fields (gh#5).
+
+        Each rule only fires when the field is set — mandatory-ness is owned
+        by `reqd` on the doctype, not here. Errors are thrown individually
+        so the FDE sees the specific field that broke, not a wall of text.
+        """
+        if self.ee_company_id and not _EE_COMPANY_ID_RE.match(str(self.ee_company_id).strip()):
+            frappe.throw(
+                _("EE Company ID must be numeric (digits only). Got: {0}").format(
+                    frappe.bold(self.ee_company_id)
+                ),
+                title=_("Invalid EE Company ID"),
+            )
+        if self.gstin:
+            # India Compliance owns the canonical GSTIN format + check-digit
+            # rules (15 chars, state code, PAN, entity-no, Z, checksum). Late
+            # import: the app is a hard dependency of this bench but importing
+            # at module load slows test discovery for tests that don't touch
+            # GST at all.
+            from india_compliance.gst_india.utils import validate_gstin
+
+            validate_gstin(self.gstin, label="GSTIN")
+        if self.pincode and not _PINCODE_RE.match(str(self.pincode).strip()):
+            frappe.throw(
+                _("Pincode must be exactly 6 digits. Got: {0}").format(
+                    frappe.bold(self.pincode)
+                ),
+                title=_("Invalid Pincode"),
             )
 
     # ----- JWT cache: controller-managed encryption (§3.7.2) -----
