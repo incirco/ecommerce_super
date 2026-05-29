@@ -134,6 +134,18 @@ def acquire_jwt(account, location) -> str:
     except ValueError:
         response_payload = {"raw": response.text[:1000]}
 
+    # Classify the failure for the API Call log so dashboards/queries can
+    # distinguish "cooldown lockout (transient, harmless)" from "credentials
+    # rejected (permanent, blocks every flow)". Generic 4xx/5xx fall through
+    # to the catch-all EasyEcomAPIError name.
+    if response.ok:
+        _error_class = None
+    elif response.status_code == 401:
+        _error_class = "EasyEcomAuthError"
+    elif response.status_code == 403:
+        _error_class = "EasyEcomRateLimitError"
+    else:
+        _error_class = "EasyEcomAPIError"
     log_api_call(
         account=account.name,
         company=None,
@@ -148,7 +160,7 @@ def acquire_jwt(account, location) -> str:
         response_headers=dict(response.headers),
         response_payload=response_payload,
         status="Success" if response.ok else "Failed",
-        error_class=None if response.ok else "EasyEcomAuthError",
+        error_class=_error_class,
         error_message=None if response.ok else f"HTTP {response.status_code}",
     )
 
@@ -158,6 +170,26 @@ def acquire_jwt(account, location) -> str:
             status_code=401,
             response_body=response_payload,
             endpoint=TOKEN,
+        )
+    if response.status_code == 403:
+        # SPEC §31.3.1: EasyEcom rate-limits /access/token to 1 call per
+        # location per 60s and enforces the cooldown server-side with HTTP
+        # 403 once the limit is hit. Distinct from an auth failure — the
+        # credentials are fine; the FDE just retried too soon. Classifying
+        # as RateLimit lets test_connection.py surface the SPEC's "wait
+        # ~60s" message instead of the generic "ECS_API_ERROR" the FDE
+        # cannot act on (gh#2). Also reseat the local lockout so the next
+        # call short-circuits before reaching EE even if our in-process
+        # cache was cleared (process restart, fresh worker, etc.).
+        _set_token_lockout(location.location_key, seconds=60)
+        raise EasyEcomRateLimitError(
+            f"Token cooldown for {location.location_key}: HTTP 403. "
+            "EasyEcom permits one /access/token call per location per 60s "
+            "(§31.3.1). Wait ~60s and retry.",
+            status_code=403,
+            response_body=response_payload,
+            endpoint=TOKEN,
+            retry_after=60,
         )
     if not response.ok:
         raise EasyEcomAPIError(

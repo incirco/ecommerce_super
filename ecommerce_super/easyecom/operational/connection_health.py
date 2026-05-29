@@ -107,7 +107,7 @@ def update_account_connection_status() -> str:
     rows = frappe.db.get_all(
         "EasyEcom API Call",
         filters={"attempted_at": [">=", cutoff]},
-        fields=["status"],
+        fields=["status", "error_class"],
         limit_page_length=500,
     )
     if not rows:
@@ -115,8 +115,16 @@ def update_account_connection_status() -> str:
         # Connected to Down just because the site has been idle.
         return frappe.db.get_value("EasyEcom Account", name, "connection_status")
 
+    # Rate-limit cooldowns (EE's §31.3.1 60s lockout, surfaced as
+    # EasyEcomRateLimitError) are NOT connection-health failures — the
+    # connection is fine; the caller just retried too soon. Counting them
+    # would downgrade Connected → Degraded/Down for a user who clicked
+    # Test Connection twice in a row, which is misleading (gh#2).
     total = len(rows)
-    failed = sum(1 for r in rows if r.status != "Success")
+    failed = sum(
+        1 for r in rows
+        if r.status != "Success" and r.error_class != "EasyEcomRateLimitError"
+    )
     fail_rate = failed / total if total else 0
 
     if fail_rate == 0:
