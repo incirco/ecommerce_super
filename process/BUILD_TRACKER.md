@@ -212,26 +212,46 @@ Before Section 3 can be built, the local environment must exist: Frappe bench (v
 
 ---
 
-## §9 Buying / GRN (§9) — DESIGN COMPLETE · BUILD PENDING
+## §9 Buying / GRN — BUILD COMPLETE · LIVE-VERIFIED · CLOSEOUT DONE (2026-05-29)
 
-**Status:** Design grounded against real Harmony CreatePurchaseOrder / updatePoStatus / Grn/V2/getGrnDetails payloads. Build packet at `spec_sections/section_9_buying_packet.md`. Stage 1 prompt drafted, awaiting execution.
+**Status:** §9 built end-to-end across 4 stages + 1 corrective commit, live-verified across 5 Harmony smoke rounds + 2 corrective re-smokes. All §9-affected tests green (163/163). Closeout artifacts shipped: primer, test script, SPEC patch notes, this entry, docx amendment notes. The 24 pre-existing §8 test failures held steady throughout §9 work (none caused by §9).
 
-**Settled design (in the packet):**
-- **Gate 0 (lifecycle-wide):** warehouse opt-in via §8a location_key; non-EE warehouse POs and GRNs silently inert.
-- **Two channels, two keys:** CreatePurchaseOrder (content, keyed `referenceCode`=PO name) + updatePoStatus (status, keyed `po_id`=EE-returned int). `isCancel` on content channel unused; cancel via po_status=7. PO Map stores both keys.
-- **GRN pull endpoint corrected:** `/Grn/V2/getGrnDetails` (NOT the stale `/wms/getGrnDetails` in SPEC.md §9.5.1). Cursor pagination `nextUrl`, delta watermark `created_after`, limit 5/10.
-- **No accepted/rejected pair in GRN payload (SPEC.md §9.6.2 wrong).** Real model: `received_quantity` (PR received_qty) + `qc_fail` (PR rejected_qty) + derived accepted_qty. Bucket fields (`available, sold, …`) READ-NOT-POSTED — they drift after inward.
-- **Receipt trigger configurable:** `grn_receipt_trigger_status` setting, default 3 (QC Complete), QC-conditional reject split.
-- **Self-GRN routing:** `vendor_c_id == inwarded_warehouse_c_id` → §10 STN-inward, not §9 PR. Explicit §9↔§10 boundary.
-- **8f dependency lands in Stage 1:** EasyEcom-PO-Push → Supplier Map.ee_vendor_id (write key); EasyEcom-GRN-Pull → Supplier Map.ee_vendor_c_id (read key).
-- **Sync Record Line child (NEW shared DocType):** §7.1 amendment's first concrete consumer; entity-agnostic; §11/§12/§13 will reuse.
+**Commits on `main`:**
+- `18fcc77` — Stage 1: Substrate (PO Map, GRN Map, Sync Record Line, ruleset repoints, settings).
+- `0090a32` — §23 Integration Discrepancy stub (frozen-contract, unblocks Stage 3 Link).
+- `5851e4b` — Stage 2: PO push (CreatePurchaseOrder content + updatePoStatus status), shared place_of_supply module, rename-coordination fallback, PO-completion deferred to Stage 3.
+- `df8464f`…`e041bbb` — Stage 3 + 12 live-finding fixes: GRN pull, PR with qc_fail split, native purchase_order_item linkage, idempotency back-ref, tax-variance on received-gross, line-total rate fix, items wire key, inwarded_warehouse_c_id=company_id semantic, etc.
+- Stage 4 + corrective: Test-isolation per-account scoping, address-precondition refuse-don't-placeholder, list views + workspace cards + sidebar lockstep, Sync Record line-child indicator, buying precheck, **unknown-PO drift contract** (no auto-PR, FDE-driven Create-PR-from-GRN with optional PO link, drift Dismiss), **pause-respects-all-three-po_status-pushes** with pending mechanism and un-pause runner.
 
-**Stages:** 4 stages — (1) substrate (DocTypes + repoints), (2) PO push both channels, (3) GRN pull → PR + status reconciliation, (4) UI/workspace/scheduler.
+**Live-verified on Harmony:**
+- PO push (content + status) → real `poId` returned.
+- Real Harmony WMS GRN → ERPNext PR created + submitted with correct qty model (received_qty=received_quantity, rejected_qty=qc_fail, accepted derived; buckets read-not-posted).
+- qc_fail accepted/rejected split per ERPNext invariant.
+- Native Batch auto-creation + PR Item.batch_no link.
+- `ecs_ee_batch_code` / `ecs_ee_expire_date` custom-field capture on non-batch Items.
+- Tax variance check across received-gross (zero false-positives).
+- `purchase_order_item` canonical PO→PR linkage (PO.per_received updates live).
+- Idempotency back-ref (re-pull safe when Map row wiped).
+- Held-Pre-QC → Receipted transition on same Map row.
+- Completion push (updatePoStatus=5) accepted by Harmony.
+- Discrepancy auto-raise: GRN-for-unknown-PO (corrected to drift, no auto-PR), tax-variance, batch-on-non-batch-item, over-receipt.
+- Status reconciliation echo (no false drift).
+- **Re-smoke 1 (corrective):** unknown-PO GRN → confirmed no auto-PR, drift Map row + Discrepancy. FDE create_pr_from_grn → standalone PR. dismiss_grn_drift → Dismissed.
+- **Re-smoke 2 (corrective):** pause_all_auto_push → all four toggles zero. Submit/cancel/complete during pause → ecs_pending_po_status_push populates (no EE wire). go_live_enable_auto_push(pos=1) → pending fires once with idempotency guard.
 
-**Open decisions (resolve during stages):** PO Map autoname behaviour on PO rename; Sync Record Line linked_discrepancy → §23 Discrepancy DocType (build §23 first or use Data placeholder?); EE→ERPNext po_status echo (we just pushed it, EE confirms — no Discrepancy); out-of-order GRN for EE-born PO (create-PR + Discrepancy lean); `easyecom/tax/place_of_supply.py` shared module for §9/§11/§12.
+**Closeout artifacts:**
+- `process/primers/FDE_PRIMER_section_9_buying.md` — own primer (Parts A–L: where §9 sits, two push channels, GRN qty model, QC trigger, Deleted edge, unknown-PO drift, self-GRN routing, Discrepancy taxonomy, worklist, precheck, cron go-live runbook, carry-forwards).
+- `process/test_scripts/section_9_buying.md` — 8 sections covering preconditions, PO push (both channels), GRN pull → PR, completion echo, unknown-PO drift (the corrective commit), pause kill-switch (the corrective commit), edge cases including self-GRN routing. Three load-bearing checks called out: §4.2 (no bucket leak), §4.4 (rate from line total), §6.1 (no auto-PR for unknown PO).
+- `spec_sections/SPEC_9_patch_notes.md` — rewrites stale SPEC.md §9.1–§9.12 (the per-section change list, including the SUPERSEDED §9.4 mixed-warehouse partial push and §9.6.2 paired accepted/rejected fields).
+- This BUILD_TRACKER entry.
+- docx regen step: USER runs the unpack/edit/pack pipeline locally against the updated SPEC.md (after applying patch notes).
 
-**Repoints carried in from §8f:** EasyEcom-PO-Push (currently supplier↔vendor_id direct); EasyEcom-GRN-Pull (same). Both repoint in §9 Stage 1.
+**Carry-forwards past §9:**
+- **GRN-pull cron stays UNWIRED until go-live sets `grn_pull_high_watermark`** — explicit two-step runbook (set watermark → wire cron). Guard test `TestGRNPullSchedulerIntentionallyUnwired` ensures the cron stays unwired in code until that.
+- **STN routing live-verification is a §10 PREREQUISITE** — trigger a real self-GRN on Harmony, inspect `vendor_c_id`, confirm equals warehouse company_id. Required before §10 Stage 3 (inbound) builds.
+- **STN cancel/amend endpoint** is undocumented in the createOrder doc page shared — Stage 2 STOP-and-ask item when §10's cancel path is reached.
+- **Multi-GRN partial cumulative tolerance** is unit-verified but NOT live-smoked. Watch-item for first real client with a partial receipt.
 
-**Carry-forwards to §10:** §10 STN-inward must handle valued self-GRNs (real payload grn 141936: 49990 against self-vendor 26564 with real apparel SKU AW21ANDMCS834-Beige-XXL-Casual Regular). Not safe to assume zero-value internal transfers.
+**Adjacent finding closed during §9 corrective commit (worth recording):** the pause mechanism `pause_all_auto_push` was previously zeroing only Items/Customers/Suppliers toggles, leaving `auto_push_pos_on_save` uncovered. This was a pre-existing §9-Stage-2 latent gap that predated the corrective commit; fixed under §9 corrective scope (authorised mid-build). Pause now genuinely means pause across all four auto-push toggles.
 
-**Next:** Stage 1 build (substrate). Then 2 → 3 → 4. Live-verify on Harmony with mock GRN injection.
+**§9 closed. Next: §10 Stock Transfer Flows (packet at `spec_sections/section_10_stock_transfer_packet.md`, Stage 1 build prompt drafted).**
