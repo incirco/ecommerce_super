@@ -27,9 +27,19 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
+import time
 from typing import Any
 
 import frappe
+
+# Concurrency-safety knobs for `_record_event` insert (gh#4). Burst load
+# (>5 req/sec on the Default tier) was producing raw 500s from concurrent
+# Webhook Event inserts colliding on row/index locks. Retry transparently
+# on DB transient errors before escalating to a 503 — this keeps every
+# webhook a) logged or b) explicitly counted as a burst-failure in the
+# Error Log, never silently swallowed (SPEC §7.2).
+_RECORD_EVENT_MAX_ATTEMPTS = 3
+_RECORD_EVENT_BACKOFF_SECONDS = (0.05, 0.15, 0.35)
 
 from ecommerce_super.easyecom.client.auth import get_account
 from ecommerce_super.easyecom.doctype.easyecom_location.easyecom_location import (
@@ -209,10 +219,20 @@ def receive() -> dict[str, Any]:
     if existing:
         return _respond(200, {"ok": True, "dedup": existing})
 
-    # Step 7: Record the event. The DB UNIQUE may still race here (two
-    # concurrent identical deliveries); catch and treat as dedup.
+    # Step 7: Record the event. Two concurrency hazards here:
+    #   a) DB UNIQUE race — two identical deliveries hit at once. One
+    #      wins, the other catches UniqueValidationError and is treated
+    #      as dedup (200 OK so EE stops retrying).
+    #   b) DB transient errors under burst load (deadlock, lock-wait
+    #      timeout) — observed during N6 testing on Default tier as raw
+    #      500s with no Webhook Event row created (gh#4). Retry with a
+    #      short backoff, then escalate to a logged 503 so the failure
+    #      is visible in the Error Log even when persistence couldn't
+    #      complete. 503 (Service Unavailable) tells EE this is
+    #      transient and to retry — distinct from 500 which suggests
+    #      a permanent bug.
     try:
-        event_name = _record_event(
+        event_name = _record_event_with_retry(
             account=account,
             event_type=event_type,
             ee_event_id=str(ee_event_id),
@@ -228,8 +248,31 @@ def receive() -> dict[str, Any]:
     except frappe.exceptions.UniqueValidationError:
         return _respond(200, {"ok": True, "dedup": "race"})
     except Exception as e:
+        # Burst load (or any unexpected DB error) — persist visibility in
+        # the Error Log since the Webhook Event row itself couldn't be
+        # written. Includes the dedup key so a re-delivery from EE can be
+        # correlated. Returns 503 so EE will retry; 500 would suggest a
+        # permanent server bug and is reserved for non-transient
+        # programmer errors.
+        frappe.log_error(
+            title="EasyEcom Webhook receive — record_event failed (gh#4)",
+            message=(
+                f"{type(e).__name__}: {e}\n\n"
+                f"event_type={event_type}\n"
+                f"ee_event_id={ee_event_id}\n"
+                f"company={company}\n"
+                f"location_key={location_key}\n"
+                f"source_ip={source_ip}\n"
+                f"auth_header_used={auth_header_used}\n"
+            ),
+        )
         return _respond(
-            500, {"error": f"Could not record webhook: {type(e).__name__}: {e}"}
+            503,
+            {
+                "error": "Webhook record-write failed under load; retry.",
+                "error_class": type(e).__name__,
+                "ee_event_id": ee_event_id,
+            },
         )
 
     # Step 8: Validate event_type AFTER recording (so unknown ones are
@@ -301,6 +344,71 @@ def _check_ip_allowlist(source_ip: str, allowed_cidr_text: str | None) -> str:
 
 def _first_company_or_none() -> str | None:
     return frappe.db.get_value("Company", filters={}, fieldname="name")
+
+
+def _record_event_with_retry(
+    *,
+    account,
+    event_type: str,
+    ee_event_id: str,
+    payload: Any,
+    source_ip: str,
+    auth_header_used: str,
+    ip_check: str,
+    location_key: str | None,
+    company: str | None,
+    processing_state: str,
+    processing_error: str | None,
+) -> str:
+    """Wrapper around `_record_event` that retries on DB transient errors
+    (deadlock / lock-wait timeout) under burst load (gh#4).
+
+    Re-raises UniqueValidationError immediately — that's the dedup race
+    the caller handles as 200 OK, retrying would just lose work. Other
+    exceptions get up to `_RECORD_EVENT_MAX_ATTEMPTS` tries with the
+    increasing backoff in `_RECORD_EVENT_BACKOFF_SECONDS`; the final
+    failure raises so the caller can log + return 503.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_RECORD_EVENT_MAX_ATTEMPTS):
+        try:
+            return _record_event(
+                account=account,
+                event_type=event_type,
+                ee_event_id=ee_event_id,
+                payload=payload,
+                source_ip=source_ip,
+                auth_header_used=auth_header_used,
+                ip_check=ip_check,
+                location_key=location_key,
+                company=company,
+                processing_state=processing_state,
+                processing_error=processing_error,
+            )
+        except frappe.exceptions.UniqueValidationError:
+            # Dedup race — caller treats this as a successful duplicate
+            # delivery. Re-raise without retry.
+            raise
+        except (
+            frappe.exceptions.QueryDeadlockError,
+            frappe.exceptions.QueryTimeoutError,
+        ) as e:
+            # Transient — sleep then retry. Roll back any partial state
+            # the failed insert may have left in the open transaction
+            # before the next attempt; otherwise the retry inherits the
+            # broken txn and re-fails the same way.
+            last_exc = e
+            try:
+                frappe.db.rollback()
+            except Exception:
+                pass
+            if attempt + 1 < _RECORD_EVENT_MAX_ATTEMPTS:
+                time.sleep(_RECORD_EVENT_BACKOFF_SECONDS[attempt])
+                continue
+            raise
+    # Should be unreachable — the loop either returns, raises, or
+    # exhausts and raises last_exc. Defensive raise for type-checker.
+    raise last_exc or RuntimeError("retry loop exhausted without an exception")
 
 
 def _record_event(
