@@ -87,6 +87,16 @@ def test_connection(account: str) -> dict[str, Any]:
         # refresh_jwt() always hits /access/token (vs get_jwt which uses cache).
         # That's what "Test Connection" should do — exercise the auth path fresh.
         jwt = client.refresh_jwt()
+        # Persist Connected explicitly here too. acquire_jwt() already does
+        # this as a side-effect on success, but anchoring the write at the
+        # user-facing Test Connection layer keeps the contract durable:
+        # frm.reload_doc() on the form (and the §17 Top Strip on next load)
+        # reflect THIS click's outcome even if the auth-internal side-effect
+        # is ever refactored away (gh#3).
+        frappe.db.set_value(
+            "EasyEcom Account", account, "connection_status", "Connected"
+        )
+        frappe.db.commit()
         return {
             "ok": True,
             "message": f"Connected. JWT acquired for location {location_key}.",
