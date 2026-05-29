@@ -103,6 +103,22 @@ class TestTestConnection(FrappeTestCase):
         # No stack trace fields.
         self.assertNotIn("traceback", str(result).lower())
 
+    def test_token_cooldown_403_returns_rate_limit_message(self) -> None:
+        """gh#2 — EE returns HTTP 403 when /access/token is called twice within
+        the §31.3.1 60-second cooldown. The user must see the cooldown
+        message, NOT the generic 'ECS_API_ERROR'."""
+        with patch(
+            "ecommerce_super.easyecom.client.auth.requests.post",
+            return_value=_FakeResponse(403, {"error": "rate_limited"}),
+        ):
+            result = test_connection(account=self.account)
+
+        self.assertFalse(result.get("ok"))
+        # Test Connection's RateLimitError branch renders this language.
+        self.assertIn("rate-limited", result.get("message", "").lower())
+        self.assertEqual(result.get("error_code"), "ECS_API_RATE_LIMIT")
+        self.assertEqual(result.get("retry_after"), 60)
+
     def test_missing_default_location_returns_clear_message(self) -> None:
         frappe.db.set_value(
             "EasyEcom Account", self.account, "default_location_key", None
