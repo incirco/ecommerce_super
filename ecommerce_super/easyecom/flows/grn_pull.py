@@ -234,7 +234,8 @@ def pull_grns_for_location(
     return sweep
 
 
-def scheduled_grn_pull(*, account_name: str | None = None) -> dict[str, Any]:
+@frappe.whitelist()
+def scheduled_grn_pull(account_name: str | None = None) -> dict[str, Any]:
     """Wired by Stage 4's cron. Walks every operational EasyEcom Location
     on the (single, enabled) account, returns a summary."""
     if account_name is None:
@@ -542,11 +543,35 @@ def process_one_grn(
     # path).
     po_ref_num = (grn_row.get("po_ref_num") or "").strip()
     if po_ref_num:
-        transfer_map_name = frappe.db.get_value(
-            "EasyEcom Transfer Map",
-            {"delivery_note": po_ref_num},
-            "name",
-        )
+        # GROUNDING CORRECTION (live Harmony smoke 2026-05-29 + 30): EE
+        # wraps our orderNumber as either "Auto PO <DN_name>" or
+        # "Auto PO <DN_name>_OR<n>" in the GRN's po_ref_num — the suffix
+        # is inconsistent across GRNs (observed both shapes on the same
+        # tenant). Try the embedded-DN match against both shapes before
+        # falling back to direct equality.
+        import re as _re
+        candidate_dn_names: list[str] = []
+        for pat in (
+            r"^Auto PO (.+?)_OR\d+$",   # suffix variant
+            r"^Auto PO (.+?)$",         # no-suffix variant
+        ):
+            m = _re.match(pat, po_ref_num)
+            if m:
+                cand = m.group(1).strip()
+                if cand not in candidate_dn_names:
+                    candidate_dn_names.append(cand)
+        candidate_dn_names.append(po_ref_num)
+        transfer_map_name = None
+        matched_dn = None
+        for dn_candidate in candidate_dn_names:
+            transfer_map_name = frappe.db.get_value(
+                "EasyEcom Transfer Map",
+                {"delivery_note": dn_candidate},
+                "name",
+            )
+            if transfer_map_name:
+                matched_dn = dn_candidate
+                break
         if transfer_map_name:
             from ecommerce_super.easyecom.flows.transfer_inbound import (
                 process_inbound_grn,

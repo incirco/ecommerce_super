@@ -47,11 +47,15 @@ class EasyEcomTransferMap(Document):
         self._validate_ee_order_id_implies_pushed()
 
     def _populate_company_gstins(self) -> None:
-        """Two-hop traversal Warehouse → Company → gstin. Frappe's
-        single-level fetch_from can't cross both Link hops, so the
-        controller does it. Defensive: if Company has no gstin field
-        configured (rare on India Compliance sites; possible on
-        non-India deployments), leaves the field empty."""
+        """Resolve the GSTIN per Warehouse.
+
+        GROUNDING CORRECTION (live Harmony smoke 2026-05-30): a single
+        Company can register multiple GSTINs (one per state branch)
+        and tag them to specific warehouse Addresses. Lookup order per
+        Warehouse:
+          1. Address linked to the Warehouse carrying a `gstin`
+          2. Company.gstin (legacy / single-GSTIN sites)
+        """
         for wh_field, gstin_field in (
             ("source_warehouse", "source_company_gstin"),
             ("target_warehouse", "target_company_gstin"),
@@ -59,6 +63,23 @@ class EasyEcomTransferMap(Document):
             wh = self.get(wh_field)
             if not wh:
                 self.set(gstin_field, "")
+                continue
+            addr_gstin = frappe.db.sql(
+                """
+                SELECT a.gstin
+                FROM `tabAddress` a
+                JOIN `tabDynamic Link` dl
+                  ON dl.parent = a.name
+                WHERE dl.parenttype = 'Address'
+                  AND dl.link_doctype = 'Warehouse'
+                  AND dl.link_name = %s
+                  AND IFNULL(a.gstin, '') != ''
+                LIMIT 1
+                """,
+                (wh,),
+            )
+            if addr_gstin and addr_gstin[0][0]:
+                self.set(gstin_field, addr_gstin[0][0])
                 continue
             company = frappe.db.get_value("Warehouse", wh, "company")
             if not company:

@@ -353,6 +353,10 @@ doc_events: dict[str, dict[str, str]] = {
     #     not yet pushed pass through.
     #   - on_update_after_submit: same stub-blocker for amends.
     "Delivery Note": {
+        # before_validate runs before ERPNext's own validate — it sets
+        # items[].warehouse + target_warehouse from the §10 header
+        # fields so ERPNext's stock-item-needs-warehouse rule passes.
+        "before_validate": "ecommerce_super.easyecom.flows.transfer_push.section10_before_save",
         "validate": "ecommerce_super.easyecom.flows.transfer_push.validate_pre_submit",
         "on_submit": "ecommerce_super.easyecom.flows.transfer_push.enqueue_on_dn_submit",
         "on_cancel": "ecommerce_super.easyecom.flows.transfer_push.block_dn_cancel",

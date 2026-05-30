@@ -35,3 +35,6 @@ ecommerce_super.patches.v0_1.add_ecs_grn_pull_batch_fields
 ecommerce_super.patches.v0_1.refresh_easyecom_workspace_s9_buying
 ecommerce_super.patches.v0_1.add_ecs_section10_back_refs
 ecommerce_super.patches.v0_1.refresh_easyecom_workspace_s10_stage4
+ecommerce_super.patches.v0_1.add_dn_section10_target_warehouse
+ecommerce_super.patches.v0_1.add_dn_section10_transfer_fields
+ecommerce_super.patches.v0_1.add_pull_grns_button

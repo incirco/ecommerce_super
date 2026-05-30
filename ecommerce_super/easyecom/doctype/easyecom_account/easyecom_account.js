@@ -271,6 +271,67 @@ function _runProductDiscovery(frm) {
     });
 }
 
+function _runPullAllPendingGrns(frm) {
+    if (!_ensureSaved(frm, "Save the Account before pulling GRNs.")) {
+        return;
+    }
+    frappe.show_alert({
+        message: __("Pulling GRNs from EE…"),
+        indicator: "blue",
+    });
+    frappe.call({
+        method: "ecommerce_super.easyecom.flows.grn_pull.scheduled_grn_pull",
+        args: {account_name: frm.doc.name},
+        freeze: true,
+        freeze_message: __("Pulling GRNs from EasyEcom…"),
+        callback(r) {
+            const result = r.message || {};
+            if (!result.ok) {
+                frappe.msgprint({
+                    title: __("Pull Failed"),
+                    message: result.message || __("Unknown error."),
+                    indicator: "red",
+                });
+                return;
+            }
+            const summaries = result.summaries || [];
+            const total_grns = summaries.reduce(
+                (sum, s) => sum + (s.grns || 0), 0);
+            const lines = [
+                __("Pulled {0} GRN(s) across {1} location(s).",
+                    [total_grns, summaries.length]),
+                "<br><br>",
+            ];
+            summaries.forEach((s) => {
+                if (s.error) {
+                    lines.push(
+                        `<code>${frappe.utils.escape_html(s.location_key)}</code>: ` +
+                        `<span style="color:#dc2626">${frappe.utils.escape_html(s.error)}</span><br>`
+                    );
+                } else {
+                    lines.push(
+                        `<code>${frappe.utils.escape_html(s.location_key)}</code>: ` +
+                        `${s.grns || 0} GRN(s) on ${s.pages || 0} page(s)<br>`
+                    );
+                }
+            });
+            frappe.msgprint({
+                title: __("GRN Pull Complete"),
+                message: lines.join(""),
+                indicator: total_grns > 0 ? "green" : "grey",
+            });
+        },
+        error() {
+            frappe.msgprint({
+                title: __("GRN Pull Failed"),
+                message: __("The scheduled_grn_pull call itself failed."),
+                indicator: "red",
+            });
+        },
+    });
+}
+
+
 function _runPushAllPending(frm) {
     if (!_ensureSaved(frm, "Save the Account before running the push sweep.")) {
         return;
@@ -589,6 +650,10 @@ frappe.ui.form.on("EasyEcom Account", {
 
     push_all_pending_action(frm) {
         _runPushAllPending(frm);
+    },
+
+    pull_all_pending_grns_action(frm) {
+        _runPullAllPendingGrns(frm);
     },
 
     go_live_enable_auto_push_action(frm) {

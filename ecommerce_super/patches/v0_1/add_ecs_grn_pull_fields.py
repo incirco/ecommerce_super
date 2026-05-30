@@ -29,6 +29,9 @@ def execute() -> None:
     create_custom_fields(
         {
             "Purchase Receipt": [
+                # ecs_easyecom_grn_id — EasyEcom-side `grn_id` (int as
+                # string). Set by §9 Stage 3 pull; idempotency hinge so
+                # a re-pull of the same GRN does NOT create a second PR.
                 {
                     "fieldname": "ecs_easyecom_grn_id",
                     "label": "EasyEcom GRN ID",
@@ -37,27 +40,24 @@ def execute() -> None:
                     "read_only": 1,
                     "in_standard_filter": 1,
                     "search_index": 1,
-                    "description": (
-                        "EasyEcom-side `grn_id` (int as string). Set by §9 "
-                        "Stage 3 pull; the idempotency hinge so a re-pull "
-                        "of the same GRN does NOT create a second PR."
-                    ),
                 },
+                # ecs_supplier_invoice_date — EasyEcom-side
+                # `grn_invoice_date`. Distinct from ERPNext's posting_date
+                # (which reflects when PR was created on ERPNext, typically
+                # the GRN pull tick). Kept for invoice reconciliation.
                 {
                     "fieldname": "ecs_supplier_invoice_date",
                     "label": "Supplier Invoice Date (from EE)",
                     "fieldtype": "Date",
                     "insert_after": "ecs_easyecom_grn_id",
                     "read_only": 1,
-                    "description": (
-                        "EasyEcom-side `grn_invoice_date`. Distinct from "
-                        "ERPNext's posting_date which reflects when the "
-                        "PR was created on ERPNext (typically the GRN "
-                        "pull tick). Kept for invoice reconciliation."
-                    ),
                 },
             ],
             "Purchase Receipt Item": [
+                # ecs_easyecom_grn_detail_id — EasyEcom-side
+                # `grn_detail_id`. Per-line back-ref tying a PR line to a
+                # specific EE GRN line. Used by Stage 3 line-level
+                # discrepancy logging.
                 {
                     "fieldname": "ecs_easyecom_grn_detail_id",
                     "label": "EasyEcom GRN Detail ID",
@@ -65,12 +65,6 @@ def execute() -> None:
                     "insert_after": "purchase_order_item",
                     "read_only": 1,
                     "search_index": 1,
-                    "description": (
-                        "EasyEcom-side `grn_detail_id` — the per-line "
-                        "back-ref that ties a PR line to a specific EE "
-                        "GRN line. Used by Stage 3 line-level "
-                        "discrepancy logging."
-                    ),
                 },
                 {
                     "fieldname": "ecs_easyecom_po_detail_id",

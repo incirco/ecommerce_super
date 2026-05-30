@@ -175,8 +175,10 @@ def push_one_transfer(
         )
 
     # Different-GSTIN → SI auto-draft (Draft, never auto-submit).
-    src_gstin = _company_gstin(_warehouse_company(source_wh))
-    tgt_gstin = _company_gstin(_warehouse_company(target_wh))
+    # Resolve GSTIN per Warehouse (multi-state Companies can tag a
+    # GSTIN on the Warehouse's Address; fall back to Company.gstin).
+    src_gstin = _warehouse_gstin(source_wh)
+    tgt_gstin = _warehouse_gstin(target_wh)
     gstin_different = bool(src_gstin and tgt_gstin and src_gstin != tgt_gstin)
 
     sales_invoice: str | None = None
@@ -250,9 +252,39 @@ def push_one_transfer(
 
 
 def _resolve_source_target_pair(dn: Any) -> tuple[str, str] | None:
-    """Resolve the (source_wh, target_wh) pair from DN line items. If
-    multiple distinct pairs appear, return None — the validate_pre_submit
-    hook refuses these before we ever land here."""
+    """Resolve the (source_wh, target_wh) pair from DN-header fields.
+
+    GROUNDING CORRECTION (live Harmony smoke 2026-05-30): routing is
+    Customer-anchored — the FDE sets Transfer From + Transfer To
+    Warehouses on the DN header. Items' warehouse/target_warehouse are
+    derivative (validate sets them) and not consulted for routing.
+
+    Backward-compat: if the new header fields aren't populated, fall
+    back to the legacy `ecs_section10_target_warehouse` + items[].
+    """
+    transfer_from = (
+        getattr(dn, "ecs_section10_transfer_from_warehouse", None) or ""
+    ).strip()
+    transfer_to = (
+        getattr(dn, "ecs_section10_transfer_to_warehouse", None) or ""
+    ).strip()
+    if transfer_from and transfer_to:
+        return (transfer_from, transfer_to)
+
+    # Legacy back-compat path
+    legacy_target = (
+        getattr(dn, "ecs_section10_target_warehouse", None) or ""
+    ).strip()
+    if legacy_target:
+        sources: set[str] = set()
+        for line in dn.items or []:
+            src = (line.warehouse or "").strip()
+            if src:
+                sources.add(src)
+        if len(sources) != 1:
+            return None
+        return (next(iter(sources)), legacy_target)
+
     pairs: set[tuple[str, str]] = set()
     for line in dn.items or []:
         source = (line.warehouse or "").strip()
@@ -290,6 +322,41 @@ def _company_gstin(company: str) -> str:
     return (frappe.db.get_value("Company", company, "gstin") or "").strip().upper()
 
 
+def _warehouse_gstin(warehouse: str) -> str:
+    """Resolve the effective GSTIN for a Warehouse.
+
+    GROUNDING CORRECTION (live Harmony smoke 2026-05-30): a single
+    Company can register multiple GSTINs (one per state branch) and
+    tag them to specific warehouse Addresses. The earlier substrate
+    only read `Company.gstin`, which collapsed all branches of a
+    multi-state Company into the same GSTIN — incorrect for the
+    different-GSTIN STN/SI gating.
+
+    Lookup order:
+      1. Any Address linked to this Warehouse that carries a `gstin`
+      2. Company.gstin (legacy / single-GSTIN sites)
+    """
+    if not warehouse:
+        return ""
+    addr_gstin = frappe.db.sql(
+        """
+        SELECT a.gstin
+        FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl
+          ON dl.parent = a.name
+        WHERE dl.parenttype = 'Address'
+          AND dl.link_doctype = 'Warehouse'
+          AND dl.link_name = %s
+          AND IFNULL(a.gstin, '') != ''
+        LIMIT 1
+        """,
+        (warehouse,),
+    )
+    if addr_gstin and addr_gstin[0][0]:
+        return addr_gstin[0][0].strip().upper()
+    return _company_gstin(_warehouse_company(warehouse))
+
+
 # ============================================================
 # Preconditions
 # ============================================================
@@ -325,23 +392,25 @@ def _run_preconditions(
                 f"Internal Customer for this transfer pair is "
                 f"{internal_customer!r}. Misconfigured DN."
             )
-        # (2) ee_customer_id captured on Customer Map.
-        ee_customer_id = frappe.db.get_value(
-            "EasyEcom Customer Map",
-            {
-                "erpnext_doctype": "Customer",
-                "erpnext_name": internal_customer,
-            },
-            "ee_customer_id",
+    # (2) GROUNDING CORRECTION (live Harmony smoke 2026-05-29): the
+    # STN payload's `customer[].customerId` is the TARGET WAREHOUSE's
+    # `company_id` from /getAllLocation — NOT the §8e Customer Map's
+    # ee_customer_id. The Internal Customer pair is still required by
+    # ERPNext to legitimise the inter-warehouse Delivery Note, but its
+    # ee_customer_id plays no role in the §10 STN wire. Precondition:
+    # target warehouse's EE Location row carries an ee_company_id.
+    target_ee_company_id = frappe.db.get_value(
+        "EasyEcom Location",
+        {"mapped_warehouse": target_wh},
+        "ee_company_id",
+    )
+    if not target_ee_company_id:
+        errs.append(
+            f"Target warehouse {target_wh!r} → EE Location has no "
+            "ee_company_id captured. The §10 STN payload uses this as "
+            "customer[].customerId. Re-run discover_locations or set "
+            "ee_company_id on the EE Location row."
         )
-        if not ee_customer_id:
-            errs.append(
-                f"Internal Customer {internal_customer!r} has no "
-                "ee_customer_id captured on its Customer Map row. "
-                "The §10 STN payload requires this id. Run the §8e "
-                "Customer push for this customer, or invoke "
-                "ensure_internal_party_pairs_for_account (which pushes)."
-            )
 
     # (3) Item Map for every DN line.
     unmapped: list[str] = []
@@ -399,18 +468,30 @@ def _run_preconditions(
 def _find_internal_customer(
     *, target_company: str, source_company: str
 ) -> str | None:
-    """The packet-locked lookup: customer with is_internal_customer=1,
-    represents_company=target, AND source_company in companies[*].company.
-    Stage 1's ensure_internal_party_pairs created exactly this shape."""
+    """Lookup the internal customer that can serve a (source → target)
+    transfer.
+
+    GROUNDING CORRECTION (live Harmony smoke 2026-05-30): the
+    single-"Internal Customer" model has ONE customer that serves
+    transfers to any destination Company. Its represents_company is a
+    default; the per-DN destination Company is set on
+    `DN.represents_company` by before_validate. Lookup chain:
+      1. Strict match (legacy): represents_company=target AND source in
+         companies. Returns customer dedicated to this destination.
+      2. Loose match (single-customer model): any enabled internal
+         customer whose companies include source AND not disabled.
+    """
     if not target_company or not source_company:
         return None
-    candidates = frappe.db.sql(
+    # 1. Strict legacy match
+    strict = frappe.db.sql(
         """
         SELECT c.name
         FROM `tabCustomer` c
         JOIN `tabAllowed To Transact With` atw
           ON atw.parent = c.name
         WHERE c.is_internal_customer = 1
+          AND IFNULL(c.disabled, 0) = 0
           AND c.represents_company = %s
           AND atw.company = %s
         LIMIT 1
@@ -418,7 +499,25 @@ def _find_internal_customer(
         (target_company, source_company),
         as_dict=True,
     )
-    return candidates[0]["name"] if candidates else None
+    if strict:
+        return strict[0]["name"]
+    # 2. Loose single-customer match — any enabled internal customer
+    #    whose companies list includes source_company.
+    loose = frappe.db.sql(
+        """
+        SELECT c.name
+        FROM `tabCustomer` c
+        JOIN `tabAllowed To Transact With` atw
+          ON atw.parent = c.name
+        WHERE c.is_internal_customer = 1
+          AND IFNULL(c.disabled, 0) = 0
+          AND atw.company = %s
+        LIMIT 1
+        """,
+        (source_company,),
+        as_dict=True,
+    )
+    return loose[0]["name"] if loose else None
 
 
 def _find_internal_supplier(*, source_company: str) -> str | None:
@@ -607,6 +706,14 @@ def _draft_internal_sales_invoice(
     """Auto-create the Internal SI in DRAFT, sized to DN dispatched qty.
     update_stock=0 (the DN handled stock-out). Never auto-submit — the
     §10 invariant says ERP user submits financial documents."""
+    # Resolve the Company's default Cost Center so we can stamp it on
+    # the SI header + every item line + every tax row. ERPNext's
+    # Unrealized P/L posting on internal-transfer SIs requires a CC on
+    # the GL entry; missing it throws "Cost Center is required for
+    # 'Profit and Loss' account Unrealized Profit and Loss Account".
+    default_cc = (
+        frappe.db.get_value("Company", dn.company, "cost_center") or ""
+    )
     si = frappe.new_doc("Sales Invoice")
     si.update(
         {
@@ -614,6 +721,7 @@ def _draft_internal_sales_invoice(
             "company": dn.company,
             "posting_date": dn.posting_date,
             "due_date": dn.posting_date,
+            "cost_center": default_cc,
             "is_internal_customer": 1,
             "update_stock": 0,
             "currency": dn.currency or "INR",
@@ -621,6 +729,16 @@ def _draft_internal_sales_invoice(
             "selling_price_list": dn.selling_price_list,
             "price_list_currency": dn.price_list_currency or "INR",
             "plc_conversion_rate": dn.plc_conversion_rate or 1,
+            # Address inheritance from the DN — drives the seller/buyer
+            # GSTIN pair on India Compliance's SI tax computation.
+            # Without this, ERPNext defaults to the Company's primary
+            # Address (gst_category mismatch on multi-state setups).
+            "company_address": getattr(dn, "company_address", None),
+            "dispatch_address_name": getattr(dn, "dispatch_address_name", None),
+            "customer_address": getattr(dn, "customer_address", None),
+            "shipping_address_name": getattr(dn, "shipping_address_name", None),
+            "company_gstin": getattr(dn, "company_gstin", None),
+            "billing_address_gstin": getattr(dn, "billing_address_gstin", None),
             "ecs_section10_transfer_map": None,  # back-fill below
         }
     )
@@ -635,6 +753,26 @@ def _draft_internal_sales_invoice(
                 "item_tax_template": line.item_tax_template,
                 "delivery_note": dn.name,
                 "dn_detail": line.name,
+                "cost_center": line.cost_center or default_cc,
+            },
+        )
+    # Copy the DN's Sales Taxes and Charges table onto the SI so the
+    # SI reflects the same IGST/CGST/SGST shape as the DN. Without
+    # this, the SI is born with no tax rows → IGST output on GST
+    # return is missing for inter-state internal transfers.
+    if getattr(dn, "taxes_and_charges", None):
+        si.taxes_and_charges = dn.taxes_and_charges
+    for tax in dn.taxes or []:
+        si.append(
+            "taxes",
+            {
+                "charge_type": tax.charge_type,
+                "account_head": tax.account_head,
+                "rate": tax.rate,
+                "tax_amount": tax.tax_amount,
+                "description": tax.description,
+                "cost_center": tax.cost_center or default_cc,
+                "included_in_print_rate": tax.included_in_print_rate,
             },
         )
     # Insert in Draft (docstatus=0). Submit is the ERP user's call.
@@ -800,24 +938,43 @@ def _build_stn_payload(
         )
 
     tgt_company = _warehouse_company(target_wh)
-    billing_addr = _resolve_company_primary_address(tgt_company)
-    shipping_addr = _resolve_warehouse_address(target_wh)
-    internal_customer = _find_internal_customer(
-        target_company=tgt_company,
-        source_company=_warehouse_company(source_wh),
-    )
+    # GROUNDING CORRECTION (live Harmony smoke 2026-05-29): both
+    # billing and shipping blocks mirror the DESTINATION warehouse's
+    # address. The earlier read (billing = target Company's primary
+    # Address, shipping = target warehouse Address) was wrong for STN
+    # semantics — the receiver invoice + the physical ship-to both
+    # point to the same destination warehouse.
+    destination_addr = _resolve_warehouse_address(target_wh)
+    billing_addr = destination_addr
+    shipping_addr = destination_addr
+    # GROUNDING CORRECTION (live Harmony smoke 2026-05-29): the STN
+    # payload's customer[].customerId is the TARGET WAREHOUSE's EE
+    # `company_id` from /getAllLocation — NOT the §8e Customer Map's
+    # ee_customer_id. The earlier §10.G grounding read this as the
+    # wholesale-customer c_id; that was wrong. With c_id, EE returns
+    # 400 "Location does not exist". With company_id, EE returns 200
+    # with SuborderID/OrderID/InvoiceID.
     ee_customer_id = frappe.db.get_value(
-        "EasyEcom Customer Map",
-        {
-            "erpnext_doctype": "Customer",
-            "erpnext_name": internal_customer,
-        },
-        "ee_customer_id",
+        "EasyEcom Location",
+        {"mapped_warehouse": target_wh},
+        "ee_company_id",
     )
-    warehouse_display_name = (
-        frappe.db.get_value("Warehouse", target_wh, "warehouse_name")
+    # Both billing.name and shipping.name reflect the destination
+    # warehouse's EE-side bare WH name. EE's location_name carries the
+    # tenant prefix (e.g. "Harmony Consumer Co. (B2C WH - Delhi)"); EE's
+    # internal lookup keys on the part inside the parens
+    # ("B2C WH - Delhi"). When the location has no paren suffix
+    # (the tenant root location), we send the bare location_name as-is.
+    tgt_ee_loc_name = frappe.db.get_value(
+        "EasyEcom Location", {"mapped_warehouse": target_wh}, "location_name"
+    )
+    destination_name = _strip_tenant_prefix(
+        tgt_ee_loc_name
+        or frappe.db.get_value("Warehouse", target_wh, "warehouse_name")
         or target_wh
     )
+    billing_name = destination_name
+    shipping_name = destination_name
 
     payload: dict[str, Any] = {
         "orderType": "stocktransferorder",
@@ -840,13 +997,16 @@ def _build_stn_payload(
         "customer": [
             {
                 "customerId": int(ee_customer_id or 0),
+                "name": shipping_name,  # EE expects the target EE
+                # location_name here — that's how EE resolves the STN's
+                # destination warehouse. customerId alone is insufficient.
                 "billing": _addr_to_payload(
                     billing_addr,
-                    name_override=warehouse_display_name,
+                    name_override=billing_name,
                 ),
                 "shipping": _addr_to_payload(
                     shipping_addr,
-                    name_override=warehouse_display_name,
+                    name_override=shipping_name,
                 ),
             }
         ],
@@ -888,12 +1048,44 @@ def _extract_int_prefix(label: str | None, fallback: int) -> int:
 
 
 def _fmt_utc(date_value: Any, posting_time: Any) -> str:
-    """`YYYY-MM-DD HH:MM:SS` UTC per §10.G orderDate spec."""
+    """`YYYY-MM-DD HH:MM:SS` UTC per §10.G orderDate spec.
+
+    Frappe stores DN posting_date + posting_time as naive values in the
+    site's timezone. We must convert site_tz → UTC before formatting;
+    otherwise EE interprets the IST clock as UTC and the displayed time
+    drifts by the site_tz offset (smoke 2026-05-29: site IST 22:32:03
+    rendered on EE as 2026-05-30 04:02:03 IST — exactly +5:30 ahead).
+    """
     if not date_value:
         return ""
-    if posting_time is None:
-        return f"{date_value} 00:00:00"
-    return f"{date_value} {posting_time}".split(".")[0]
+    from datetime import date as _date, datetime as _datetime, time as _time, timedelta as _td
+    from zoneinfo import ZoneInfo
+
+    site_tz = ZoneInfo(frappe.utils.get_system_timezone() or "Asia/Kolkata")
+
+    if isinstance(date_value, _datetime):
+        local_dt = date_value
+    else:
+        if isinstance(date_value, str):
+            date_value = frappe.utils.getdate(date_value)
+        if posting_time is None:
+            t = _time(0, 0, 0)
+        elif isinstance(posting_time, _td):
+            # Frappe Time fields come back as timedelta from MariaDB
+            total = int(posting_time.total_seconds())
+            h, rem = divmod(total, 3600)
+            m, s = divmod(rem, 60)
+            t = _time(h % 24, m, s)
+        elif isinstance(posting_time, _time):
+            t = posting_time
+        else:
+            t = frappe.utils.get_time(str(posting_time).split(".")[0])
+        local_dt = _datetime.combine(date_value, t)
+
+    if local_dt.tzinfo is None:
+        local_dt = local_dt.replace(tzinfo=site_tz)
+    utc_dt = local_dt.astimezone(ZoneInfo("UTC"))
+    return utc_dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _fmt_ist(date_value: Any) -> str:
@@ -922,6 +1114,21 @@ def _location_key_for_warehouse(warehouse: str) -> str | None:
         {"mapped_warehouse": warehouse, "workflow_state": "Live", "enabled": 1},
         "location_key",
     )
+
+
+def _strip_tenant_prefix(location_name: str) -> str:
+    """Extract the bare WH name from an EE location_name.
+
+    EE returns location names as "<tenant> (<WH name>)" for branch
+    warehouses and "<tenant>" alone for the tenant root. STN createOrder
+    expects the bare WH name (the part inside the parens). For the
+    tenant root, the bare name IS the location_name.
+    """
+    import re
+    if not location_name:
+        return ""
+    m = re.search(r"\(([^)]+)\)\s*$", location_name)
+    return m.group(1).strip() if m else location_name.strip()
 
 
 def _get_account_settings() -> dict[str, Any]:
@@ -1261,38 +1468,248 @@ def fire_pending_transfer_pushes() -> dict[str, Any]:
 # ============================================================
 
 
-def validate_pre_submit(doc: Any, method: str | None = None) -> None:
-    """DN.validate hook — runs on every save AND on submit. For
-    internal-customer DNs targeting EE-mapped warehouses, refuse the
-    save if multiple distinct (source, target) warehouse pairs appear
-    across lines. Same 'split, don't auto-multiplex' principle as
-    §9's mixed-warehouse rule.
+def section10_before_save(doc: Any, method: str | None = None) -> None:
+    """DN.before_save hook — derives item warehouses + addresses from
+    the §10 header fields BEFORE ERPNext's own validate runs (which
+    would otherwise reject items without a warehouse).
 
-    Returns silently for non-internal-customer DNs (Gate-0 inert)."""
+    For internal-customer DNs (the §10 trigger):
+      - DN.set_warehouse + items[].warehouse  ← Transfer From
+      - items[].target_warehouse              ← destination Company GIT
+      - DN.customer_address + shipping_address ← Address linked to
+        Transfer To Warehouse
+      - DN.ecs_section10_target_warehouse mirrored from Transfer To
+
+    Returns silently for non-internal-customer DNs.
+    """
     if doc.doctype != "Delivery Note":
         return
-    if not int(getattr(doc, "is_internal_customer", 0) or 0):
+    # §10 trigger = user-toggled "Is Internal Transfer (§10)" checkbox
+    # OR (fallback) the customer is an internal customer. Either way we
+    # treat it as §10 routing.
+    is_section10 = int(
+        getattr(doc, "ecs_is_section10_transfer", 0) or 0
+    ) or int(getattr(doc, "is_internal_customer", 0) or 0)
+    if not is_section10:
         return
     if getattr(frappe.flags, PING_PONG_FLAG, False):
         return
 
-    pairs: set[tuple[str, str]] = set()
-    for line in doc.items or []:
-        source = (line.warehouse or "").strip()
-        target = (line.target_warehouse or "").strip()
-        if source and target:
-            pairs.add((source, target))
-    if len(pairs) > 1:
-        formatted = "; ".join(
-            f"{s!r} → {t!r}" for s, t in sorted(pairs)
+    transfer_from = (
+        getattr(doc, "ecs_section10_transfer_from_warehouse", None) or ""
+    ).strip()
+    transfer_to = (
+        getattr(doc, "ecs_section10_transfer_to_warehouse", None) or ""
+    ).strip()
+    if not transfer_from or not transfer_to:
+        # Let validate_pre_submit produce the user-facing error.
+        return
+
+    from ecommerce_super.easyecom.flows.transfer_inbound import (
+        _resolve_git_warehouse,
+    )
+
+    destination_company = _warehouse_company(transfer_to)
+    git_warehouse = _resolve_git_warehouse(destination_company)
+    if not git_warehouse:
+        # Surface via validate_pre_submit so the throw is consistent.
+        return
+
+    doc.ecs_section10_target_warehouse = transfer_to
+    doc.set_warehouse = transfer_from
+
+    # Override DN.represents_company per-DN so a single "Internal
+    # Customer" can serve transfers to any destination Company. The
+    # customer's stored represents_company is a default that we
+    # override here based on the FDE-picked Transfer To Warehouse. This
+    # makes ERPNext's is_internal_transfer() return True for
+    # same-Company multi-WH transfers (allowing GIT routing) and False
+    # for inter-Company transfers (one-sided OUT on DN, IPR handles IN).
+    doc.represents_company = destination_company
+
+    source_company = _warehouse_company(transfer_from)
+    if source_company == destination_company:
+        # SAME-Company multi-warehouse transfer. ERPNext's
+        # `is_internal_transfer()` returns True only when
+        # `represents_company == company` — i.e. only this case. Route
+        # stock through GIT via items[].target_warehouse; ERPNext will
+        # keep the value and validate it.
+        doc.set_target_warehouse = git_warehouse
+        for line in doc.items or []:
+            line.warehouse = transfer_from
+            line.target_warehouse = git_warehouse
+    else:
+        # INTER-Company transfer (represents_company != company).
+        # ERPNext's `validate_internal_transfer_warehouse` will clear
+        # items[].target_warehouse + DN.set_target_warehouse — so we
+        # don't set those. Stock moves one-sided OUT on DN; the IPR
+        # on the destination Company performs the IN side after the EE
+        # GRN-Complete event lands.
+        for line in doc.items or []:
+            line.warehouse = transfer_from
+
+    # Auto-fill the four address fields from the Transfer From / To
+    # warehouses' linked Addresses. Each address carries its own GSTIN
+    # (state-derived), so this is what drives India Compliance's
+    # CGST/SGST/IGST routing on the SI later.
+    #
+    # Buyer side — customer_address + shipping_address_name:
+    #   Find an Address linked to BOTH Transfer To Warehouse AND the
+    #   customer. ERPNext requires customer_address to be linked to
+    #   the customer; the warehouse link makes it the right destination
+    #   identity.
+    #
+    # Seller side — company_address + dispatch_address_name:
+    #   Find an Address linked to the Transfer From Warehouse. Drives
+    #   the source GSTIN on the SI (e.g., 07 Delhi for an inter-state
+    #   transfer out of a Delhi WH).
+    if doc.customer:
+        buyer_addr = frappe.db.sql(
+            """
+            SELECT dl1.parent AS addr_name
+            FROM `tabDynamic Link` dl1
+            INNER JOIN `tabDynamic Link` dl2
+              ON dl1.parent = dl2.parent
+            WHERE dl1.parenttype = 'Address'
+              AND dl1.link_doctype = 'Warehouse'
+              AND dl1.link_name = %s
+              AND dl2.parenttype = 'Address'
+              AND dl2.link_doctype = 'Customer'
+              AND dl2.link_name = %s
+            LIMIT 1
+            """,
+            (transfer_to, doc.customer),
+            as_dict=True,
         )
+        if buyer_addr:
+            addr_name = buyer_addr[0]["addr_name"]
+            doc.customer_address = addr_name
+            doc.shipping_address_name = addr_name
+            # Clear the cached GSTIN/place-of-supply so India
+            # Compliance's update_gst_details (also a before_save hook)
+            # re-derives them from the new customer_address. Without
+            # this, switching the buyer address mid-save leaves a stale
+            # billing_address_gstin from the previous DN's address.
+            doc.billing_address_gstin = None
+            doc.place_of_supply = None
+
+    seller_addr = frappe.db.sql(
+        """
+        SELECT dl.parent AS addr_name
+        FROM `tabDynamic Link` dl
+        WHERE dl.parenttype = 'Address'
+          AND dl.link_doctype = 'Warehouse'
+          AND dl.link_name = %s
+        LIMIT 1
+        """,
+        (transfer_from,),
+        as_dict=True,
+    )
+    if seller_addr:
+        addr_name = seller_addr[0]["addr_name"]
+        doc.company_address = addr_name
+        doc.dispatch_address_name = addr_name
+        # Same reasoning as the buyer side — clear cached company_gstin
+        # so India Compliance re-reads from the new company_address.
+        doc.company_gstin = None
+
+    # Explicit tax template selection based on the source/target
+    # warehouse GSTINs (India Compliance's auto-apply only fires when
+    # Customer.tax_category is set; our consolidated Internal Customer
+    # ships to multiple destination states so its tax_category can't
+    # be hard-coded — the substrate derives the right one per DN).
+    src_gstin = _warehouse_gstin(transfer_from)
+    tgt_gstin = _warehouse_gstin(transfer_to)
+    if src_gstin and tgt_gstin and src_gstin != tgt_gstin:
+        template = frappe.db.sql_list(
+            """
+            SELECT name FROM `tabSales Taxes and Charges Template`
+            WHERE company = %s
+              AND name LIKE %s
+              AND name NOT LIKE %s
+            LIMIT 1
+            """,
+            (doc.company, "%Out-state%", "%RCM%"),
+        )
+        template = template[0] if template else None
+        if template and not doc.taxes_and_charges:
+            doc.taxes_and_charges = template
+            doc.set("taxes", [])
+            tpl = frappe.get_doc(
+                "Sales Taxes and Charges Template", template)
+            default_cc = (
+                frappe.db.get_value("Company", doc.company,
+                                    "cost_center") or "")
+            for t in tpl.taxes or []:
+                doc.append("taxes", {
+                    "charge_type": t.charge_type,
+                    "account_head": t.account_head,
+                    "rate": t.rate,
+                    "description": t.description,
+                    "cost_center": t.cost_center or default_cc,
+                    "included_in_print_rate": t.included_in_print_rate,
+                })
+
+
+def validate_pre_submit(doc: Any, method: str | None = None) -> None:
+    """DN.validate hook — enforces the §10 routing contract.
+
+    For internal-customer DNs, requires Transfer From + Transfer To
+    Warehouses on the DN header (the new Customer-anchored routing
+    fields). Mutations happen in section10_before_save; this hook
+    only validates that the contract is satisfied.
+
+    Returns silently for non-internal-customer DNs.
+    """
+    if doc.doctype != "Delivery Note":
+        return
+    is_section10 = int(
+        getattr(doc, "ecs_is_section10_transfer", 0) or 0
+    ) or int(getattr(doc, "is_internal_customer", 0) or 0)
+    if not is_section10:
+        return
+    if getattr(frappe.flags, PING_PONG_FLAG, False):
+        return
+
+    transfer_from = (
+        getattr(doc, "ecs_section10_transfer_from_warehouse", None) or ""
+    ).strip()
+    transfer_to = (
+        getattr(doc, "ecs_section10_transfer_to_warehouse", None) or ""
+    ).strip()
+    if not transfer_from or not transfer_to:
         frappe.throw(
             frappe._(
-                "§10 refuses a Delivery Note with multiple distinct "
-                "(source, target) warehouse pairs: {0}. Split into "
-                "separate Delivery Notes (one source/target pair per "
-                "DN)."
-            ).format(formatted)
+                "§10 transfer requires both Transfer From Warehouse "
+                "and Transfer To Warehouse to be set on the DN header. "
+                "Tick 'Is Internal Transfer (§10)' and pick the two "
+                "warehouses."
+            )
+        )
+    if transfer_from == transfer_to:
+        frappe.throw(
+            frappe._(
+                "§10 Transfer From Warehouse and Transfer To Warehouse "
+                "must differ."
+            )
+        )
+
+    from ecommerce_super.easyecom.flows.transfer_inbound import (
+        _resolve_git_warehouse,
+    )
+
+    destination_company = _warehouse_company(transfer_to)
+    git_warehouse = _resolve_git_warehouse(destination_company)
+    if not git_warehouse:
+        frappe.throw(
+            frappe._(
+                "§10 cannot route this transfer through GIT — no "
+                "Goods-In-Transit warehouse resolved for destination "
+                "Company {0!r}. Either set "
+                "`Company.default_in_transit_warehouse` on the "
+                "destination Company, or create a Warehouse named "
+                "'Goods In Transit' under it."
+            ).format(destination_company)
         )
 
 

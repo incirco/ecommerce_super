@@ -303,9 +303,13 @@ def process_inbound_grn(
     )
     # Internal-supplier flag for the §10 IPR. ERPNext's
     # validate_inter_company_reference requires the source-side DN
-    # reference at the header level for internal transfers.
+    # reference at the header level for internal transfers; India
+    # Compliance additionally needs the SI reference when one was
+    # drafted (different-GSTIN path).
     pr_doc.is_internal_supplier = 1
     pr_doc.inter_company_reference = tm.delivery_note
+    if tm.sales_invoice:
+        pr_doc.inter_company_invoice_reference = tm.sales_invoice
     # §10 back-ref so subsequent doc-event hooks can find the Transfer Map.
     if frappe.get_meta("Purchase Receipt").get_field(
         "ecs_section10_transfer_map"
@@ -538,11 +542,30 @@ def _find_internal_supplier(
 
 
 def _resolve_git_warehouse(company: str) -> str | None:
-    """Account.default_in_transit_warehouse — §3.3.6 + §10 packet."""
-    return frappe.db.get_value(
-        "EasyEcom Account",
-        {"enabled": 1},
-        "default_in_transit_warehouse",
+    """Resolve the Goods-In-Transit warehouse for a given Company.
+
+    GROUNDING CORRECTION (live Harmony smoke 2026-05-29): for
+    inter-Company §10 transfers each Company needs its own GIT
+    (ERPNext requires items[].target_warehouse to belong to the
+    destination Company). Lookup order:
+      1. Company.default_in_transit_warehouse (per-Company default)
+      2. Convention: Warehouse {warehouse_name="Goods In Transit",
+         company=<this Company>}
+      3. EasyEcom Account.default_in_transit_warehouse (legacy
+         account-level fallback — single-Company sites only)
+    """
+    return (
+        frappe.db.get_value(
+            "Company", company, "default_in_transit_warehouse"
+        )
+        or frappe.db.get_value(
+            "Warehouse",
+            {"warehouse_name": "Goods In Transit", "company": company},
+            "name",
+        )
+        or frappe.db.get_value(
+            "EasyEcom Account", {"enabled": 1}, "default_in_transit_warehouse"
+        )
     )
 
 
@@ -782,11 +805,52 @@ def _draft_internal_purchase_invoice(transfer_map: Any) -> str | None:
     if not supplier:
         return None
 
+    # Default Cost Center for the target Company (mirrors the SI fix).
+    default_cc = (
+        frappe.db.get_value("Company", target_company, "cost_center") or ""
+    )
+    # Resolve the per-side addresses so India Compliance computes the
+    # correct (different) GSTINs for company vs supplier — mirrors what
+    # the SI did on the outbound side, but inverted (we're now the
+    # buyer at the destination state).
+    target_wh_addr = frappe.db.sql(
+        """
+        SELECT dl.parent FROM `tabDynamic Link` dl
+        WHERE dl.parenttype='Address' AND dl.link_doctype='Warehouse'
+          AND dl.link_name=%s LIMIT 1
+        """,
+        (transfer_map.target_warehouse,),
+    )
+    source_wh_addr = frappe.db.sql(
+        """
+        SELECT dl.parent FROM `tabDynamic Link` dl
+        WHERE dl.parenttype='Address' AND dl.link_doctype='Warehouse'
+          AND dl.link_name=%s LIMIT 1
+        """,
+        (transfer_map.source_warehouse,),
+    )
+    company_addr = (target_wh_addr[0][0] if target_wh_addr else None)
+    supplier_addr = (source_wh_addr[0][0] if source_wh_addr else None)
+    company_gstin = (
+        frappe.db.get_value("Address", company_addr, "gstin")
+        if company_addr else None
+    )
+    supplier_gstin = (
+        frappe.db.get_value("Address", supplier_addr, "gstin")
+        if supplier_addr else None
+    )
+
     pi = frappe.new_doc("Purchase Invoice")
     pi.update(
         {
             "supplier": supplier,
             "company": target_company,
+            "cost_center": default_cc,
+            "company_address": company_addr,
+            "supplier_address": supplier_addr,
+            "shipping_address": company_addr,
+            "supplier_gstin": supplier_gstin,
+            "company_gstin": company_gstin,
             "posting_date": frappe.utils.today(),
             "due_date": frappe.utils.today(),
             "is_internal_supplier": 1,
@@ -799,6 +863,14 @@ def _draft_internal_purchase_invoice(transfer_map: Any) -> str | None:
             or "Standard Buying",
             "price_list_currency": "INR",
             "plc_conversion_rate": 1,
+            # India Compliance + ERPNext inter-Co validation needs the
+            # source-side references on the IPI header.
+            "inter_company_invoice_reference": si_name,
+            # India Compliance requires bill_no + bill_date — sourced
+            # from the GRN's supplier_invoice_number (what the EE user
+            # entered on inwarding). Resolved below from the IPR's
+            # back-ref to the EE GRN Map row; falls back to the SI's
+            # name + posting_date only if the GRN-side fields are blank.
         }
     )
     if frappe.get_meta("Purchase Invoice").get_field(
@@ -806,17 +878,120 @@ def _draft_internal_purchase_invoice(transfer_map: Any) -> str | None:
     ):
         pi.ecs_section10_transfer_map = transfer_map.name
 
-    for si_line in si.items or []:
-        pi.append(
-            "items",
-            {
-                "item_code": si_line.item_code,
-                "qty": si_line.qty,
-                "rate": si_line.rate,
-                "warehouse": transfer_map.target_warehouse,
-                "item_tax_template": si_line.item_tax_template,
-            },
+    # Resolve bill_no + bill_date from the most recent IPR's GRN Map row
+    # (carries the supplier_invoice_number entered on the EE side).
+    bill_no = None
+    bill_date = None
+    for row in (transfer_map.internal_purchase_receipts or [])[::-1]:
+        pr_name = row.internal_purchase_receipt
+        if not pr_name:
+            continue
+        grn_id = frappe.db.get_value(
+            "Purchase Receipt", pr_name, "ecs_easyecom_grn_id"
         )
+        if not grn_id:
+            continue
+        grn_map = frappe.db.get_value(
+            "EasyEcom GRN Map", {"ee_grn_id": grn_id},
+            ["grn_invoice_number", "grn_invoice_date"], as_dict=True,
+        )
+        if grn_map and (grn_map.get("grn_invoice_number") or "").strip():
+            bill_no = grn_map["grn_invoice_number"]
+            bill_date = grn_map.get("grn_invoice_date") or si.posting_date
+            break
+    if not bill_no:
+        bill_no = si_name
+        bill_date = si.posting_date
+    pi.bill_no = bill_no
+    pi.bill_date = bill_date
+
+    # Build a per-item index of already-submitted IPR lines under this
+    # Transfer Map so we can back-link each IPI line to its IPR line.
+    # ERPNext reads `pi_item.purchase_receipt` + `pr_detail` to pick the
+    # right expense account (COGS when PR is linked; Stock Received But
+    # Not Billed otherwise — the latter is a holding account intended
+    # for "invoice arrives before receipt", which is the wrong story
+    # here since our IPR was created first).
+    ipr_lines_by_item: dict[str, tuple[str, str]] = {}
+    for row in transfer_map.internal_purchase_receipts or []:
+        pr_name = row.internal_purchase_receipt
+        if not pr_name:
+            continue
+        if int(
+            frappe.db.get_value("Purchase Receipt", pr_name, "docstatus")
+            or 0
+        ) != 1:
+            continue
+        for pr_line in frappe.db.get_all(
+            "Purchase Receipt Item",
+            filters={"parent": pr_name},
+            fields=["name", "item_code"],
+        ):
+            ipr_lines_by_item.setdefault(
+                pr_line["item_code"], (pr_name, pr_line["name"])
+            )
+
+    for si_line in si.items or []:
+        line = {
+            "item_code": si_line.item_code,
+            "qty": si_line.qty,
+            "rate": si_line.rate,
+            "warehouse": transfer_map.target_warehouse,
+            "item_tax_template": si_line.item_tax_template,
+            # ERPNext inter-transfer validates per-line back-refs to
+            # the source SI line. Without these, save throws "Sales
+            # Invoice Item is mandatory for internal transfer".
+            "sales_invoice_item": si_line.name,
+            "purchase_order": None,
+            "purchase_order_item": None,
+            "cost_center": si_line.cost_center or default_cc,
+        }
+        # Link the matching IPR line so ERPNext uses the COGS account
+        # rather than Stock Received But Not Billed.
+        ipr_match = ipr_lines_by_item.get(si_line.item_code)
+        if ipr_match:
+            line["purchase_receipt"] = ipr_match[0]
+            line["pr_detail"] = ipr_match[1]
+        pi.append("items", line)
+
+    # Copy the SI's tax table onto the IPI — IGST/CGST/SGST input
+    # credit lands on this doc for the destination state's GSTR-2/3B.
+    # Without this, the IPI is born with no tax rows → input credit
+    # missing from GST returns.
+    #
+    # taxes_and_charges field points to a *Purchase* template on IPI,
+    # not the Sales template the SI carries. Map SI's "Output GST …"
+    # to the corresponding "Input GST …" purchase template under the
+    # destination Company.
+    if getattr(si, "taxes_and_charges", None):
+        si_template = si.taxes_and_charges
+        purchase_template_name = si_template.replace(
+            "Output GST", "Input GST", 1
+        )
+        if frappe.db.exists(
+            "Purchase Taxes and Charges Template", purchase_template_name
+        ):
+            pi.taxes_and_charges = purchase_template_name
+    for tax in si.taxes or []:
+        # Map the Sales (Output Tax …) account head to the matching
+        # Purchase (Input Tax …) account head. India Compliance's
+        # standard CoA splits these on the GST liability vs ITC side.
+        head = tax.account_head or ""
+        purchase_head = head.replace("Output Tax", "Input Tax", 1)
+        if not frappe.db.exists("Account", purchase_head):
+            purchase_head = head  # fall back if FDE merged the accounts
+        pi.append("taxes", {
+            "category": "Total",
+            "add_deduct_tax": "Add",
+            "charge_type": tax.charge_type,
+            "account_head": purchase_head,
+            "rate": tax.rate,
+            "tax_amount": tax.tax_amount,
+            "description": tax.description,
+            "cost_center": tax.cost_center or default_cc,
+            "included_in_print_rate": tax.included_in_print_rate,
+        })
+
     pi.insert(ignore_permissions=True)
     return pi.name
 
@@ -1173,7 +1348,33 @@ def on_sales_invoice_submit(doc: Any, method: str | None = None) -> None:
             or 0
         ) == 0:
             drafted_iprs.append(pr_name)
+    # If no drafted IPRs and no SUBMITTED IPRs either → nothing to chain
+    # (the IPR will be created later by grn_pull). Returning here avoids
+    # creating an IPI before the IPR exists, which would land it on the
+    # `Stock Received But Not Billed` holding account instead of COGS.
+    submitted_iprs = [
+        row.internal_purchase_receipt
+        for row in tm.internal_purchase_receipts or []
+        if row.internal_purchase_receipt and int(
+            frappe.db.get_value("Purchase Receipt",
+                row.internal_purchase_receipt, "docstatus") or 0
+        ) == 1
+    ]
+    if not drafted_iprs and not submitted_iprs:
+        return
+    # If no drafted IPRs but SUBMITTED IPRs exist (user manually
+    # submitted IPR while SI was still draft), still run the chain —
+    # the IPI will now be born with the IPR back-link.
     if not drafted_iprs:
+        frappe.flags[PING_PONG_FLAG] = True
+        try:
+            _chain_ipi_and_debit_note(tm)
+            tm.reload()
+            new_status = _compute_transfer_status_after_ipr_submit(tm)
+            frappe.db.set_value("EasyEcom Transfer Map", tm.name,
+                {"status": new_status}, update_modified=True)
+        finally:
+            frappe.flags[PING_PONG_FLAG] = False
         return
 
     frappe.flags[PING_PONG_FLAG] = True
