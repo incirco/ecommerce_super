@@ -1338,6 +1338,23 @@ def on_sales_invoice_submit(doc: Any, method: str | None = None) -> None:
     if not frappe.db.exists("EasyEcom Transfer Map", tm_name):
         return
     tm = frappe.get_doc("EasyEcom Transfer Map", tm_name)
+
+    # Status transition first — independent of IPR chaining. SI submit
+    # advances SI-Pending → EE-Pushed (when EE push already landed) or
+    # SI-Submitted (when push still pending, e.g. paused). The IPR
+    # chain below only runs when IPRs exist; the status field must
+    # advance even if no IPRs have been pulled yet.
+    if tm.status == "SI-Pending":
+        has_ee_id = bool((tm.ee_order_id or "").strip()) or bool(
+            tm.ee_po_id
+        )
+        next_status = "EE-Pushed" if has_ee_id else "SI-Submitted"
+        frappe.db.set_value(
+            "EasyEcom Transfer Map", tm.name,
+            "status", next_status, update_modified=True,
+        )
+        tm.reload()
+
     drafted_iprs: list[str] = []
     for row in tm.internal_purchase_receipts or []:
         pr_name = row.internal_purchase_receipt

@@ -33,7 +33,7 @@ VALID_STATUS_VALUES: frozenset[str] = frozenset(
     }
 )
 
-VALID_EE_DOCTYPES: frozenset[str] = frozenset({"", "STN", "PO"})
+VALID_EE_DOCTYPES: frozenset[str] = frozenset({"", "STN", "PO", "B2B"})
 
 
 class EasyEcomTransferMap(Document):
@@ -108,7 +108,7 @@ class EasyEcomTransferMap(Document):
             frappe.throw(
                 _(
                     "EasyEcom Transfer Map ee_doctype must be empty, "
-                    "'STN', or 'PO' — got {0!r}."
+                    "'STN', 'PO', or 'B2B' — got {0!r}."
                 ).format(value)
             )
 
