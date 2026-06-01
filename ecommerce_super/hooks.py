@@ -94,6 +94,10 @@ doctype_js = {
     # §8e Stage 4: "Push to EasyEcom" button on the Customer form.
     # Only visible for customer_type=Company (§8e wholesale scope).
     "Customer": "public/js/customer_push_button.js",
+    # §10 UX: warehouse autocomplete carries EE-mapping label; once
+    # both header warehouses picked, predicts the §10 branch (STN /
+    # PO / B2B / Inert) so the FDE sees the consequence before submit.
+    "Delivery Note": "public/js/delivery_note_ee_visibility.js",
 }
 
 
@@ -374,6 +378,14 @@ doc_events: dict[str, dict[str, str]] = {
     # PIs.
     "Purchase Invoice": {
         "on_submit": "ecommerce_super.easyecom.flows.transfer_inbound.on_purchase_invoice_submit",
+    },
+    # §10 UX: keep Warehouse.ecs_ee_location_label in sync with EE
+    # Location mapping. The label is what surfaces in DN / PO / SI
+    # warehouse autocompletes so users can see EE-mapping at a glance
+    # before they pick a warehouse.
+    "EasyEcom Location": {
+        "after_save": "ecommerce_super.easyecom.flows.warehouse_label_sync.sync_on_location_save",
+        "on_trash": "ecommerce_super.easyecom.flows.warehouse_label_sync.sync_on_location_trash",
     },
 }
 

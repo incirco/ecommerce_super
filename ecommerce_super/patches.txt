@@ -38,3 +38,5 @@ ecommerce_super.patches.v0_1.refresh_easyecom_workspace_s10_stage4
 ecommerce_super.patches.v0_1.add_dn_section10_target_warehouse
 ecommerce_super.patches.v0_1.add_dn_section10_transfer_fields
 ecommerce_super.patches.v0_1.add_pull_grns_button
+ecommerce_super.patches.v0_1.add_warehouse_ee_location_label
+ecommerce_super.patches.v0_1.backfill_warehouse_ee_location_labels
