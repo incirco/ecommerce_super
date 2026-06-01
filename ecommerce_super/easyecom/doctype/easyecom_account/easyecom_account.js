@@ -626,7 +626,7 @@ frappe.ui.form.on("EasyEcom Account", {
             __("Discover")
         );
 
-        // Push group — batch sweeps across §8d / §8e / §8f.
+        // Push group — batch sweeps across §8d / §8e / §8f / §9.
         frm.add_custom_button(
             __("Items (§8d)"),
             () => _runPushAllPending(frm),
@@ -642,6 +642,52 @@ frappe.ui.form.on("EasyEcom Account", {
             () => frm.events.push_all_pending_suppliers_action(frm),
             __("Push All Pending")
         );
+        frm.add_custom_button(
+            __("POs (§9)"),
+            () => frm.events.push_all_pending_pos_action(frm),
+            __("Push All Pending")
+        );
+
+        // Pull group — manual triggers for pull-side flows. Mirrors
+        // the in-section buttons so the FDE doesn't have to hunt
+        // through tall sections to find them.
+        frm.add_custom_button(
+            __("GRNs (§9 inbound)"),
+            () => _runPullAllPendingGrns(frm),
+            __("Pull")
+        );
+
+        // Master Mode group — one-way flips per master (Items / Customers /
+        // Suppliers). Each delegates to its existing field-event handler so
+        // the confirm dialog, already-flipped guard, and audit log behave
+        // identically whether triggered from the section button or here.
+        frm.add_custom_button(
+            __("Flip Items → ERPNext-Mastered"),
+            () => frm.events.flip_to_erpnext_mastered_action(frm),
+            __("Master Mode")
+        );
+        frm.add_custom_button(
+            __("Flip Customers → ERPNext-Mastered"),
+            () => frm.events.flip_to_erpnext_mastered_customers_action(frm),
+            __("Master Mode")
+        );
+        frm.add_custom_button(
+            __("Flip Suppliers → ERPNext-Mastered"),
+            () => frm.events.flip_to_erpnext_mastered_suppliers_action(frm),
+            __("Master Mode")
+        );
+
+        // Auto-Push group — steady-state lifecycle controls.
+        frm.add_custom_button(
+            __("Go Live (Enable Auto-Push)"),
+            () => _runGoLiveEnableAutoPush(frm),
+            __("Auto-Push")
+        );
+        frm.add_custom_button(
+            __("Pause All (Kill-Switch)"),
+            () => _runPauseAllAutoPush(frm),
+            __("Auto-Push")
+        );
     },
 
     discover_products_action(frm) {
@@ -654,6 +700,61 @@ frappe.ui.form.on("EasyEcom Account", {
 
     pull_all_pending_grns_action(frm) {
         _runPullAllPendingGrns(frm);
+    },
+
+    push_all_pending_pos_action(frm) {
+        if (!_ensureSaved(frm, "Save the Account before running the PO push sweep.")) {
+            return;
+        }
+        frappe.confirm(
+            __(
+                "<b>Push all pending POs to EasyEcom?</b><br><br>" +
+                    "Enqueues one /WMS/Cart/CreatePurchaseOrder call per candidate. " +
+                    "Candidates: PO.docstatus=1, target warehouse EE-mapped, " +
+                    "no PO Map row yet OR Map.status=Mapped. Returns immediately; " +
+                    "per-PO progress lands in Queue Jobs / PO Map row status."
+            ),
+            () => {
+                frappe.call({
+                    method:
+                        "ecommerce_super.easyecom.flows.po_push.push_all_pending_pos",
+                    args: {account: frm.doc.name},
+                    freeze: true,
+                    freeze_message: __("Enqueuing PO pushes…"),
+                    callback(r) {
+                        const result = r.message || {};
+                        if (!result.ok) {
+                            frappe.msgprint({
+                                title: __("PO Push Sweep Failed"),
+                                message: result.message || __("Unknown error."),
+                                indicator: "red",
+                            });
+                            return;
+                        }
+                        frappe.msgprint({
+                            title: __("PO Push Enqueued"),
+                            message: __(
+                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
+                                    "Sample PO names: {2}",
+                                [
+                                    result.total_considered,
+                                    result.enqueued_count,
+                                    (result.queue_job_names_sample || []).join(", ") || "—",
+                                ]
+                            ),
+                            indicator: "green",
+                        });
+                    },
+                    error() {
+                        frappe.msgprint({
+                            title: __("PO Push Sweep Failed"),
+                            message: __("The Push All Pending POs call itself failed."),
+                            indicator: "red",
+                        });
+                    },
+                });
+            }
+        );
     },
 
     go_live_enable_auto_push_action(frm) {
