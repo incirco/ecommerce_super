@@ -120,7 +120,8 @@
    "label": "Correlation ID",
    "reqd": 1,
    "search_index": 1,
-   "description": "UUIDv7 from operation entry point (§6.2). Threads through every API Call and downstream record."
+   "in_standard_filter": 1,
+   "description": "UUIDv7 from operation entry point (§6.2). Threads through every API Call and downstream record. Filterable from the list view to trace one logical operation end-to-end across the four log DocTypes (gh#18)."
   },
   {
    "fieldname": "parent_correlation_id",
