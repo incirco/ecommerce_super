@@ -255,3 +255,116 @@ Before Section 3 can be built, the local environment must exist: Frappe bench (v
 **Adjacent finding closed during §9 corrective commit (worth recording):** the pause mechanism `pause_all_auto_push` was previously zeroing only Items/Customers/Suppliers toggles, leaving `auto_push_pos_on_save` uncovered. This was a pre-existing §9-Stage-2 latent gap that predated the corrective commit; fixed under §9 corrective scope (authorised mid-build). Pause now genuinely means pause across all four auto-push toggles.
 
 **§9 closed. Next: §10 Stock Transfer Flows (packet at `spec_sections/section_10_stock_transfer_packet.md`, Stage 1 build prompt drafted).**
+
+---
+
+## §10 Stock Transfer Flows — BUILD COMPLETE · CLOSEOUT DONE (2026-05-30)
+
+**Status:** §10 built across 4 stages. All §10 modules green (61 tests + 1 documented skip across substrate, outbound, inbound, isolation-guard, stage4). Test isolation hardened at Stage 3 — §10 modules now green in both cold and suite-after-sibling contexts. Full app suite 880/905 (25 pre-existing §8 failures unchanged across all §10 work). No live integration smoke on Harmony yet — that's the §10 closeout's primary operational carry-forward.
+
+**Stages and commits on `main`:**
+- Stage 1 Substrate — EasyEcom Transfer Map DocType (9-state enum), Transfer IPR Link child, `ensure_internal_party_pairs_for_account` (N+N model — corrected from packet's original N×(N−1) which ERPNext refuses), `precheck_section10_go_live`, STN settings, CREATE_ORDER endpoint constant, custom-field back-refs on DN/SI/PR/PI. 40/40 tests green.
+- Stage 2 Outbound — DN submit hook with Gate-0, multi-warehouse-DN validate-refuse, 5 preconditions, Transfer Map row + SI auto-draft (different-GSTIN) + STN push via createOrder, PO branch routing-and-resolution (wire dispatch deferred to Stage 4 per packet), pause-defer via `ecs_pending_ee_push` + `fire_pending_transfer_pushes` un-pause runner, cancel/amend stub-blockers. 12/12 tests green.
+- Stage 3 Inbound — test-isolation hardening (item #0; extended `cleanup_easyecom_state` with Internal-pair fabric wipe; new isolation guard test module 3/3), §9 GRN-pull routing handoff at correct insertion point, IPR auto-creation reusing §9 helpers with §10 overrides, IPR submit gate (4 cases: same-GSTIN auto / SI-Submitted auto / SI-Draft holds without Discrepancy / DN-Submitted-Locked blocks with Discrepancy), `Sales Invoice.on_submit` doc_event auto-retry, IPI auto-draft mirroring SI dispatched qty, Debit Note auto-draft on gap, multi-GRN cumulative arithmetic with DN revision/cancellation, EE-originated standalone IPR via option (ii) — Discrepancy + FDE-driven resolution via §9 Create-PR action. 6 tests + 1 skip + 3 isolation guard.
+- Stage 4 Variance/UI/Closeout-items — audit-Comment-on-Transfer-Map fix (Comment lives on surviving Transfer Map before DN deletion — load-bearing for auditability), PO-branch wire dispatch lifted from Stage 2 deferral (calls §9 CreatePurchaseOrder), aged GIT cron + ToDo + Comment with description-substring idempotency (avoided ToDo schema change), Transfer Map list view (status colours + 4 filter shortcuts), §17 FDE Worklist 3 cards (Drift / EE-originated / Submitted-DN-late-GRN — submitted-DN-late-GRN placed on FDE worklist per Claude Code's defensible reasoning), Transfer Map form multi-GRN cumulative summary via whitelisted `get_cumulative_receipt_summary` method (no schema change), Sync Record list filter for entity_type=Delivery Note, status correction (Fully-Received requires no draft DN), workspace/sidebar lockstep regression intact. 16/16 tests green.
+
+**Locked design decisions (resolved during build):**
+- **N+N Internal Customer/Supplier cardinality** (corrected from packet's original N×(N−1) which ERPNext structurally refuses via at-most-one-per-`represents_company`). One Internal Customer per destination Company with `companies` child enumerating allowed sources; symmetric for Internal Supplier. Runtime lookup: `is_internal_customer=1 AND represents_company=<dest> AND <source> in companies[*].company`.
+- **EE-Pushed-but-SI-Pending status overload** — `ee_order_id` populated on Transfer Map disambiguates without new enum value. SI-Pending covers both "EE pushed, SI drafted" and "EE pushed, SI drafted, IPR drafted".
+- **Pending-EE-push mechanism for pause** — new `ecs_pending_ee_push` (Check) on Transfer Map (distinct from §9's `ecs_pending_po_status_push` Int because §10 outbound is single-call vs §9's multi-state status channel).
+- **PO-branch source-vendor resolution** — source Company → Internal Supplier → Supplier Map → ee_vendor_id chain. Refuse-with-Drift if unresolvable. NO auto-creation of EE Vendors (would cross §8f scope).
+- **Cancel/amend stub-blockers** — explicit user-facing error refusing DN cancel/amend on EE-pushed transfers until EE cancelOrder endpoint payload is grounded.
+- **EE-originated standalone path = option (ii)** — Integration Discrepancy raised, NO PR auto-created (Frappe refuses blank-supplier saves; that's the wedge). FDE resolves via §9 `Create-PR-from-GRN` action with picked Internal Supplier.
+- **Audit Comment lives on Transfer Map** (not on the about-to-be-deleted draft DN) — survives DN deletion. Load-bearing for auditability.
+- **Submitted-DN-late-GRN placement on §17 FDE Worklist** — defensible reasoning: it IS raised as Integration Discrepancy by Stage 3 (integration's abnormal-state flag), and ERP-side reconciliation needs FDE awareness via the Discrepancy + ToDo channel, not the operational dashboard.
+- **Aged GIT idempotency via description-substring matching** — avoided ToDo back-ref custom field permission issues. Slightly less robust if descriptions are manually edited, but keeps §10 isolated from ToDo schema modifications.
+
+**Closeout artifacts (shipped this session):**
+- `process/primers/FDE_PRIMER_section_10_stock_transfer.md` — own primer, Parts A-L analogous to §9 primer.
+- `process/test_scripts/section_10_stock_transfer.md` — full FDE test script with 8 sections + load-bearing checks list + live integration smoke (§8.5).
+- `spec_sections/SPEC_10_patch_notes.md` — rewrites stale SPEC.md §10.1-§10.8. Notable: §10.6 SUPERSEDED-INVERTED from "multi-Company excluded" to "multi-Company different-GSTIN as primary case via Internal-pair pattern".
+- This BUILD_TRACKER entry.
+- USER-side: docx regen via unpack/edit/pack pipeline against patched SPEC.md.
+
+**Pre-existing failures unchanged:** 25 (24 §8 + 1 §9 standing). §10 work introduced zero new failures across all 4 stages.
+
+**Carry-forwards past §10 closeout:**
+- **STN self-GRN routing live-verification on Harmony** — pattern is code-correct, mock-tested, NOT live-verified. Trigger a real self-GRN (batch load, opening stock entry on a mapped warehouse), inspect payload's `vendor_c_id`, confirm equals warehouse `company_id`. If holds: §10's EE-originated path is live-correct. If not: §9's check needs adjustment. Was a §9 carry-forward; now overdue.
+- **STN cancel/amend endpoint payload grounding** — required to lift Stage 2 stub-blockers. EE-side ask. First ERP-user cancellation of an EE-pushed STN is the operational trigger.
+- **§10 first-deployment integration smoke on Harmony** — the live equivalent of §9's 5 Stage-3 smoke rounds. Full DN → SI draft → STN push → GRN-Complete → IPR + IPI + DN auto-creation + multi-GRN partial scenario. Until this passes, §10 is unit-and-mock-verified but not real-EE-verified. Captured as §8.5 in the test script.
+- **§9 Harmony re-smokes** — confirmed clean ("smokes are good to move ahead" per USER); worth a final double-check before §10 integration smoke since Stage 3 reuses §9 GRN pull machinery deeply.
+- **Multi-GRN partial cumulative live-smoke for §10** — unit-mock-verified across all branches. The §10 integration smoke (§8.5) is the first live exercise.
+- **PO-branch wire dispatch live-smoke** — Stage 4 wired against mocks. Real non-EE-source-with-EE-target deployment is the first real exercise.
+- **`_resolve_for_receipt` (§9) vs inline Item resolution (§10) divergence** — Stage 3 couldn't reuse §9's resolver (short-circuits on supplier_missing; §10 has no Supplier Map by design). Item resolution forked across §9 and §10 inbound. Watch for drift if §9's resolver receives bug fixes.
+- **§9 `Sales Invoice.on_submit` hook scope guard** — §10 introduced this hook (auto-retry drafted IPRs scoped via `ecs_section10_transfer_map` back-ref). §11+ will likely add their own SI hooks. Both must scope-guard on their own back-ref fields. Cross-section collision risk if not designed in.
+- **§10 Operations Dashboard for ERP users** — explicitly deferred per packet. ERPNext-native UX (ToDos + Comments + list views) covers it for now.
+
+**§10 closed. Next: §11 — TBD in numbering scheme (likely sales-flow-adjacent; deferred until designed). §10's closeout is independent of §11 design; no blocker.**
+
+---
+
+## §10 Live Integration Smoke (2026-06-01) — Case C closed + 2 latent bug fixes + UX layer
+
+**Commits on `main`:** `cd27d0f` (substrate) + `cc73de6` (UX). Pushed to `incirco/ecommerce_super@main`.
+
+**What surfaced from the live smoke:**
+
+This session was the §10 equivalent of §9's Stage-3 Harmony smoke rounds, and like §9's it produced a corrective commit. Three distinct outcomes:
+
+### (a) Case C closed — the §10 decision matrix is now fully grounded
+
+The pre-smoke §10 packet had a 3-branch decision matrix (Inert / STN / PO). The reality is **4 branches** — Case C (source EE-mapped, target NOT EE-mapped) was unspecified in the original packet. Closed this session by grounding `orderType="businessorder"` against live Harmony:
+
+| Source EE-mapped? | Target EE-mapped? | Branch | EE primitive |
+| --- | --- | --- | --- |
+| ❌ | ❌ | Inert | (no EE call) |
+| ✅ | ✅ | STN | `createOrder · orderType=stocktransferorder` |
+| ❌ | ✅ | PO | `CreatePurchaseOrder` (Internal Supplier) |
+| ✅ | ❌ | **B2B** | `createOrder · orderType=businessorder` (Internal Customer wholesale c_id) |
+
+Discovery phase artefacts: rejected orderTypes `b2border`, `wholesaleorder`, `B2B`, `B2BOrder`, `B2C` (all returned "Order type is not valid" against a fresh orderNumber). **EE validation order surprise:** orderNumber uniqueness is checked BEFORE orderType validity on `/createOrder`. Probe results that returned "Order Number already exists" for invalid orderTypes were false positives during discovery — they did not actually validate the type. **DN-26-00036 is a permanent EE-side artifact** from the discovery phase (an early "B2B" probe accidentally created an order despite returning 400). Substrate Drifts cleanly on orderNumber clash; FDE handles via manual EE-side cleanup.
+
+### (b) Two latent bugs fixed (unit-test-invisible)
+
+Both bugs were silently breaking parts of §10 in production while Stage 3 unit tests showed green. This is a real test-discipline gap, worth recording as a carry-forward lesson.
+
+**Bug 1 — SI back-link never written.** `_draft_internal_sales_invoice` created the SI with `ecs_section10_transfer_map=None` and a `# back-fill below` comment that was never honoured. Every §10 SI ever drafted had a NULL back-link. Impact: `on_sales_invoice_submit` short-circuited at the top (`if not tm_name: return`), **silently neutralising the entire SI-submit cascade.** No auto-retry of drafted IPRs, no IPI auto-draft chain, no DN auto-draft chain — the entire post-SI-submit machinery from Stage 3 was not firing in practice. Fix: `push_one_transfer` now writes `SI.ecs_section10_transfer_map = map_name` immediately after `_upsert_transfer_map` returns (`transfer_push.py:221-229`).
+
+**Bug 2 — Transfer Map status stuck at SI-Pending forever.** `on_sales_invoice_submit` early-returned when no IPRs existed yet (typical state pre-GRN). That made sense for IPR chaining, but it also meant TM.status field never advanced from SI-Pending on SI submit. Impact: TMs sat at SI-Pending indefinitely even after EE push succeeded; required manual `db.set_value` to advance to EE-Pushed. Fix: status transition now runs at the top of `on_sales_invoice_submit` (`transfer_inbound.py:1340-1355`), independent of IPR state. `SI-Pending → EE-Pushed` when ee_order_id (or ee_po_id for PO branch) is captured; `SI-Pending → SI-Submitted` when push is still pending (paused-substrate case).
+
+**Root cause analysis:** both bugs are unit-test-invisible because the Stage 3 tests asserted the cascade behaviour *conditional on* the back-link being set, not that the back-link itself was written. Tests mocked the inputs to the system under test, which is normal practice — but it meant real callers' failure to provide those inputs went unverified. **Carry-forward lesson:** future test scripts should include explicit end-to-end checks of state propagation between document submissions (not just the consequences of each submission in isolation).
+
+### (c) UX layer added — warehouse EE-mapping visibility
+
+New surface to address the operational gap "FDE can't tell from warehouse name which §10 branch a DN will route to":
+- `Warehouse.ecs_ee_location_label` (Data, read-only, in_list_view, in_standard_filter) — format `"EE: <location_name> (#<location_key>)"` for Live + enabled locations; empty otherwise.
+- Bidirectional sync from EasyEcom Location after_save / on_trash (catches re-points + orphaned warehouses).
+- Backfill patch ran across all warehouses (smoke-test.local: 4 labeled, 6 unmapped).
+- Whitelisted `warehouse_with_ee_label` autocomplete (EE-mapped warehouses sort first; label appears as description column).
+- Whitelisted `predict_section10_branch(source, target)` — mirrors live `push_one_transfer` decision logic, returns predicted branch + color + explanation.
+- DN form wiring (`delivery_note_ee_visibility.js`): autocomplete on 5 header warehouse fields, post-selection EE label as field description, branch chip via `frm.dashboard.add_indicator` once both §10 fields are filled, plus explanation block under `is_internal_customer`.
+
+Custom field propagation to PO / Stock Entry / Material Request / SI is automatic (label is on `tabWarehouse`); the branch-prediction chip is **DN-only** by design (it predicts §10 branches; other doctypes aren't §10 triggers).
+
+### Live evidence
+
+4 smoke DNs against Harmony:
+- DN-26-00036: B2B probe, locked on EE (one-time discovery artifact, no code action).
+- DN-26-00037: B2B, EE OrderID 541298505, EE-Pushed, manual retro-patch (pre-bugfix).
+- DN-26-00039: B2B, EE OrderID 542798798, EE-Pushed, manual retro-patch (pre-bugfix).
+- DN-26-00040: **B2B, EE OrderID 542802258, EE-Pushed, fully clean — no manual intervention.** TM ECS-XFER-DN-26-00040 has status=EE-Pushed, ee_doctype=B2B, all three EE ids captured; SI SINV-26-00023 docstatus=1 with back-link auto-populated; Sync Record ECS-SR-2026-06-01-001167 Success.
+
+### Files changed
+
+Substrate (`cd27d0f`): `easyecom_transfer_map.json/.py` (ee_doctype enum + validator), `transfer_push.py` (B2B branch + SI back-link fix + B2B preconditions), `transfer_inbound.py` (SI-submit status transition fix).
+
+UX (`cc73de6`): `easyecom/api/warehouse_query.py` (new), `easyecom/flows/warehouse_label_sync.py` (new), `patches/v0_1/add_warehouse_ee_location_label.py` + `backfill_warehouse_ee_location_labels.py` (new), `public/js/delivery_note_ee_visibility.js` (new), `hooks.py` (Location doc_events + DN doctype_js), `patches.txt`.
+
+### Carry-forwards from this session
+
+- **B2B-branch destination GRN flow is purely ERPNext-native** by design (stock has left EE's universe by going to a non-EE target). No EE inbound primitive exists; no §10 inbound hook fires for B2B. ERP user creates a regular Purchase Receipt / Stock Entry on the destination side via standard ERPNext UX. Documented explicitly so FDEs don't expect §10 inbound machinery to fire.
+- **Discovery-phase probe artifact (DN-26-00036)** locked on Harmony EE. One-time, no code action. Future discovery probes should use deliberately-noisy orderNumbers (`PROBE-{timestamp}`) so failed probes don't create silent EE-side artifacts.
+- **Test discipline carry-forward** (the latent-bug lesson): future test scripts include end-to-end checks of state propagation across document submissions, not just per-document behaviour.
+- **Warehouse label propagation to non-DN forms** — chip is DN-only by design. If §11 or §12 introduce branch decisions on other doctypes, build the chip there with appropriate scope-guard logic.
+
+**§10 now actually closed.** Build complete + live-verified + corrective commit committed. Next: §11 design (TBD scope), with the discipline lessons from §9 and §10 baked in.

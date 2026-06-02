@@ -2104,72 +2104,399 @@ Equally: inventory variance reconciliation (an enhancement post-v0.1) compares E
 
 # 10. Stock Transfer Flows
 
-Stock Transfers between warehouses come in four flavours depending on whether the source and destination are linked to EasyEcom locations. Each flavour has its own choreography. The integration's job is to apply the right one based on the Source-of-Truth Map.
+Stock Transfers between warehouses use ERPNext's Internal Customer / Internal Supplier pattern with Goods-In-Transit (GIT) as the inventory bridge, NOT the Stock Entry model the pre-build SPEC described. The integration creates documents (DN, SI, IPR, IPI, Debit Note) and orchestrates submissions; it never modifies GL postings. The decision matrix is four-branch on (source EE-mapped, target EE-mapped); the build is live-verified on Harmony across all four branches.
 
-## 10.1 The decision matrix
+This section was substantially rewritten 2026-05-30 (closeout) and amended 2026-06-01 (post-live-integration smoke + corrective). The pre-build SPEC's four-flavour Stock Entry model is **superseded**: §10's actual model is Internal-Customer-DN-based.
 
-| Source | Destination | Behaviour |
-| --- | --- | --- |
-| Non-linked | Non-linked | Pure ERPNext Stock Entry. EasyEcom is not involved at all. Flow handled by ERPNext core. |
-| Non-linked | Linked (EE) | Stock Entry out of source in ERPNext + GRN at destination in EE → produces Internal Purchase Receipt in ERPNext on EE GRN completion. See 6.2. |
-| Linked (EE) | Non-linked | Dispatch from EE → Stock Entry into destination in ERPNext on EE dispatch event. See 6.3. |
-| Linked (EE) | Linked (EE) | EE-side internal transfer. ERPNext mirrors with two Stock Entries (out, in) on EE confirmation. See 6.4. |
+## 10.0 The §10 principle
 
-## 10.2 Non-linked → Linked (most common case)
+**The integration NEVER modifies GL postings.** It orchestrates document creation (DNs, SIs, IPRs, IPIs, Debit Notes) but never auto-submits anything financial except IPRs when financial preconditions hold. ERP users submit; the integration drafts. The discipline that justifies every "Draft, not Submit" decision throughout the rest of this section.
 
-Goods leave a non-EE warehouse (e.g., a 3PL or in-house facility not under EE management) and arrive at an EE-managed location. The integration must:
+## 10.1 The decision matrix (4-branch, grounded 2026-06-01)
 
-1. Allow the user to create a Stock Entry of type Material Transfer in ERPNext with source = non-linked WH, destination = linked WH
-1. On Stock Entry submit: source warehouse is debited (goods leave), but destination warehouse is NOT credited yet — the goods are in transit
-1. In-Transit Warehouse pattern: ERPNext's standard support for transit warehouses is used. Stock moves source → in_transit_warehouse
-1. Goods physically arrive at EE location; warehouse staff does GRN in EE referencing the Stock Entry as the source document
-1. EE GRN polling detects the GRN; integration creates an Internal Purchase Receipt (Material Transfer-In type) in ERPNext
-1. Internal PR moves stock from in_transit_warehouse → destination linked warehouse
-1. Internal PR carries back-references: ecs_source_stock_entry, ecs_easyecom_grn_id
-Variances (qty short, damaged in transit) are handled exactly like vendor GRN variances: rejected_qty splits to a Rejected Warehouse, an Integration Discrepancy is raised if accepted_qty + rejected_qty doesn't match the dispatched qty.
+The matrix is two-dimensional on (source EE-mapped, target EE-mapped). All four quadrants have either a grounded EE primitive or a deliberate inert outcome.
 
-## 10.3 Linked → Non-linked
+| Source EE-mapped? | Target EE-mapped? | Branch | EE primitive |
+| --- | --- | --- | --- |
+| ❌ | ❌ | **Inert** | (no EE call) — Gate-0 silent skip; pure ERPNext-native |
+| ✅ | ✅ | **STN** | `createOrder · orderType=stocktransferorder` |
+| ❌ | ✅ | **PO** | `CreatePurchaseOrder` (Internal Supplier representation) |
+| ✅ | ❌ | **B2B** | `createOrder · orderType=businessorder` (Internal Customer wholesale c_id) |
 
-Goods leave an EE-managed location for a non-EE destination (e.g., transferred to a B2B distributor's warehouse the seller manages):
+Sources of grounding: STN payload verified against live Harmony round-trip 2026-05-29 (DN-STNORDERTEST1); B2B payload verified against live Harmony round-trip 2026-06-01 (DN-26-00040). PO branch reuses §9's `CreatePurchaseOrder` wire.
 
-1. Stock Entry created in ERPNext with source = linked WH, destination = non-linked WH
-1. Submit pushes a dispatch instruction to EE (POST /inventory/V3/updateInventory adjustment of type Stock-Out with reason Transfer)
-1. EE confirms; ERPNext stock moves source → in_transit_warehouse
-1. Goods physically arrive; user marks Stock Entry received in ERPNext (a manual step; the integration does not see the arrival)
-1. ERPNext stock moves in_transit_warehouse → destination
+The Inert branch is the most important invariant: a DN between two non-EE-mapped warehouses sees zero integration activity. The lifecycle is exactly ERPNext-native. No Transfer Map, no Sync Record, no flag. Same Gate-0 invariant as §9.
 
-## 10.4 Linked → Linked (EE-side internal transfer)
+The fourth branch (B2B) was discovered during the live integration smoke; it was structurally absent from the original design packet. **Lesson: future spec decision-matrices must enumerate all quadrants explicitly and gate "design complete" on each having either a grounded EE primitive or a deliberate inert outcome.**
 
-- EE supports its own internal transfer between locations
-- Originated either in ERPNext or in EE; the integration handles both directions
-- ERPNext-originated: Stock Entry pushes a Transfer instruction to EE; EE executes, fires confirm webhook
-- EE-originated: detected on inventory pull; ERPNext creates a corresponding Stock Entry
-- In both cases, ERPNext stock movement is a single Stock Entry with both source and destination warehouses, no in-transit warehouse needed
-- Confirmation is required from EE before ERPNext considers the transfer settled
+## 10.2 Internal Customer / Internal Supplier pattern (N+N model)
 
-## 10.5 Non-linked → Non-linked
+§10 uses ERPNext's `is_internal_customer` / `is_internal_supplier` flags to model inter-Company stock movement. Crucial cardinality finding from Stage 1 implementation: ERPNext enforces **at-most-one Internal Customer per `represents_company`**, so the original N×(N−1)-per-pair model was structurally refused. The actual ERPNext-idiomatic model is N+N:
 
-ERPNext-only. The integration is not involved. Stock Entry behaves exactly as it does in vanilla ERPNext.
+- **One Internal Customer per destination Company.** Named `INTL-CUST-for-{destination}`. `is_internal_customer=1`, `represents_company=<destination>`. The `companies` ("Allowed To Transact With") child table enumerates every source Company permitted to sell to this destination.
+- **One Internal Supplier per source Company.** Named `INTL-SUPP-from-{source}`. Symmetric — `companies` child lists every target.
 
-## 10.6 Multi-company transfers
+Auto-created at go-live via `ensure_internal_party_pairs_for_account(account_name)`. Idempotent; reconciles `companies` child additively on re-run. The Internal Customer is also auto-pushed to EE via §8e's Customer machinery so `ee_customer_id` (the regular customerId) and `c_id` (the wholesale c_id from `/Wholesale/CreateCustomer`) are both captured.
 
-- Transfers crossing Company boundaries are NOT covered by this section
-- Inter-Company stock movement uses ERPNext's Inter-Company flow (Sales Invoice + Purchase Invoice) regardless of EE linkage
-- The integration does, however, push the resulting movements to EE on each Company's side per the Source-of-Truth Map for the warehouses involved
+**Runtime lookup pattern:** for a transfer from Company A to Company B:
+- Find Customer where `is_internal_customer=1 AND represents_company=B AND A in companies[*].company`.
+- Find Supplier symmetrically: `is_internal_supplier=1 AND represents_company=A AND B in companies[*].company`.
 
-## 10.7 Edge cases
+The `is_internal_*` flags drive correct GL behaviour: ERPNext's selling/buying controllers handle the inter-Company representation natively. Source-side SI and destination-side IPI are recognised as paired internal documents; ITC flows correctly through GSTR-1 / GSTR-2/3B.
 
-- Stock Entry created with wrong source/destination type (e.g., destination should have been linked but Source-of-Truth Map row missing): blocks at validate; FDE configures the map and retries
-- Goods damaged in transit: the GRN at destination shows accepted_qty < dispatched_qty; difference goes to Inventory Shrinkage account via standard ERPNext mechanisms; an Integration Discrepancy of severity Info is raised for FDE awareness
-- Lost in transit: if no GRN arrives within configurable threshold (default 30 days), an Integration Discrepancy of severity Warning is raised; FDE investigates and posts adjustments
-- EE-side transfer cancelled mid-flight: detected on next inventory pull as state mismatch; ERPNext Stock Entry must be reverse-and-replayed by FDE
+## 10.3 Outbound — DN submit triggers the whole flow
 
-## 10.8 Audit trail
+**Gate 0**: on Delivery Note `on_submit` (ALWAYS runs first):
+- `dn.is_internal_customer == 1`? AND at least one of (source warehouse, target warehouse) is EE-mapped via §8a `location_key`?
+- If either condition fails → return immediately. No Transfer Map row, no SI auto-draft, no EE push, no Sync Record. Integration is silently inert.
 
-- Every Stock Entry produced by the integration carries ecs_easyecom_source_event (link to EE event ID) and ecs_easyecom_source_type (transfer / GRN / dispatch / adjustment)
-- Every Internal Purchase Receipt carries the same back-references plus ecs_source_stock_entry
-- Stock Ledger Entries inherit these fields via standard Frappe document parent-link
-- An auditor can trace any stock movement to its EE source
+**Multi-warehouse DN** (line items spanning multiple distinct source/target pairs) is rejected at validate-pre-submit with an error directing user to split. Same "split, don't auto-multiplex" principle as §9's mixed-warehouse rule.
+
+**Preconditions** (after Gate 0; miss → Transfer Map status=Drift with `flag_reason`):
+1. Internal Customer pair fabric exists (look up per §10.2).
+2. Internal Customer pushed to EE (Customer Map has `ee_customer_id`).
+3. Every line item has an Item Map row.
+4. Source and target Company GSTINs resolvable (Warehouse → Address → gstin; falls back to Company.gstin).
+5. Target warehouse has a resolvable Address (used in STN/PO payload).
+
+**Transfer Map creation:** every §10 DN that clears Gate 0 + preconditions creates exactly one `EasyEcom Transfer Map` row, keyed on the DN name (`ECS-XFER-{dn_name}`). The Map carries:
+- `delivery_note`, `source_warehouse`, `target_warehouse`
+- `source_company_gstin`, `target_company_gstin` (per-Warehouse-Address resolution, falls back to Company.gstin — supports multi-state GSTIN registrations)
+- `gstin_different` (derived)
+- `ee_doctype`: enum `STN / PO / B2B`
+- `ee_order_id`, `ee_suborder_id`, `ee_invoice_id` (Data strings from EE response on STN/B2B branches)
+- `ee_po_id` (Int, PO branch only)
+- `sales_invoice` (link to auto-drafted SI when `gstin_different=1`)
+- `internal_purchase_invoice`, `draft_debit_note` (links to auto-drafted IPI/DN on inbound)
+- `internal_purchase_receipts` (Table → IPR Link child, multi-GRN accumulator)
+- `git_balance` (derived; current GIT inventory for this transfer)
+- `status` (9-state enum: Mapped / SI-Pending / SI-Submitted / EE-Pushed / Partial-Received / Fully-Received / DN-Submitted-Locked / Drift / Disabled)
+- `flag_reason`, `last_observed_at`, `ecs_pending_ee_push`
+
+**SI auto-draft (different-GSTIN only):** if `gstin_different=1` AND all preconditions clear:
+- Auto-create an Internal Sales Invoice in **Draft** (docstatus=0), sized to the DN's dispatched quantities.
+- Customer = the resolved Internal Customer; source Company = source warehouse's Company.
+- `update_stock=0` (the DN already did stock-out; SI is GST-only).
+- **`ecs_section10_transfer_map` back-link populated to the Transfer Map's name BEFORE the SI is saved.** This is a load-bearing invariant — see §10.x SI back-link contract below.
+- Items mirror DN lines: same Item, same qty, same rate, same Item Tax Template.
+- The SI is auto-drafted because the destination-side IPR auto-submit (different-GSTIN) is gated on SI being submitted; the cascade hands off to the ERP user at this draft point.
+
+**EE push — branch decision:**
+- Source EE-mapped, target EE-mapped → STN (§10.5).
+- Source EE-mapped, target NOT EE-mapped → B2B (§10.6).
+- Source NOT EE-mapped, target EE-mapped → PO (§10.7).
+- Neither EE-mapped → Inert (Gate 0 already returned).
+
+**Status transitions on outbound:**
+- `Mapped → SI-Pending` when SI is drafted (different-GSTIN cases).
+- `Mapped → EE-Pushed` when EE push succeeds (same-GSTIN cases, no SI involved).
+- `SI-Pending → EE-Pushed` when EE push succeeds AND SI is later submitted (this transition fixed 2026-06-01; previously stuck at SI-Pending forever — see §10.x status transition fix).
+- `SI-Pending → SI-Submitted` when push is still pending (paused-substrate case).
+- Any failure on the push → `Drift` with `flag_reason`. DN stays Submitted in ERPNext (integration never cancels valid ERPNext documents).
+
+## 10.4 Outbound — Same-GSTIN STN flow (Linked → Linked, same GSTIN)
+
+- DN submitted, Gate 0 + preconditions clear.
+- Transfer Map row created, status `Mapped → EE-Pushed`.
+- STN payload pushed (§10.5).
+- Stock parks in destination Company's `default_in_transit_warehouse` (GIT) on DN submit.
+- No SI, no IPI, no DN — same GSTIN means no legal supply between entities; pure stock movement.
+- Inbound (§10.8) creates and auto-submits an IPR moving GIT → destination warehouse.
+
+## 10.5 STN payload contract (grounded against live Harmony 2026-05-29)
+
+Endpoint: `POST {{BaseURL}}/webhook/v2/createOrder` (constant: `CREATE_ORDER`). Bearer JWT only (no x-api-key needed on this path).
+
+```
+{
+  "orderType": "stocktransferorder",   // exact string
+  "orderNumber": "<dn_name>",          // content-channel key
+  "orderDate": "YYYY-MM-DD HH:MM:SS",  // UTC, converted from site_tz explicitly
+  "expDeliveryDate": "YYYY-MM-DD HH:MM:SS",
+  "shippingCost": 0,
+  "paymentMode": 5,                    // from stn_default_payment_mode setting
+  "shippingMethod": 1,                 // from stn_default_shipping_method
+  "packageWeight": <sum_grams_or_0>,
+  "packageHeight": 0, "packageWidth": 0, "packageLength": 0,
+  "items": [
+    {
+      "OrderItemId": "<dn_name>-L<idx>",
+      "Sku": "<resolved_sku>",
+      "Quantity": "<qty_as_string>",
+      "Price": <line_rate>,
+      "itemDiscount": 0
+    }
+  ],
+  "customer": [          // single-element ARRAY (EE quirk, not object)
+    {
+      "customerId": <ee_customer_id_int>,
+      "billing": { "name": "<paren_stripped_location_name>", "addressLine1": ..., ... },
+      "shipping": { "name": "<paren_stripped_location_name>", "addressLine1": ..., ... }
+    }
+  ]
+}
+```
+
+**OMITTED fields** (the live test payload included these with placeholders; we strip them cleanly — test discipline asserts each is *not present* in the built payload): `is_market_shipped`, `closed`, `queue`, `paymentGateway`, `walletDiscount`, `promoCodeDiscount`, `prepaidDiscount`, `paymentTransactionNumber`, `collectableAmount`, `salesmanId`, `discount`, `marketplace_id`, `custom_fields`, `latitude`, `longitude`, `gst_number`, `appointment_number`, `appointment_date`, `company_carrier_id`, `is_pricing_master`, `orderAssignmentProperty`, `productName`.
+
+**Customer name shape (2026-06-01 grounding finding):** all three `name` fields (top-level, billing.name, shipping.name) must be the **paren-stripped EE location_name** (e.g. `"B2C WH - Delhi"` extracted from `"Harmony Consumer Co. (B2C WH - Delhi)"`). EE matches its internal location registry on this string; sending the Frappe Warehouse.warehouse_name or the full parenthesised location_name was rejected.
+
+**`customerId` semantic (2026-06-01 correction):** for STN, `customerId` is the target warehouse's EE company_id (from `/getAllLocation`) — EE treats it as a destination-location resolution, NOT a wholesale-customer record. The earlier reading that it referenced an Internal Customer pushed via `/Wholesale/CreateCustomer` was wrong; 8 consecutive STN pushes with the wholesale customerId returned `{"code":400,"message":"Location does not exist"}`. The Internal Customer in ERPNext remains a routing anchor (its `is_internal_customer=1`, `represents_company`, `companies[]` enable ERPNext's internal-transfer DN mechanics), but no EE-side wholesale customer is provisioned for STN onboarding.
+
+**`orderDate` timezone (2026-06-01 finding):** `orderDate` must be converted from site_tz to UTC explicitly. Concatenating Frappe's naive IST timestamp into the field caused EE to re-interpret as UTC and display the order at +5:30 ahead of the actual DN submit time. The `_fmt_utc` helper does this conversion.
+
+**Response:**
+```
+{ "code": 200, "data": {
+    "OrderID": "<int_as_string>",
+    "SuborderID": "<int_as_string>",
+    "InvoiceID": "<int_as_string>"
+}}
+```
+All three IDs stored as Data (strings) on Transfer Map. `OrderID` is the primary status-channel key.
+
+## 10.6 B2B branch — payload contract (grounded against live Harmony 2026-06-01)
+
+Same endpoint as STN (`CREATE_ORDER`). Same overall payload shape with one critical difference and one alternate field source:
+
+- `orderType: "businessorder"` — exact string. **All other plausible values rejected** by EE during discovery: `b2border`, `wholesaleorder`, `B2B`, `B2BOrder`, `B2C` all returned `"Order type is not valid"` against a fresh orderNumber.
+- `customer[].customerId`: the Internal Customer's **wholesale c_id from `/Wholesale/CreateCustomer`** (NOT the location-derived customerId used in STN). Verified `c_id=283481` on live Harmony, DN-26-00040.
+- Customer name fields and addresses follow the same paren-stripped destination-warehouse pattern as STN.
+
+**EE validation order surprise (2026-06-01 finding):** EE validates `orderNumber` uniqueness BEFORE `orderType` validity on `/webhook/v2/createOrder`. A response of `"Order Number already exists"` for an invalid `orderType` does NOT validate the type. Discovery probes must use a fresh, never-before-used `orderNumber` (recommended: `PROBE-{timestamp_to_microsecond}`) to validate orderType strings.
+
+**Destination GRN flow on B2B branch is purely ERPNext-native by design.** Stock has left EE's universe by going to a non-EE target warehouse. No EE inbound primitive fires; no §10 inbound machinery runs for B2B Transfer Maps. ERP user creates a regular Purchase Receipt or Stock Entry on the destination side via standard ERPNext UX.
+
+## 10.7 PO branch — source NOT EE-mapped, target EE-mapped
+
+Source-Company vendor resolution chain:
+1. Source Company → look up Internal Supplier where `is_internal_supplier=1 AND represents_company=<source>`.
+2. Internal Supplier → look up Supplier Map row with that Supplier.
+3. Supplier Map → `ee_vendor_id`.
+
+If unresolvable → Transfer Map status `Drift` with `flag_reason` naming the missing vendor. **NO auto-creation of EE Vendors** — that crosses §8f scope.
+
+If resolvable → reuse §9's `CreatePurchaseOrder` wire (`po_push.py`). The PO is created on EE-side at the target warehouse, against the source-Company vendor representation.
+
+- `referenceCode = <dn_name>` (parity with STN's `orderNumber` key strategy).
+- `vendorId = <resolved_ee_vendor_id>`.
+- Other fields per §9's CreatePurchaseOrder contract.
+- Response: `data.poId` → `Transfer Map.ee_po_id` (Int).
+- `Transfer Map.ee_doctype = "PO"`.
+
+Destination receipt: EE-side GRN-Complete is detected by §9's GRN pull, routed to §10 inbound (§10.8) via the `Transfer Map.delivery_note` → `po_ref_num` back-trace.
+
+## 10.8 Inbound — GRN-Complete triggers the IPR submit gate
+
+§9's GRN pull recognises §10 transfers via two paths:
+1. **Back-trace match:** `po_ref_num` matches an EasyEcom Transfer Map's `delivery_note` (or `Auto PO <dn_name>(_OR<n>)?` wrapping — EE's behaviour is inconsistent on the suffix). §9 skips its normal/drift logic; §10 inbound takes over.
+2. **Self-GRN routing:** `vendor_c_id == inwarded_warehouse_c_id` → EE-internal inward, no ERPNext-side originating DN → §10's `handle_ee_originated_grn` standalone path (see §10.10).
+
+**IPR creation** (always — every routed GRN produces an IPR):
+- Internal-Supplier-backed Purchase Receipt (`is_internal_supplier=1`).
+- Supplier = resolved Internal Supplier from §10.2 runtime lookup.
+- Company = target Company. `set_warehouse` (PR's source for the stock movement) = target Company's `default_in_transit_warehouse` (GIT).
+- Per-line `from_warehouse = GIT`, `warehouse = target_wh` (mapped via §8a `location_key`), `allow_zero_valuation_rate=1` (transfer-not-purchase).
+- Qty model reuses §9's: `received_qty = received_quantity`, `rejected_qty = qc_fail`, `accepted_qty = received_quantity − qc_fail` (derived; not lifted from bucket fields).
+- `rate = grn_detail_price / received_quantity` (line-total rule from §9 Stage 3 corrective).
+- Back-ref: `ecs_section10_transfer_map = <transfer_map_name>`.
+- Per-line `delivery_note + delivery_note_item + inter_company_reference = <dn_name>` (ERPNext's `validate_inter_company_reference` invariant).
+- Append IPR to `Transfer Map.internal_purchase_receipts` child table.
+
+## 10.9 IPR submit gate (the §10 invariant)
+
+IPR auto-creation is unconditional. IPR **auto-submit** is conditional:
+
+- **Same GSTIN** → auto-submit. Stock moves GIT → destination.
+- **Different GSTIN AND source-side SI is SUBMITTED** → auto-submit.
+- **Different GSTIN AND source-side SI is NOT submitted** (Draft or missing) → IPR stays Draft. ToDo + Comment on the IPR. **NO Integration Discrepancy raised** — ERP-user pending, not FDE config issue. The §17 FDE Worklist does NOT pick it up.
+- **Submitted Debit Note exists on Transfer Map AND new GRN arrives** → IPR stays Draft regardless of SI state. **Integration Discrepancy raised**, kind=`"Late GRN after submitted DN"` — FDE concern.
+
+**Why the SI-submit gate exists (GSTR-2B coherence):** for different-GSTIN transfers, the SI must legally crystallise the source-side supply before the destination Company can receipt stock. Auto-submitting the IPR with an unsubmitted SI would create destination-side stock without source-side legal output — a tax-reporting incoherence.
+
+**Auto-retry on SI submit:** `Sales Invoice.on_submit` doc_event hook auto-retries drafted IPRs on the linked Transfer Map. If the gate now clears, IPRs auto-submit and the chain continues (IPI auto-draft, DN auto-draft if gap). Hands-off cascade.
+
+**This is the second instance of the "refuse to auto-submit when financial preconditions unmet" principle in §10.** The first being SI-not-submitted; the second being DN-already-submitted on late GRN. Both follow the same invariant.
+
+**IPI auto-draft (different-GSTIN, post-IPR-submit):**
+- Purchase Invoice in Draft, `is_internal_supplier=1`, supplier = same Internal Supplier as IPR.
+- Company = target Company. `update_stock=0`.
+- Line items mirror the source-side **SI's** dispatched qty (NOT IPR's received qty — full ITC claim).
+- Mandatory fields (per India Compliance + ERPNext inter-Company validation, discovered during smoke):
+  - `bill_no` from GRN Map's `grn_invoice_number`, `bill_date` from `grn_invoice_date`.
+  - `company_address` = destination warehouse Address; `supplier_address` = source warehouse Address.
+  - `supplier_gstin` = source WH Address's GSTIN; `company_gstin` = destination WH Address's GSTIN.
+  - `inter_company_invoice_reference` = source SI name.
+  - `items[].sales_invoice_item` = SI line name.
+  - `items[].purchase_receipt + pr_detail` = IPR line.
+  - `cost_center` on header + lines + taxes from Company.cost_center.
+  - `taxes` copied from SI with mapping. `taxes_and_charges` template name remapped "Output GST → Input GST" (ERPNext refuses a Sales template on PI).
+- Cross-refs: `ecs_section10_transfer_map`, `purchase_receipt` (links to IPR).
+- `Transfer Map.internal_purchase_invoice` set to this PI.
+
+**Auto-Debit-Note (different-GSTIN, gap > 0):**
+- Purchase Invoice with `is_return=1` in Draft (ERPNext's Debit Note pattern).
+- Supplier = Internal Supplier; Company = target; `return_against = <IPI_name>`.
+- Line items: per-Item gap qty = (dispatched_qty − cumulative_received_qty), at IPI's rate, with IPI's tax breakdown. Skip lines where gap is 0.
+- `Transfer Map.draft_debit_note` set to this PI.
+- **Genuinely novel — no §9 analogue.** Reverses ITC proportionally on the gap.
+
+**Same-GSTIN flow → no IPI, no DN regardless of gap.** Variance shows up as GIT balance only (§10.11).
+
+**Chain timing fixes (2026-06-01):**
+- *Premature IPI:* if SI was submitted BEFORE the GRN arrived, eager IPI creation on SI submit produced an IPI with empty per-line `purchase_receipt` link → ERPNext booked to Stock Received But Not Billed (SRB-NB) instead of COGS. Fixed: `on_sales_invoice_submit` defers IPI creation when no IPR exists; IPI is created by grn_pull's chain after the first IPR lands.
+- *Orphan IPI:* if user manually submitted the IPR while SI was draft, then later submitted SI → original hook only iterated drafted IPRs → found none → returned without chaining → IPI never created. Fixed: `on_sales_invoice_submit` also chains when only submitted IPRs exist.
+
+## 10.10 Multi-GRN cumulative arithmetic (the auto-DN revision)
+
+Each follow-up GRN against the same Transfer Map creates a new IPR row on the Transfer Map's `internal_purchase_receipts` child. Cumulative received per Item = Σ across all submitted IPRs.
+
+- **Draft DN auto-revises** as cumulative received grows: line qtys shrink to match the new gap. Audit Comment on the **Transfer Map** records the revision.
+- **Draft DN auto-cancels** (deleted; drafts can't be cancelled in ERPNext) if cumulative received closes the gap (received == dispatched). **The audit Comment writes to the Transfer Map BEFORE the draft DN deletion** so the audit trail survives. Load-bearing for auditability.
+- IPI does NOT revise on multi-GRN — stays sized to the SI's dispatched qty for full ITC claim. Only the DN reflects the gap.
+
+**Status transitions on inbound:**
+- After first partial IPR submit: `Partial-Received`.
+- After cumulative receipt closes (cumulative == dispatched, no draft DN remaining): `Fully-Received`. **(Important correction 2026-06-01: `Fully-Received` requires cumulative == dispatched AND no draft DN. A draft-DN-present transfer with cumulative == dispatched stays `Partial-Received` because the gap is recognised but not acknowledged. The status moves to `Fully-Received` only when the draft DN is auto-cancelled by gap closure, OR moves to `DN-Submitted-Locked` when ERP user submits the DN.)**
+- After ERP user submits the draft DN: `DN-Submitted-Locked` via `Purchase Invoice.on_submit` doc_event detecting `is_return=1` matching `Transfer Map.draft_debit_note`.
+
+**Submitted-DN-Late-GRN block:** subsequent GRNs against a `DN-Submitted-Locked` Transfer Map trigger the IPR Draft + Discrepancy path described in §10.9.
+
+## 10.11 EE-originated standalone IPR (the §9 self-GRN entry point)
+
+`vendor_c_id == inwarded_warehouse_c_id` on a GRN → EE-internal inward (batch loads, opening-stock entries, EE-side transfers we didn't originate). §9's pull-handler routes these via `handle_ee_originated_grn`.
+
+§10's response: **no auto-IPR.** Frappe refuses blank-supplier saves; no Transfer Map to look up an Internal Supplier from. Integration Discrepancy raised, kind=`"EE-originated transfer (self-GRN)"`. FDE resolves via §9's existing `Create-PR-from-GRN` action with a manually-picked Internal Supplier.
+
+**Carry-forward:** the self-GRN routing check (`vendor_c_id == warehouse company_id`) is code-correct, mock-tested, but NOT live-verified on Harmony. No real self-GRN sample has been triggered on the sandbox. Live-verification by triggering a real self-GRN is needed to confirm the assumption holds on real data.
+
+## 10.12 Variance, aged GIT, and the cancel/amend stub-blocker
+
+**GIT-always invariant:** every §10 transfer parks stock in the destination Company's GIT warehouse (`Company.default_in_transit_warehouse`) at DN submit. Stock moves GIT → destination only when the IPR submits, only for received qty. The balance stays in GIT and is the variance signal. The `Transfer Map.git_balance` field reports the current open GIT balance at any moment.
+
+**Aged GIT detection:** GIT balance > 0 after `lost_in_transit_threshold_days` (existing setting from §3.3.6, default 30) → daily cron in `easyecom/flows/transfer_aged_git.py` creates a ToDo on the originating DN's owner + Comment on the DN. Idempotent via description-substring matching (no ToDo schema change). Pause-respects: paused accounts skip the scan.
+
+**Cancel/amend stub-blocker:** DN cancel or DN amend on an EE-pushed Transfer Map is refused at the ERPNext level with a clear error directing to the integration team. The EE cancelOrder endpoint payload is not yet grounded; the stub-blocker prevents silent desyncs. DNs in pre-push states (Mapped, Drift, SI-Pending without `ee_order_id`) cancel cleanly.
+
+## 10.13 Multi-state GSTIN model
+
+India practice: one Company can register multiple GSTINs (one per state branch) tagged to specific warehouse Addresses. §10's GSTIN resolution `_warehouse_gstin(warehouse)` checks Warehouse → Address → gstin FIRST; falls back to Company.gstin. Both `transfer_push.py` (`gstin_different` computation, STN payload) and `EasyEcomTransferMap._populate_company_gstins` use this resolution.
+
+A multi-state Same-Company transfer (e.g. STC Delhi 07 → STC Mumbai 27 within one Frappe Company) is `gstin_different=1`. ERPNext's `is_internal_transfer()` returns True (because `customer.represents_company == DN.company` after substrate override); `make_gl_entries` is SKIPPED for SI/IPI on submit — by ERPNext design. India Compliance still reads tax rows from the docs for GSTR-1 / GSTR-2/3B reporting. **Net book impact: zero (stock moves, no GL). Net GST impact: also zero across the Company** (output IGST on SI in one state's return offsets input IGST on IPI in the other state's return).
+
+Inter-Company (cross-Frappe-Company): `is_internal_transfer()` returns False; `make_gl_entries` runs normally on SI (DR Debtors, CR Revenue, CR IGST output) and IPI (DR Expense, DR IGST input, CR Creditors). Unrealized P/L bridges the two Companies' books for elimination at consolidation.
+
+FDE awareness: same-Company-multi-state is "books-zero, GST-only." Don't expect Debtors / Revenue ledger entries on these.
+
+## 10.14 Routing model — Customer-anchored DN header fields
+
+ERPNext's selling controller (`validate_internal_transfer_warehouse`) clears `items[].target_warehouse` for inter-Company DNs (`represents_company != company`), breaking the original "items-warehouse-anchored" routing inference. Same-Company case keeps it. The behaviour difference forced a redesign.
+
+Adopted model: Customer-anchored DN header fields drive routing:
+- `ecs_is_section10_transfer` (Check, auto-fetches `customer.is_internal_customer`)
+- `ecs_section10_transfer_from_warehouse` (Link Warehouse)
+- `ecs_section10_transfer_to_warehouse` (Link Warehouse)
+
+These are visible + mandatory only when the checkbox is ticked. `before_validate` derives everything else from them:
+- `set_warehouse`, `items[].warehouse` ← Transfer From
+- `set_target_warehouse`, `items[].target_warehouse` ← destination Company's GIT
+- `company_address`, `dispatch_address_name` ← Address linked to Transfer From Warehouse
+- `customer_address`, `shipping_address_name` ← Address linked to BOTH Transfer To Warehouse AND Customer
+- `doc.represents_company` ← destination Company (overridden per-DN so a single "Internal Customer" can serve any destination)
+- Tax template attached when `gstin_different = 1`
+- Stale `billing_address_gstin` / `place_of_supply` / `company_gstin` cleared so India Compliance's `update_gst_details` re-derives them
+
+This pattern also enables a **single "Internal Customer" per deployment** (not per-destination-Company) with multi-Company `companies` child table + multiple Addresses linked to it (one per destination WH). `_find_internal_customer` has a strict-then-loose lookup (strict = legacy per-destination model; loose = single-customer model).
+
+## 10.15 SI back-link contract (load-bearing invariant — 2026-06-01)
+
+The Stage 2 `_draft_internal_sales_invoice` had a subtle bug shipped between 2026-05-29 and 2026-06-01: SI was created with `ecs_section10_transfer_map=None` and an intended back-fill that was never executed. Every §10 SI drafted in that window had a NULL back-link. Consequence: `on_sales_invoice_submit` short-circuited at the empty back-link check, silently neutralising the entire SI-submit cascade (auto-retry of drafted IPRs, IPI auto-draft, DN auto-draft — none of it fired in practice).
+
+**Invariant locked:**
+- **Every §10-created SI MUST have `ecs_section10_transfer_map` populated to its Transfer Map's name BEFORE the SI document is saved.** The back-link is load-bearing for the entire SI-submit doc_event cascade.
+- Substrate: `push_one_transfer` writes `SI.ecs_section10_transfer_map = map_name` immediately after `_upsert_transfer_map` returns (commit `cd27d0f`, `transfer_push.py:221-229`).
+- Test discipline: end-to-end tests must assert SI back-link is set BEFORE SI submit, not only assert the cascade fires GIVEN a set back-link. The original Stage 3 test suite mocked the back-link being set, which is why the bug was invisible to unit tests.
+
+**Symmetric status transition fix:** `on_sales_invoice_submit` previously ran status transitions inside the IPR-handling branch, which early-returned when no IPRs existed (typical pre-GRN state). Transfer Map.status stuck at `SI-Pending` indefinitely even after EE push succeeded. Fix landed same commit (`transfer_inbound.py:1340-1355`): status transitions run at the top of the hook, independent of IPR state. `SI-Pending → EE-Pushed` when `ee_order_id` (or `ee_po_id`) is captured; `SI-Pending → SI-Submitted` when push is still pending (paused-substrate case).
+
+**Lesson generalises:** when tests mock the inputs to the system under test, they can't catch real callers' bugs that fail to provide those inputs. Apply in §11+ test scripts: include explicit end-to-end checks of state propagation between document submissions, not only per-document checks.
+
+## 10.16 Role separation
+
+Three roles touch §10. Knowing which is responsible for what saves operational confusion.
+
+- **FDE / EasyEcom System Manager** — integration health: Drift Transfer Maps, EE-originated Discrepancies, late-GRN Discrepancies, aged GIT cron health. Surfaced via §17 FDE Worklist (3 cards: Drift count, EE-originated Discrepancy count, Submitted-DN-Late-GRN Discrepancy count).
+- **ERP user** — business flow: DN creation, SI submission (different-GSTIN gate), IPI submission, DN (Debit Note) submission, aged GIT decisions, late-GRN reconciliation. Surfaced via ERPNext-native UX (ToDos, Comments on documents, list views, the Pull GRNs Now manual-trigger button on EasyEcom Account form).
+- **EasyEcom Operator** — read-only on §10 surfaces.
+
+The §17 FDE Worklist surfaces **integration-health items only.** ERP user concerns are surfaced via ToDos + Comments on the actual documents — native ERPNext UX, no integration-specific dashboard. The Operations Dashboard for ERP users is explicitly deferred as future polish.
+
+## 10.17 UX layer (warehouse EE-mapping visibility, 2026-06-01)
+
+FDEs creating §10 DNs had no visual cue indicating which §10 branch a chosen (source, target) warehouse pair would route to. Built in commit `cc73de6`:
+
+- `Warehouse.ecs_ee_location_label` (Data, read-only, in_list_view=1, in_standard_filter=1). Format `"EE: <location_name> (#<location_key>)"` for Live + enabled EasyEcom Locations; empty otherwise.
+- Bidirectional sync: EasyEcom Location `after_save` recomputes the label on current AND prior `mapped_warehouse` (catches re-points). `on_trash` recomputes on the orphaned warehouse. Gate matches `transfer_push._is_ee_mapped_warehouse` exactly — label cannot drift from routing decision.
+- DN-form: 5 header warehouse fields use a custom autocomplete that sorts EE-mapped warehouses first with label as description column.
+- Branch-prediction chip via `frm.dashboard.add_indicator(...)` once both §10 fields are filled. Explanation block under `is_internal_customer`. **DN-only by design** — chip predicts §10 branches; other doctypes aren't §10 triggers.
+
+Backfill patch ran across all existing warehouses at deployment time.
+
+## 10.18 Onboarding fabric checklist
+
+A complete Internal Customer + Internal Supplier fabric for §10 needs:
+
+**ONE Customer** (any deployment-friendly name, e.g. "Internal Customer"):
+- `is_internal_customer = 1`
+- `gst_category = Registered Regular`
+- `represents_company = <any one Company>` (default; substrate overrides per-DN)
+- `companies` child = ALL Frappe Companies that can sell internally
+- `email_id`, `mobile_no` populated (legacy `/Wholesale/CreateCustomer` requirement — kept for non-§10 paths)
+- Multiple Addresses linked: one per destination warehouse it can ship to (each Address also linked to the Warehouse + Company)
+
+**ONE Internal Supplier per source Company:**
+- `is_internal_supplier = 1`
+- `gst_category = Registered Regular`
+- `represents_company = <source Company>`
+- `companies` child = all destination Companies (so any can buy from it)
+- All warehouse Addresses also linked to it (India Compliance needs registered address coverage)
+
+**For each Warehouse:**
+- Linked Address with state-appropriate GSTIN + `gst_category = Registered Regular`
+- Address also linked to: the Warehouse, the Company, and (for destination WHs) the Internal Customer, and (for source WHs) the Internal Supplier
+
+**For each Company:**
+- `gst_category = Registered Regular` (not the default Unregistered)
+- Primary HQ Address with the Company's headline GSTIN
+- `default_in_transit_warehouse` set (or a warehouse named "Goods In Transit" exists under the Company — substrate fallback)
+- `unrealized_profit_loss_account` set
+- `cost_center` set (default)
+
+Run `ensure_internal_party_pairs_for_account(account_name)` to auto-create the Internal Customer / Internal Supplier pairs. Run `precheck_section10_go_live(account_name)` to verify the fabric is complete before enabling auto-push.
+
+## 10.19 Audit trail
+
+- **EasyEcom Transfer Map** doctype is the primary audit anchor. Every transfer has exactly one Map row, keyed on the originating DN. The Map carries: source/target warehouses, GSTINs (derived), `ee_doctype` (STN/PO/B2B), all EE IDs (strings or PO Int), linked SI/IPI/DN, the IPR child table, status (9-state enum), git_balance, flag_reason, pending push flag.
+- **ERPNext Comments on the Transfer Map** record every auto-Debit-Note revision/cancellation event (load-bearing — must survive draft DN deletion).
+- **Sync Records** with `entity_type="Delivery Note"` carry per-GRN line-level OK/Failed/Discrepancy detail.
+- **Integration Discrepancies** carry the abnormal-state flags: EE-originated standalone, late-GRN-after-submitted-DN.
+- **§17 FDE Worklist** has number-cards for integration-health items only.
+
+The model: read the Transfer Map for the structural story, read its Comments for the runtime story, read Sync Records for the per-line story, read Discrepancies for the FDE-action story.
+
+## 10.20 Carry-forwards past §10 closeout
+
+- **STN self-GRN routing live-verification on Harmony** — pattern code-correct, mock-tested, NOT live-verified. Trigger a real self-GRN to confirm `vendor_c_id == warehouse company_id`. Was a §9 carry-forward; overdue.
+- **STN cancel/amend endpoint payload grounding** — required to lift Stage 2 stub-blockers. First ERP-user cancellation of EE-pushed STN is the operational trigger.
+- **Multi-GRN partial cumulative live-smoke for §10** — unit-mock-verified across all branches; multi-receipt partial-then-completion on real EE is the first live exercise.
+- **PO-branch wire dispatch live-smoke** — Stage 4 wired against mocks; real non-EE-source-with-EE-target deployment is the first real exercise.
+- **B2B-branch destination GRN flow** — purely ERPNext-native by design (stock has left EE's universe). No §10 inbound machinery fires. Documented so FDEs don't expect auto-magic.
+- **`_resolve_for_receipt` (§9) vs inline Item resolution (§10) divergence** — Stage 3 couldn't reuse §9's resolver. Two code paths for Item resolution. Watch for drift on future §9 fixes.
+- **`Sales Invoice.on_submit` hook scope guard** — §10's hook auto-retries IPRs scoped via `ecs_section10_transfer_map` back-ref. §11+ adding their own SI hooks must scope-guard symmetrically.
+- **Discovery-phase probe convention** — orderNumbers for orderType validation must be fresh (`PROBE-{timestamp_to_microsecond}`); EE validates orderNumber uniqueness BEFORE orderType validity.
+- **Decision-matrix completeness gate** — future spec decision-matrices must enumerate all quadrants explicitly and gate "design complete" on each having a grounded EE primitive or deliberate inert outcome.
+- **End-to-end test discipline** — tests must assert state propagation BETWEEN document submissions, not only per-document behaviour. The 2026-06-01 latent bugs were invisible to unit tests because tests mocked the inputs the bugs were failing to provide.
+- **§10 Operations Dashboard for ERP users** — deferred per packet; ERPNext-native UX covers it for now.
 
 # 11. B2B Sales Flow
 
