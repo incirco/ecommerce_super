@@ -1326,6 +1326,23 @@ def build_push_payload(
     if ean:
         payload["EANUPC"] = ean
 
+    # 2b) ProductTaxCode (HSN) — hard mandatory. On sites where India
+    # Compliance isn't installed (or its custom-field migration hasn't
+    # run), `item.gst_hsn_code` resolves to None/absent, the ruleset's
+    # HSN→ProductTaxCode rule produces no value, and the None-strip in
+    # step (4) below would silently drop the field — letting a payload
+    # WITHOUT ProductTaxCode reach EE. Flag here so the item lands as
+    # FNC visibly, not pushed silently. This complements the sweep-side
+    # gh#17 fix that tolerates the missing column at SQL level — the
+    # sweep enqueues the item; this gate then refuses to push it.
+    if not payload.get("ProductTaxCode"):
+        flag_reasons.append(
+            "ProductTaxCode (HSN) missing — `Item.gst_hsn_code` is "
+            "empty or the column is absent (India Compliance not "
+            "installed / not migrated). Install IC and re-save the "
+            "Item with its HSN, then re-push."
+        )
+
     # 2) TaxRate — computed; if None, FLAG (hard mandatory, no defensible default).
     tax_rate = _resolve_tax_rate(item, enabled_companies=enabled_companies)
     if tax_rate is None:
@@ -1789,7 +1806,30 @@ def _enabled_companies() -> list[str]:
 
 def _candidate_items_for_sweep(limit: int | None = None) -> list[str]:
     """Items the onboarding sweep should consider — see push_all_pending
-    docstring for the policy."""
+    docstring for the policy.
+
+    `gst_hsn_code` is an India Compliance custom field on Item. On sites
+    that don't have IC installed (or where the custom-field migration
+    hasn't run yet — gh#17), the column is absent and the previous
+    unguarded reference crashed the whole sweep with
+    `OperationalError: Unknown column 'i.gst_hsn_code'` BEFORE any
+    queue job could be enqueued. The push is supposed to be resilient
+    to integration-tier unavailability: the FDE click should always
+    end up either enqueueing work or returning a clear actionable
+    message — never bubble a raw MariaDB error.
+
+    Strategy: introspect the column once, and drop the HSN filter from
+    the query when the column is missing. Downstream `_check_push_gates`
+    still rejects per-Item on missing HSN, so an HSN-less Item that
+    sneaks through here will land as Flagged-Not-Pushed with a clear
+    reason — visible in the sweep summary, not a crash.
+    """
+    has_hsn_column = frappe.db.has_column("Item", "gst_hsn_code")
+    hsn_clause = (
+        "AND i.gst_hsn_code IS NOT NULL AND i.gst_hsn_code != ''"
+        if has_hsn_column
+        else ""
+    )
     limit_clause = f"LIMIT {int(limit)}" if limit else ""
     rows = frappe.db.sql(
         f"""
@@ -1804,8 +1844,7 @@ def _candidate_items_for_sweep(limit: int | None = None) -> list[str]:
             ON pb.new_item_code = i.item_code
         WHERE i.disabled = 0
           AND i.is_stock_item = 1
-          AND i.gst_hsn_code IS NOT NULL
-          AND i.gst_hsn_code != ''
+          {hsn_clause}
           AND m.name IS NULL
           AND pb.name IS NULL
         ORDER BY i.creation ASC
