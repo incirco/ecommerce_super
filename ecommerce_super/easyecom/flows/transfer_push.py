@@ -144,10 +144,16 @@ def push_one_transfer(
             flag_reasons=["Gate-0: neither source nor target warehouse is EE-mapped"],
         )
 
-    # Branch decision per §10 packet:
-    #   source EE-mapped → STN
-    #   source NOT EE-mapped, target EE-mapped → PO
-    branch = "STN" if source_ee_mapped else "PO"
+    # Branch decision:
+    #   source EE-mapped, target EE-mapped     → STN
+    #   source NOT EE-mapped, target EE-mapped → PO  (vendor = Internal Supplier)
+    #   source EE-mapped, target NOT EE-mapped → B2B (customer = Internal Customer)
+    if source_ee_mapped and target_ee_mapped:
+        branch = "STN"
+    elif source_ee_mapped and not target_ee_mapped:
+        branch = "B2B"
+    else:
+        branch = "PO"
 
     # Precondition chain. Misses → Drift; still upserts the Map row so
     # the FDE can see it on the worklist.
@@ -183,9 +189,23 @@ def push_one_transfer(
 
     sales_invoice: str | None = None
     if gstin_different:
-        sales_invoice = _draft_internal_sales_invoice(
-            dn=dn, source_wh=source_wh, target_wh=target_wh
+        # Idempotency: if a prior push attempt drafted an SI on the
+        # Transfer Map for this DN, reuse it rather than minting a new
+        # one. Without this, retries (e.g. after an EE-side payload
+        # rejection like EXP-date-too-early) create duplicate SIs and
+        # orphan the original.
+        existing_tm = frappe.db.get_value(
+            "EasyEcom Transfer Map",
+            {"delivery_note": dn.name},
+            ["name", "sales_invoice"],
+            as_dict=True,
         )
+        if existing_tm and existing_tm.get("sales_invoice"):
+            sales_invoice = existing_tm["sales_invoice"]
+        else:
+            sales_invoice = _draft_internal_sales_invoice(
+                dn=dn, source_wh=source_wh, target_wh=target_wh
+            )
 
     map_name = _upsert_transfer_map(
         dn=dn,
@@ -197,6 +217,18 @@ def push_one_transfer(
         # When same-GSTIN, status moves straight to EE-Pushed below.
         status="SI-Pending" if sales_invoice else "Mapped",
     )
+
+    # Back-fill SI → TM link. The SI is drafted before the TM exists
+    # (TM autoname keys on DN, but the SI is built mid-flow), so the
+    # SI is born with ecs_section10_transfer_map=None. Without this
+    # back-fill the on_sales_invoice_submit hook short-circuits at the
+    # tm_name lookup and the TM never advances from SI-Pending.
+    if sales_invoice:
+        frappe.db.set_value(
+            "Sales Invoice", sales_invoice,
+            "ecs_section10_transfer_map", map_name,
+            update_modified=False,
+        )
 
     # Pause gate. The pause-pending behaviour is § identical to §9 FIX 2:
     # ERPNext-side state (Transfer Map + SI Draft) lands, but the EE
@@ -228,21 +260,21 @@ def push_one_transfer(
     # EE push.
     if branch == "STN":
         return _do_stn_push(
-            dn=dn,
-            map_name=map_name,
-            source_wh=source_wh,
-            target_wh=target_wh,
-            sales_invoice=sales_invoice,
-            client=client,
+            dn=dn, map_name=map_name,
+            source_wh=source_wh, target_wh=target_wh,
+            sales_invoice=sales_invoice, client=client,
+        )
+    elif branch == "B2B":
+        return _do_b2b_branch_push(
+            dn=dn, map_name=map_name,
+            source_wh=source_wh, target_wh=target_wh,
+            sales_invoice=sales_invoice, client=client,
         )
     else:
         return _do_po_branch_push(
-            dn=dn,
-            map_name=map_name,
-            source_wh=source_wh,
-            target_wh=target_wh,
-            sales_invoice=sales_invoice,
-            client=client,
+            dn=dn, map_name=map_name,
+            source_wh=source_wh, target_wh=target_wh,
+            sales_invoice=sales_invoice, client=client,
         )
 
 
@@ -399,18 +431,38 @@ def _run_preconditions(
     # ERPNext to legitimise the inter-warehouse Delivery Note, but its
     # ee_customer_id plays no role in the §10 STN wire. Precondition:
     # target warehouse's EE Location row carries an ee_company_id.
-    target_ee_company_id = frappe.db.get_value(
-        "EasyEcom Location",
-        {"mapped_warehouse": target_wh},
-        "ee_company_id",
-    )
-    if not target_ee_company_id:
-        errs.append(
-            f"Target warehouse {target_wh!r} → EE Location has no "
-            "ee_company_id captured. The §10 STN payload uses this as "
-            "customer[].customerId. Re-run discover_locations or set "
-            "ee_company_id on the EE Location row."
+    # STN branch needs target ee_company_id (customerId in payload).
+    # B2B branch needs the Internal Customer's ee_customer_id (wholesale
+    # customer record on EE) — target WH is intentionally not EE-mapped.
+    if branch == "STN":
+        target_ee_company_id = frappe.db.get_value(
+            "EasyEcom Location",
+            {"mapped_warehouse": target_wh},
+            "ee_company_id",
         )
+        if not target_ee_company_id:
+            errs.append(
+                f"Target warehouse {target_wh!r} → EE Location has no "
+                "ee_company_id captured. The §10 STN payload uses this "
+                "as customer[].customerId. Re-run discover_locations or "
+                "set ee_company_id on the EE Location row."
+            )
+    elif branch == "B2B" and internal_customer:
+        ic_ee_id = frappe.db.get_value(
+            "EasyEcom Customer Map",
+            {"erpnext_doctype": "Customer",
+             "erpnext_name": internal_customer},
+            "ee_customer_id",
+        )
+        if not ic_ee_id:
+            errs.append(
+                f"Internal Customer {internal_customer!r} has no "
+                "ee_customer_id captured on Customer Map. The §10 B2B "
+                "branch (source EE-mapped, target NOT EE-mapped) needs "
+                "the Internal Customer pushed to EE first via §8e "
+                "CreateCustomer so its c_id can drive the B2B order's "
+                "customer[].customerId."
+            )
 
     # (3) Item Map for every DN line.
     unmapped: list[str] = []
@@ -778,6 +830,147 @@ def _draft_internal_sales_invoice(
     # Insert in Draft (docstatus=0). Submit is the ERP user's call.
     si.insert(ignore_permissions=True)
     return si.name
+
+
+# ============================================================
+# B2B branch — source EE-mapped, target NOT EE-mapped
+# Stock leaves EE's universe; modelled on EE side as a B2B (wholesale)
+# order sold to the Internal Customer. Mirrors the PO branch's symmetry
+# from the other side: PO = incoming party (vendor), B2B = outgoing
+# party (customer).
+# ============================================================
+
+
+def _build_b2b_payload(
+    *, dn: Any, source_wh: str, target_wh: str
+) -> dict[str, Any]:
+    """B2B order payload — same shape as STN but driven by the Internal
+    Customer's wholesale c_id (ee_customer_id from Customer Map), with
+    addresses pointing at the (non-EE) destination warehouse so EE's
+    record shows where the stock conceptually went."""
+    account = _get_account_settings()
+    items_payload: list[dict[str, Any]] = []
+    total_weight_grams = 0.0
+    for idx, line in enumerate(dn.items or [], start=1):
+        sku = _resolve_sku_via_item_map(line.item_code)
+        qty = flt(line.qty)
+        item_weight = flt(
+            frappe.db.get_value("Item", line.item_code, "weight_per_unit") or 0
+        )
+        total_weight_grams += qty * item_weight
+        items_payload.append({
+            "OrderItemId": f"{dn.name}-L{idx}",
+            "Sku": sku,
+            "Quantity": str(int(qty)) if qty.is_integer() else str(qty),
+            "Price": flt(line.rate),
+            "itemDiscount": 0,
+        })
+
+    destination_addr = _resolve_warehouse_address(target_wh)
+
+    internal_customer = _find_internal_customer(
+        target_company=_warehouse_company(target_wh),
+        source_company=_warehouse_company(source_wh),
+    )
+    ee_customer_id = frappe.db.get_value(
+        "EasyEcom Customer Map",
+        {"erpnext_doctype": "Customer",
+         "erpnext_name": internal_customer},
+        "ee_customer_id",
+    )
+    customer_name = (
+        frappe.db.get_value("Customer", internal_customer, "customer_name")
+        or internal_customer
+    )
+
+    payload: dict[str, Any] = {
+        # EE's B2B order type is "businessorder" on the createOrder
+        # endpoint (live Harmony grounded 2026-05-30 — not "b2border" /
+        # "wholesaleorder" / "B2B" as initially guessed).
+        "orderType": "businessorder",
+        "orderNumber": dn.name,
+        "orderDate": _fmt_utc(dn.posting_date, getattr(dn, "posting_time", None)),
+        "expDeliveryDate": _fmt_ist(getattr(dn, "delivery_date", None)),
+        "shippingCost": 0,
+        "paymentMode": _extract_int_prefix(
+            account.get("stn_default_payment_mode"), _DEFAULT_PAYMENT_MODE
+        ),
+        "shippingMethod": _extract_int_prefix(
+            account.get("stn_default_shipping_method"),
+            _DEFAULT_SHIPPING_METHOD,
+        ),
+        "packageWeight": int(round(total_weight_grams)),
+        "packageHeight": 0, "packageWidth": 0, "packageLength": 0,
+        "items": items_payload,
+        "customer": [{
+            "customerId": int(ee_customer_id) if ee_customer_id and str(
+                ee_customer_id).isdigit() else (ee_customer_id or 0),
+            "name": customer_name,
+            "billing": _addr_to_payload(
+                destination_addr, name_override=customer_name
+            ),
+            "shipping": _addr_to_payload(
+                destination_addr, name_override=customer_name
+            ),
+        }],
+    }
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def _do_b2b_branch_push(
+    *, dn: Any, map_name: str, source_wh: str, target_wh: str,
+    sales_invoice: str | None, client: EasyEcomClient | None,
+) -> TransferPushOutcome:
+    """Fire B2B order on EE for source-mapped → target-not-mapped DNs."""
+    payload = _build_b2b_payload(
+        dn=dn, source_wh=source_wh, target_wh=target_wh,
+    )
+    if client is None:
+        location_key = _location_key_for_warehouse(source_wh)
+        client = EasyEcomClient(
+            company=dn.company, location_key=location_key
+        )
+    try:
+        response = client.post(CREATE_ORDER, payload=payload)
+    except EasyEcomError as exc:
+        sr = write_transfer_push_sync_record(
+            dn_name=dn.name, company=dn.company, status=STATUS_FAILED,
+            last_error=f"B2B createOrder: {type(exc).__name__}: {exc}",
+        )
+        frappe.db.set_value("EasyEcom Transfer Map", map_name, {
+            "status": "Drift",
+            "flag_reason": f"EE B2B createOrder error: {exc}"[:1000],
+        }, update_modified=True)
+        return TransferPushOutcome(
+            dn_name=dn.name, operation="error", transfer_map=map_name,
+            sales_invoice=sales_invoice,
+            flag_reasons=[f"{type(exc).__name__}: {exc}"],
+            ee_payload=payload, sync_record_name=sr, status="Drift",
+        )
+    data = (response or {}).get("data") or {}
+    ee_order_id = str(data.get("OrderID") or "")
+    ee_suborder_id = str(data.get("SuborderID") or "")
+    ee_invoice_id = str(data.get("InvoiceID") or "")
+    new_status = "SI-Pending" if sales_invoice else "EE-Pushed"
+    frappe.db.set_value("EasyEcom Transfer Map", map_name, {
+        "ee_doctype": "B2B",
+        "ee_order_id": ee_order_id,
+        "ee_suborder_id": ee_suborder_id,
+        "ee_invoice_id": ee_invoice_id,
+        "status": new_status,
+        "ecs_pending_ee_push": 0,
+    }, update_modified=True)
+    sr = write_transfer_push_sync_record(
+        dn_name=dn.name, company=dn.company, status=STATUS_SUCCESS,
+        last_error=None,
+    )
+    return TransferPushOutcome(
+        dn_name=dn.name, operation="b2b_pushed", transfer_map=map_name,
+        sales_invoice=sales_invoice, ee_order_id=ee_order_id,
+        ee_suborder_id=ee_suborder_id, ee_invoice_id=ee_invoice_id,
+        ee_doctype="B2B", ee_payload=payload,
+        sync_record_name=sr, status=new_status,
+    )
 
 
 # ============================================================
@@ -1281,12 +1474,21 @@ def _do_po_branch_push(
             }
         )
 
+    # EE's CreatePurchaseOrder requires expDeliveryDate STRICTLY after
+    # today (it rejects today's date). Use DN.delivery_date when the
+    # FDE set it explicitly; otherwise default to tomorrow.
+    exp_delivery_raw = (
+        getattr(dn, "delivery_date", None)
+        or frappe.utils.add_days(frappe.utils.today(), 1)
+    )
+    if frappe.utils.getdate(exp_delivery_raw) <= frappe.utils.getdate(
+        frappe.utils.today()
+    ):
+        exp_delivery_raw = frappe.utils.add_days(frappe.utils.today(), 1)
     payload: dict[str, Any] = {
         "vendorId": vendor_id,
         "referenceCode": dn.name,  # parity with STN's orderNumber=DN
-        "expDeliveryDate": _fmt_date(
-            getattr(dn, "delivery_date", None) or dn.posting_date
-        ),
+        "expDeliveryDate": _fmt_date(exp_delivery_raw),
         "createOrUpdate": "I",  # §10 outbound is always create-only
         "isCancel": 0,
         "items": line_items,
@@ -1548,6 +1750,16 @@ def section10_before_save(doc: Any, method: str | None = None) -> None:
         for line in doc.items or []:
             line.warehouse = transfer_from
 
+    # Clear any stale GST fields up-front so India Compliance's
+    # update_gst_details (also a before_save hook) re-derives from
+    # the addresses we're about to set (or from Company defaults when
+    # we can't resolve an address). Without this clear, switching the
+    # buyer warehouse leaves a stale billing_address_gstin from the
+    # previous DN's address on the same browser tab.
+    doc.billing_address_gstin = None
+    doc.place_of_supply = None
+    doc.company_gstin = None
+
     # Auto-fill the four address fields from the Transfer From / To
     # warehouses' linked Addresses. Each address carries its own GSTIN
     # (state-derived), so this is what drives India Compliance's
@@ -1563,8 +1775,12 @@ def section10_before_save(doc: Any, method: str | None = None) -> None:
     #   Find an Address linked to the Transfer From Warehouse. Drives
     #   the source GSTIN on the SI (e.g., 07 Delhi for an inter-state
     #   transfer out of a Delhi WH).
+    # Strict: every warehouse must have its own Address. The substrate
+    # picks the Address linked to the Transfer To Warehouse (preferring
+    # one ALSO linked to the customer for the joint customer+WH model).
+    buyer_addr = None
     if doc.customer:
-        buyer_addr = frappe.db.sql(
+        joint = frappe.db.sql(
             """
             SELECT dl1.parent AS addr_name
             FROM `tabDynamic Link` dl1
@@ -1581,17 +1797,25 @@ def section10_before_save(doc: Any, method: str | None = None) -> None:
             (transfer_to, doc.customer),
             as_dict=True,
         )
-        if buyer_addr:
-            addr_name = buyer_addr[0]["addr_name"]
-            doc.customer_address = addr_name
-            doc.shipping_address_name = addr_name
-            # Clear the cached GSTIN/place-of-supply so India
-            # Compliance's update_gst_details (also a before_save hook)
-            # re-derives them from the new customer_address. Without
-            # this, switching the buyer address mid-save leaves a stale
-            # billing_address_gstin from the previous DN's address.
-            doc.billing_address_gstin = None
-            doc.place_of_supply = None
+        if joint:
+            buyer_addr = joint[0]["addr_name"]
+    if not buyer_addr:
+        wh_only = frappe.db.sql(
+            """
+            SELECT dl.parent AS addr_name
+            FROM `tabDynamic Link` dl
+            WHERE dl.parenttype = 'Address'
+              AND dl.link_doctype = 'Warehouse'
+              AND dl.link_name = %s
+            LIMIT 1
+            """,
+            (transfer_to,), as_dict=True,
+        )
+        if wh_only:
+            buyer_addr = wh_only[0]["addr_name"]
+    if buyer_addr:
+        doc.customer_address = buyer_addr
+        doc.shipping_address_name = buyer_addr
 
     seller_addr = frappe.db.sql(
         """
@@ -1609,9 +1833,7 @@ def section10_before_save(doc: Any, method: str | None = None) -> None:
         addr_name = seller_addr[0]["addr_name"]
         doc.company_address = addr_name
         doc.dispatch_address_name = addr_name
-        # Same reasoning as the buyer side — clear cached company_gstin
-        # so India Compliance re-reads from the new company_address.
-        doc.company_gstin = None
+        # (GSTIN clear happens up-front; no extra clear here.)
 
     # Explicit tax template selection based on the source/target
     # warehouse GSTINs (India Compliance's auto-apply only fires when

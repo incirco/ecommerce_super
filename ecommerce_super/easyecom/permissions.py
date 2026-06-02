@@ -19,7 +19,7 @@ from typing import Any
 import frappe
 
 
-def company_scope(user: str | None = None) -> str:
+def company_scope(user: str | None = None, doctype: str | None = None) -> str:
     """permission_query_conditions hook. Returns a SQL WHERE fragment that
     restricts the queried DocType to the Companies in the user's User
     Permissions.
@@ -28,13 +28,16 @@ def company_scope(user: str | None = None) -> str:
     users see only the Companies they're explicitly granted via User
     Permissions on the Company DocType.
 
-    The hook is wired per-DocType in hooks.py; the actual DocType name is
-    not parameterised here because Frappe substitutes `{user_permission_doctype_condition}`
-    style filters automatically. We just return the company-allow-list as a
-    raw fragment using the standard `tabSyncRecord`.company pattern via
-    the DocType being queried. Since the hook signature only gives `user`,
-    we rely on frappe.local.get_request_context to know the doctype — or
-    more reliably, use `get_user_permissions`.
+    Frappe v15+ passes `doctype` as a kwarg via `frappe.call` from
+    `DatabaseQuery.get_permission_query_conditions` — we use it to embed
+    the actual table name in the returned SQL fragment (gh#14). The
+    prior version used a literal `{doctype}` placeholder that was never
+    substituted, producing broken SQL that Frappe silently swallowed
+    and falling through to no-filter — so EasyEcom FDE users saw every
+    Company's row instead of only their permitted Companies.
+
+    Defensive single-quote escape on each Company name so a Company
+    containing an apostrophe can't break the SQL (or worse).
     """
     user = user or frappe.session.user
     if user in {"Administrator", None}:
@@ -52,11 +55,14 @@ def company_scope(user: str | None = None) -> str:
         # User has the role but no Company permissions → see nothing.
         return "1=0"
 
-    quoted = ", ".join(f"'{c}'" for c in allowed)
-    # The {doctype} placeholder is required so Frappe substitutes the
-    # actual table alias of the query being filtered. We use the field name
-    # `company` because every company-scoped DocType in §31.7.1 has it.
-    return f"`tab{{doctype}}`.company in ({quoted})"
+    # Escape single quotes inside Company names (defense-in-depth — the
+    # values come from User Permission rows, but trust-and-verify).
+    quoted = ", ".join("'" + c.replace("'", "''") + "'" for c in allowed)
+    # `doctype` is supplied by Frappe via frappe.call; fall back to the
+    # current hook's primary doctype if a caller invokes us directly
+    # without one (defensive — tests, ad-hoc calls).
+    target_doctype = doctype or "EasyEcom Company Settings"
+    return f"`tab{target_doctype}`.company in ({quoted})"
 
 
 def append_only(doc: Any, ptype: str, user: str | None = None) -> bool:

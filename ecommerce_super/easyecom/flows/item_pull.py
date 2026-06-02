@@ -378,6 +378,8 @@ def discover_products(
         # worker processes each page; the FDE sees progress by refreshing
         # the Account form (item_pull_cursor_at) or the Item Map list.
         import time as _time
+        from ecommerce_super.easyecom.utils.discover_notify import safe_caller
+        triggered_by = safe_caller()
         job = frappe.enqueue(
             "ecommerce_super.easyecom.flows.item_pull._discover_products_worker",
             queue="long",
@@ -385,6 +387,7 @@ def discover_products(
             job_id=f"discover_products_{account}_{int(_time.time())}",
             account=account,
             start_fresh=start_fresh_bool,
+            triggered_by=triggered_by,
         )
         return {
             "ok": True,
@@ -435,20 +438,69 @@ def discover_products(
 
 
 def _discover_products_worker(
-    *, account: str, start_fresh: bool
+    *, account: str, start_fresh: bool, triggered_by: str | None = None
 ) -> None:
     """Background worker entry-point for async product discovery. Wraps
     pull_products() so the RQ job's exception handling sees raw failures
     (the whitelist's try/except is for the HTTP-boundary; here we let
-    RQ + Error Log surface real exceptions for retry/diagnostics)."""
+    RQ + Error Log surface real exceptions for retry/diagnostics).
+
+    On both success and failure, notify the user who enqueued the job
+    via Notification Log + realtime popup (gh#11). triggered_by is
+    captured at the enqueue site because RQ workers don't share
+    `frappe.session.user` with the originating HTTP request.
+    """
+    from ecommerce_super.easyecom.utils.discover_notify import (
+        notify_discover_complete,
+    )
+
     try:
-        pull_products(account_name=account, start_fresh=start_fresh)
+        result = pull_products(account_name=account, start_fresh=start_fresh)
     except Exception as exc:  # noqa: BLE001
         frappe.log_error(
             title=f"EasyEcom Discover Products (async) failed for {account}",
             message=f"{type(exc).__name__}: {exc}",
         )
+        notify_discover_complete(
+            triggered_by=triggered_by,
+            kind="Products",
+            ok=False,
+            summary=f"Discover Products failed: {type(exc).__name__}: {exc}",
+            list_route="/app/error-log",
+        )
         raise
+
+    by_status: dict[str, int] = {}
+    for o in result.outcomes:
+        by_status[o.status] = by_status.get(o.status, 0) + 1
+    status_bits = ", ".join(f"{k}: {v}" for k, v in sorted(by_status.items())) or "—"
+    summary = (
+        f"Pages walked: {result.pages_walked} | "
+        f"Processed: {result.products_processed} | "
+        f"By status: {status_bits}"
+    )
+    if result.last_cursor:
+        summary += " | Partial walk — cursor preserved; re-run to resume."
+    # Make the "tax loop silently skipped" footgun visible (gh#11 follow-on
+    # to the user's report on a sibling site). The pull only logs this
+    # once to Error Log, which is easy to miss — surfacing it here means
+    # the bell-icon notification itself carries the "no Tax Rule Maps will
+    # be auto-created" signal, so the FDE notices before downstream tax
+    # flows break.
+    if not _enabled_companies(account):
+        summary += (
+            " | ⚠️ Tax loop SKIPPED — no enabled EasyEcom Company Settings; "
+            "Items were created but no Tax Rule Maps were auto-created. "
+            "Enable a Company Settings row and re-run if tax stamping is "
+            "needed."
+        )
+    notify_discover_complete(
+        triggered_by=triggered_by,
+        kind="Products",
+        ok=True,
+        summary=summary,
+        list_route="/app/easyecom-item-map",
+    )
 
 
 # ----- Drift resolution whitelists (audit fix #7) -----

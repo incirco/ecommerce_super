@@ -37,6 +37,8 @@
 
 **EE-side doctype = source-WH-EE-mapped?** Source EE-mapped → push STN (EE-native internal transfer). Source NOT EE-mapped, target EE-mapped → push PO (EE sees goods arriving from outside its universe). Reuses §9's CreatePurchaseOrder almost entirely for the PO case.
 
+> **AMENDMENT (2026-06-01):** the decision matrix above is **3-branch incomplete**. The live integration smoke surfaced a 4th case: source EE-mapped, target NOT EE-mapped → **B2B branch** (`createOrder · orderType=businessorder`). This was Case C in the matrix and was closed in commit `cd27d0f`. See `SPEC_10_patch_notes.md` "Live integration smoke amendments" appendix for the full grounded contract. The packet body below describes the design as it was *before* the B2B branch was discovered; treat the patch notes appendix as authoritative for the current 4-branch matrix.
+
 **Doctype matrix:**
 
 | GSTINs | ERPNext docs | EE side |

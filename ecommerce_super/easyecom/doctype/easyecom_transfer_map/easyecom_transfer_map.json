@@ -129,8 +129,8 @@
    "fieldname": "ee_doctype",
    "fieldtype": "Select",
    "label": "EE DocType",
-   "options": "\nSTN\nPO",
-   "description": "Determined by source-WH-EE-mapping at Stage 2 push time. STN = source EE-mapped, EE-native internal transfer. PO = source NOT EE-mapped, target EE-mapped, reuses §9 CreatePurchaseOrder. Empty pre-EE-push."
+   "options": "\nSTN\nPO\nB2B",
+   "description": "Determined by source/target EE-mapping at push time. STN = both EE-mapped. PO = source NOT mapped, target mapped (wholesale-in via Internal Supplier). B2B = source mapped, target NOT mapped (wholesale-out via Internal Customer). Empty pre-EE-push."
   },
   {
    "fieldname": "ee_order_id",

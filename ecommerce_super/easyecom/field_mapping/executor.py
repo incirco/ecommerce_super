@@ -200,9 +200,21 @@ class FieldMappingExecutor:
             target_path = _target_path(rule, direction)
             produced = path_mod.get_first(output, target_path)
             if produced in (None, "", []):
+                # gh#13: the previous message only named the TARGET field
+                # ("produced no value at 'qty'"), which made compose-call
+                # failures ambiguous — the FDE couldn't tell whether the
+                # mismatch was in the source payload (wrong key) or the
+                # rule (wrong source_path). Include the source_path and a
+                # snapshot of the available source keys so the cause is
+                # obvious from the message alone.
+                source_path = _source_path(rule, direction)
+                source_root = source_doc if direction == DIRECTION_PUSH else source_payload
+                source_keys_hint = _source_keys_hint(source_root)
                 raise FieldMappingMissingRequiredError(
                     f"Required rule {rule.idx} on {self.mapping_name!r} "
-                    f"produced no value at {target_path!r}",
+                    f"produced no value at {target_path!r} "
+                    f"(source_path={source_path!r}; "
+                    f"available source keys: {source_keys_hint})",
                     rule_id=str(rule.idx),
                     field_name=target_path,
                 )
@@ -476,6 +488,32 @@ def _source_path(rule: CompiledRule, direction: str) -> str:
 
 def _target_path(rule: CompiledRule, direction: str) -> str:
     return rule.easyecom_path if direction == DIRECTION_PUSH else rule.erpnext_path
+
+
+def _source_keys_hint(source_root: Any, *, limit: int = 12) -> str:
+    """Return a short, human-readable summary of the top-level keys on the
+    source row/doc — for the gh#13 enriched FieldMappingMissingRequiredError
+    message. Truncates long key lists so the error stays readable.
+
+    Falls back to a type description when the source isn't dict-like
+    (which happens for Frappe Document instances during PUSH — we use
+    `.as_dict()` if available, otherwise just name the type).
+    """
+    if source_root is None:
+        return "<no source provided>"
+    keys: list[str]
+    if isinstance(source_root, dict):
+        keys = list(source_root.keys())
+    elif hasattr(source_root, "as_dict"):
+        try:
+            keys = list(source_root.as_dict().keys())
+        except Exception:
+            return f"<{type(source_root).__name__}>"
+    else:
+        return f"<{type(source_root).__name__}>"
+    if len(keys) > limit:
+        return f"[{', '.join(keys[:limit])}, …({len(keys) - limit} more)]"
+    return f"[{', '.join(keys)}]"
 
 
 def _set_iterated(output: dict, target_path: str, values: list) -> None:

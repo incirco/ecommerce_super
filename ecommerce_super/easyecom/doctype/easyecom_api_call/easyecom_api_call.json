@@ -101,7 +101,10 @@
    "fieldtype": "Data",
    "label": "Correlation ID",
    "reqd": 1,
-   "search_index": 1
+   "search_index": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Threads through every API Call, Sync Record, Queue Job, and Webhook Event for one logical operation (§6.2). Filter by this value across the four log lists to trace a single operation end-to-end (gh#18)."
   },
   {
    "fieldname": "sub_correlation_id",
