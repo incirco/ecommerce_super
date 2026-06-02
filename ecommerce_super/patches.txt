@@ -42,3 +42,7 @@ ecommerce_super.patches.v0_1.add_warehouse_ee_location_label
 ecommerce_super.patches.v0_1.backfill_warehouse_ee_location_labels
 ecommerce_super.patches.v0_1.add_address_ee_location_field
 ecommerce_super.patches.v0_1.backfill_warehouse_addresses_from_locations
+# gh#16: SPEC §7.3 M1 — Sync Record status is binary. Migrate any
+# existing rows with status="Discrepancy" to "Failed" before the JSON
+# enum change rejects them on the next save.
+ecommerce_super.patches.v0_1.migrate_sync_record_discrepancy_to_failed

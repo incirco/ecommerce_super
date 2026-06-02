@@ -85,12 +85,12 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
-   "options": "Pending\nRunning\nSuccess\nFailed\nDiscrepancy\nCancelled\nAlreadySynced",
+   "options": "Pending\nRunning\nSuccess\nFailed\nCancelled\nAlreadySynced",
    "default": "Pending",
    "reqd": 1,
    "search_index": 1,
    "in_list_view": 1,
-   "description": "Pending: queued. Running: in-flight. Success: clean completion. Failed: genuine push/pull failure (EE rejected, network, missing-mandatory). Discrepancy (§7.3): the operation RAN cleanly but found divergence/conflict (typically a §8d drift detection finding EE-side edits to a mapped Item). Distinct from Failed so §22 alert routing can subscribe to drift events without conflating them with sync failures. Cancelled / AlreadySynced: terminal user-initiated."
+   "description": "SPEC §7.3 M1 binary state machine. Pending: queued. Running: in-flight. Success: clean completion (no discrepancy of any kind). Failed: the operation produced ANY divergence — genuine push/pull failure (EE rejected, network, missing-mandatory) OR drift detection finding EE-side edits OR per-line discrepancy on a buying record. Drift / discrepancy context is preserved in last_error so §22 alert routing can still differentiate; the per-record status is binary by spec — there is NO 'Discrepancy', 'Partial', or 'Completed with Discrepancy' value (gh#16). Cancelled / AlreadySynced: terminal user-initiated."
   },
   {
    "fieldname": "ee_section",
