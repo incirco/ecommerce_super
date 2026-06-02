@@ -509,6 +509,159 @@ function _runGoLiveEnableAutoPush(frm) {
     d.show();
 }
 
+function _runBootstrapSection10Customer(frm) {
+    if (!_ensureSaved(frm, "Save the Account before bootstrapping the §10 Internal Customer.")) {
+        return;
+    }
+    frappe.db
+        .get_list("Company", {fields: ["name"], limit: 100, order_by: "name asc"})
+        .then((companies) => {
+            if (!companies.length) {
+                frappe.msgprint({
+                    title: __("No Companies"),
+                    message: __(
+                        "There are no Companies in the system. Create at least one before bootstrapping the §10 Internal Customer."
+                    ),
+                    indicator: "orange",
+                });
+                return;
+            }
+            const opts = companies.map((c) => c.name).join("\n");
+            const d = new frappe.ui.Dialog({
+                title: __("Bootstrap §10 Internal Customer"),
+                fields: [
+                    {
+                        fieldtype: "HTML",
+                        options: __(
+                            "<div style='padding:8px;background:#eff6ff;border-radius:4px;margin-bottom:12px;font-size:13px;line-height:1.5;'>" +
+                                "<b>One-click §10 onboarding.</b> Creates (or reuses) the Internal Customer that drives §10 transfers, fills <i>Allowed To Transact With</i> with every other Company, links the EE-managed Warehouse addresses (synced from EasyEcom Locations), and pushes the Customer to EE so the <code>ee_customer_id</code> / Customer Map row exist before the first §10 DN fires.<br><br>" +
+                                "Idempotent — re-running just refreshes companies + addresses + Map row." +
+                                "</div>"
+                        ),
+                    },
+                    {
+                        fieldname: "represents_company",
+                        fieldtype: "Select",
+                        label: __("Represents Company"),
+                        reqd: 1,
+                        options: opts,
+                        default: companies[0].name,
+                        description: __(
+                            "The Company this Customer represents. Pick your primary entity — §10's loose-match path still routes transfers from any other Company through this Customer."
+                        ),
+                    },
+                    {
+                        fieldname: "customer_name",
+                        fieldtype: "Data",
+                        label: __("Customer Name (optional)"),
+                        description: __(
+                            "Defaults to <code>Internal — &lt;Company&gt;</code> if left blank."
+                        ),
+                    },
+                    {
+                        fieldname: "push_to_ee",
+                        fieldtype: "Check",
+                        label: __("Push to EasyEcom"),
+                        default: 1,
+                        description: __(
+                            "Triggers <code>/Wholesale/CreateCustomer</code> (or UpdateCustomer if already mapped) so the EE wholesale <code>c_id</code> + Customer Map row land before the first §10 B2B DN."
+                        ),
+                    },
+                ],
+                primary_action_label: __("Bootstrap"),
+                primary_action(values) {
+                    frappe.call({
+                        method:
+                            "ecommerce_super.easyecom.api.section10_bootstrap.bootstrap_section10_internal_customer",
+                        args: values,
+                        freeze: true,
+                        freeze_message: __("Bootstrapping §10 Internal Customer…"),
+                        callback(r) {
+                            const result = r.message || {};
+                            if (!result.ok) {
+                                frappe.msgprint({
+                                    title: __("Bootstrap Failed"),
+                                    message: result.message || __("Unknown error."),
+                                    indicator: "red",
+                                });
+                                return;
+                            }
+                            const push = result.push_to_ee || {};
+                            const lines = [
+                                __("Customer: <code>{0}</code> ({1})", [
+                                    frappe.utils.escape_html(result.customer),
+                                    result.customer_created
+                                        ? "<b>created</b>"
+                                        : "reused",
+                                ]),
+                                __(
+                                    "Represents Company: <code>{0}</code> · Allowed companies: <b>{1}</b> ({2} newly added)",
+                                    [
+                                        frappe.utils.escape_html(result.represents_company),
+                                        result.companies_total,
+                                        result.companies_added,
+                                    ]
+                                ),
+                                __("Addresses linked: <b>{0}</b>", [
+                                    (result.addresses_linked || []).length,
+                                ]),
+                            ];
+                            if (push.ee_customer_id) {
+                                lines.push(
+                                    __(
+                                        "EE Customer ID: <code>{0}</code> · push operation: <code>{1}</code>",
+                                        [
+                                            frappe.utils.escape_html(
+                                                String(push.ee_customer_id)
+                                            ),
+                                            frappe.utils.escape_html(
+                                                push.operation || "—"
+                                            ),
+                                        ]
+                                    )
+                                );
+                            }
+                            if ((push.flag_reasons || []).length) {
+                                lines.push(
+                                    "<br><b>Push flags:</b><br>" +
+                                        push.flag_reasons
+                                            .map((r) =>
+                                                "&bull; " + frappe.utils.escape_html(r)
+                                            )
+                                            .join("<br>")
+                                );
+                            }
+                            lines.push(
+                                "<br><a href='/app/customer/" +
+                                    encodeURIComponent(result.customer) +
+                                    "'>Open Customer →</a>"
+                            );
+                            frappe.msgprint({
+                                title: __("§10 Internal Customer Ready"),
+                                message: lines.join("<br>"),
+                                indicator: push.ee_customer_id
+                                    ? "green"
+                                    : "orange",
+                            });
+                            d.hide();
+                        },
+                        error() {
+                            frappe.msgprint({
+                                title: __("Bootstrap Failed"),
+                                message: __(
+                                    "The bootstrap call itself failed (network or permission)."
+                                ),
+                                indicator: "red",
+                            });
+                        },
+                    });
+                },
+            });
+            d.show();
+        });
+}
+
+
 function _runPauseAllAutoPush(frm) {
     if (!_ensureSaved(frm, "Save the Account before pausing auto-push.")) {
         return;
@@ -687,6 +840,14 @@ frappe.ui.form.on("EasyEcom Account", {
             __("Pause All (Kill-Switch)"),
             () => _runPauseAllAutoPush(frm),
             __("Auto-Push")
+        );
+
+        // §10 Setup group — one-time onboarding actions for the
+        // Internal Customer / Internal Supplier fabric that §10 needs.
+        frm.add_custom_button(
+            __("Bootstrap Internal Customer"),
+            () => _runBootstrapSection10Customer(frm),
+            __("§10 Setup")
         );
     },
 
