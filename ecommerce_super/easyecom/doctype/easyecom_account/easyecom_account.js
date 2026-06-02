@@ -662,6 +662,159 @@ function _runBootstrapSection10Customer(frm) {
 }
 
 
+function _runBootstrapSection10Supplier(frm) {
+    if (!_ensureSaved(frm, "Save the Account before bootstrapping the §10 Internal Supplier.")) {
+        return;
+    }
+    frappe.db
+        .get_list("Company", {fields: ["name"], limit: 100, order_by: "name asc"})
+        .then((companies) => {
+            if (!companies.length) {
+                frappe.msgprint({
+                    title: __("No Companies"),
+                    message: __(
+                        "There are no Companies in the system. Create at least one before bootstrapping the §10 Internal Supplier."
+                    ),
+                    indicator: "orange",
+                });
+                return;
+            }
+            const opts = companies.map((c) => c.name).join("\n");
+            const d = new frappe.ui.Dialog({
+                title: __("Bootstrap §10 Internal Supplier"),
+                fields: [
+                    {
+                        fieldtype: "HTML",
+                        options: __(
+                            "<div style='padding:8px;background:#eff6ff;border-radius:4px;margin-bottom:12px;font-size:13px;line-height:1.5;'>" +
+                                "<b>§10 PO branch setup.</b> The PO branch fires when source warehouse is NOT EE-mapped but target IS — EE needs a vendor identity. This action creates (or reuses) the Internal Supplier representing the source Company, fills <i>Allowed To Transact With</i> with every other Company, links the EE-managed warehouse addresses for the represented Company, and pushes the Supplier to EE so <code>ee_vendor_id</code> / Supplier Map land before the first §10 PO DN fires.<br><br>" +
+                                "Strict-match model: one Internal Supplier per source Company. Run once per source Company you'll transfer FROM via the PO branch." +
+                                "</div>"
+                        ),
+                    },
+                    {
+                        fieldname: "represents_company",
+                        fieldtype: "Select",
+                        label: __("Represents Company (the source)"),
+                        reqd: 1,
+                        options: opts,
+                        default: companies[0].name,
+                        description: __(
+                            "The source Company this Supplier represents — the one whose warehouses EE will see goods leaving from in PO-branch transfers."
+                        ),
+                    },
+                    {
+                        fieldname: "supplier_name",
+                        fieldtype: "Data",
+                        label: __("Supplier Name (optional)"),
+                        description: __(
+                            "Defaults to <code>Internal — &lt;Company&gt; (Vendor)</code> if left blank."
+                        ),
+                    },
+                    {
+                        fieldname: "push_to_ee",
+                        fieldtype: "Check",
+                        label: __("Push to EasyEcom"),
+                        default: 1,
+                        description: __(
+                            "Triggers <code>/wms/CreateVendor</code> (or UpdateVendor if already mapped) so the EE <code>ee_vendor_id</code> + Supplier Map row land before the first §10 PO DN."
+                        ),
+                    },
+                ],
+                primary_action_label: __("Bootstrap"),
+                primary_action(values) {
+                    frappe.call({
+                        method:
+                            "ecommerce_super.easyecom.api.section10_bootstrap.bootstrap_section10_internal_supplier",
+                        args: values,
+                        freeze: true,
+                        freeze_message: __("Bootstrapping §10 Internal Supplier…"),
+                        callback(r) {
+                            const result = r.message || {};
+                            if (!result.ok) {
+                                frappe.msgprint({
+                                    title: __("Bootstrap Failed"),
+                                    message: result.message || __("Unknown error."),
+                                    indicator: "red",
+                                });
+                                return;
+                            }
+                            const push = result.push_to_ee || {};
+                            const lines = [
+                                __("Supplier: <code>{0}</code> ({1})", [
+                                    frappe.utils.escape_html(result.supplier),
+                                    result.supplier_created
+                                        ? "<b>created</b>"
+                                        : "reused",
+                                ]),
+                                __(
+                                    "Represents Company: <code>{0}</code> · Allowed companies: <b>{1}</b> ({2} newly added)",
+                                    [
+                                        frappe.utils.escape_html(result.represents_company),
+                                        result.companies_total,
+                                        result.companies_added,
+                                    ]
+                                ),
+                                __("Addresses linked: <b>{0}</b>", [
+                                    (result.addresses_linked || []).length,
+                                ]),
+                            ];
+                            if (push.ee_vendor_id) {
+                                lines.push(
+                                    __(
+                                        "EE Vendor ID: <code>{0}</code> · push operation: <code>{1}</code>",
+                                        [
+                                            frappe.utils.escape_html(
+                                                String(push.ee_vendor_id)
+                                            ),
+                                            frappe.utils.escape_html(
+                                                push.operation || "—"
+                                            ),
+                                        ]
+                                    )
+                                );
+                            }
+                            if ((push.flag_reasons || []).length) {
+                                lines.push(
+                                    "<br><b>Push flags:</b><br>" +
+                                        push.flag_reasons
+                                            .map((r) =>
+                                                "&bull; " + frappe.utils.escape_html(r)
+                                            )
+                                            .join("<br>")
+                                );
+                            }
+                            lines.push(
+                                "<br><a href='/app/supplier/" +
+                                    encodeURIComponent(result.supplier) +
+                                    "'>Open Supplier →</a>"
+                            );
+                            frappe.msgprint({
+                                title: __("§10 Internal Supplier Ready"),
+                                message: lines.join("<br>"),
+                                indicator: push.ee_vendor_id
+                                    ? "green"
+                                    : "orange",
+                            });
+                            d.hide();
+                        },
+                        error() {
+                            frappe.msgprint({
+                                title: __("Bootstrap Failed"),
+                                message: __(
+                                    "The bootstrap call itself failed (network or permission)."
+                                ),
+                                indicator: "red",
+                            });
+                        },
+                    });
+                },
+            });
+            d.show();
+        });
+}
+
+
 function _runPauseAllAutoPush(frm) {
     if (!_ensureSaved(frm, "Save the Account before pausing auto-push.")) {
         return;
@@ -847,6 +1000,11 @@ frappe.ui.form.on("EasyEcom Account", {
         frm.add_custom_button(
             __("Bootstrap Internal Customer"),
             () => _runBootstrapSection10Customer(frm),
+            __("§10 Setup")
+        );
+        frm.add_custom_button(
+            __("Bootstrap Internal Supplier"),
+            () => _runBootstrapSection10Supplier(frm),
             __("§10 Setup")
         );
     },
