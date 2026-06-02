@@ -66,6 +66,8 @@ def discover_suppliers(
 
     if not bool(int(inline or 0)):
         import time as _time
+        from ecommerce_super.easyecom.utils.discover_notify import safe_caller
+        triggered_by = safe_caller()
         job = frappe.enqueue(
             "ecommerce_super.easyecom.api.supplier_pull._discover_suppliers_worker",
             queue="long",
@@ -73,6 +75,7 @@ def discover_suppliers(
             job_id=f"discover_suppliers_{account or 'default'}_{int(_time.time())}",
             account=account,
             start_fresh=start_fresh_bool,
+            triggered_by=triggered_by,
         )
         return {
             "ok": True,
@@ -121,14 +124,47 @@ def discover_suppliers(
 
 
 def _discover_suppliers_worker(
-    *, account: str | None, start_fresh: bool
+    *, account: str | None, start_fresh: bool, triggered_by: str | None = None
 ) -> None:
-    """Background worker entry-point for async supplier discovery."""
+    """Background worker entry-point for async supplier discovery.
+
+    Notifies the user who enqueued the job on completion (gh#11) —
+    triggered_by is captured at the enqueue site because RQ workers
+    don't share `frappe.session.user` with the originating HTTP request.
+    """
+    from ecommerce_super.easyecom.utils.discover_notify import (
+        notify_discover_complete,
+    )
+
     try:
-        pull_suppliers(start_fresh=start_fresh, account=account)
+        outcome = pull_suppliers(start_fresh=start_fresh, account=account)
     except Exception as exc:
         frappe.log_error(
             title=f"EasyEcom Discover Suppliers (async) failed for {account or '(default)'}",
             message=f"{type(exc).__name__}: {exc}",
         )
+        notify_discover_complete(
+            triggered_by=triggered_by,
+            kind="Suppliers",
+            ok=False,
+            summary=f"Discover Suppliers failed: {type(exc).__name__}: {exc}",
+            list_route="/app/error-log",
+        )
         raise
+
+    summary = (
+        f"Pages: {outcome.pages_walked} | Total: {outcome.total} | "
+        f"Created: {outcome.created} | Skipped: {outcome.skipped} | "
+        f"Disabled: {outcome.disabled} | Created-Flagged: {outcome.created_flagged} | "
+        f"FNC: {outcome.flagged_not_created} | Drift: {outcome.drift_count} | "
+        f"Failed: {outcome.failed}"
+    )
+    if outcome.final_cursor:
+        summary += " | Partial walk — cursor preserved; re-run to resume."
+    notify_discover_complete(
+        triggered_by=triggered_by,
+        kind="Suppliers",
+        ok=True,
+        summary=summary,
+        list_route="/app/easyecom-supplier-map",
+    )

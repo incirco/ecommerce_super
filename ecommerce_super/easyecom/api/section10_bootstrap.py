@@ -179,14 +179,23 @@ def _ensure_allowed_companies(customer: Any, *, exclude: str) -> int:
 def _link_ee_managed_addresses(
     customer: Any, source_companies: list[str]
 ) -> list[dict[str, Any]]:
-    """For each source Company, pick the EE-managed Addresses (Flow A
-    output) of warehouses belonging to that Company and link them to
-    the Customer via Dynamic Link. Returns a per-Address summary."""
-    if not source_companies:
+    return _link_ee_managed_addresses_to(
+        doctype="Customer",
+        docname=customer.name,
+        companies=source_companies,
+    )
+
+
+def _link_ee_managed_addresses_to(
+    *, doctype: str, docname: str, companies: list[str]
+) -> list[dict[str, Any]]:
+    """Doctype-agnostic Address linker. For each Company in `companies`,
+    pick every EE-managed Address (Flow A output) on a Warehouse
+    belonging to that Company and append a Dynamic Link to
+    (doctype, docname) where missing."""
+    if not companies:
         return []
 
-    # Find every EE-managed Address (ecs_ee_location set) linked to a
-    # Warehouse whose Company is in source_companies.
     addr_rows = frappe.db.sql(
         """
         SELECT DISTINCT a.name, a.ecs_ee_location, w.company AS company
@@ -200,27 +209,25 @@ def _link_ee_managed_addresses(
           AND dl.link_doctype = 'Warehouse'
           AND w.company IN %(companies)s
         """,
-        {"companies": tuple(source_companies)},
+        {"companies": tuple(companies)},
         as_dict=True,
     )
 
     summary: list[dict[str, Any]] = []
     for row in addr_rows:
         addr = frappe.get_doc("Address", row["name"])
-        already_linked = any(
-            (lnk.link_doctype == "Customer"
-             and lnk.link_name == customer.name)
+        already = any(
+            (lnk.link_doctype == doctype and lnk.link_name == docname)
             for lnk in (addr.links or [])
         )
-        if already_linked:
+        if already:
             summary.append({
                 "address": addr.name, "company": row["company"],
                 "action": "already_linked",
             })
             continue
         addr.append("links", {
-            "link_doctype": "Customer",
-            "link_name": customer.name,
+            "link_doctype": doctype, "link_name": docname,
         })
         addr.flags.ignore_permissions = True
         addr.save()
@@ -229,6 +236,166 @@ def _link_ee_managed_addresses(
             "action": "linked",
         })
     return summary
+
+
+@frappe.whitelist()
+def bootstrap_section10_internal_supplier(
+    represents_company: str,
+    supplier_name: str | None = None,
+    push_to_ee: int | bool = 1,
+) -> dict[str, Any]:
+    """Symmetric to bootstrap_section10_internal_customer, but for the
+    §10 PO branch's Internal Supplier. The PO branch fires when source
+    warehouse is NOT EE-mapped and target IS — EE sees the inbound as
+    a vendor PO, and `_resolve_po_branch_vendor` needs an Internal
+    Supplier with represents_company=<source Company> AND a Supplier
+    Map carrying ee_vendor_id.
+
+    `_find_internal_supplier` uses a STRICT match on represents_company
+    (unlike the Customer's loose-match path) — so one Internal Supplier
+    per source Company is the supported model. Re-running this action
+    per source Company is the natural flow.
+    """
+    if not represents_company or not frappe.db.exists(
+        "Company", represents_company
+    ):
+        return {
+            "ok": False,
+            "message": f"Company {represents_company!r} does not exist.",
+        }
+
+    supplier_name = (supplier_name or "").strip() or _default_supplier_name(
+        represents_company
+    )
+
+    existing = frappe.db.get_value(
+        "Supplier",
+        {"supplier_name": supplier_name, "is_internal_supplier": 1},
+        "name",
+    ) or frappe.db.get_value(
+        "Supplier",
+        {
+            "is_internal_supplier": 1,
+            "represents_company": represents_company,
+        },
+        "name",
+    )
+
+    created = False
+    if existing:
+        supplier = frappe.get_doc("Supplier", existing)
+    else:
+        supplier = _create_internal_supplier(
+            supplier_name=supplier_name,
+            represents_company=represents_company,
+        )
+        created = True
+
+    companies_added = _ensure_allowed_supplier_companies(
+        supplier, exclude=represents_company
+    )
+    supplier.save(ignore_permissions=True)
+
+    # Link addresses on warehouses owned by the represents_company —
+    # those are the dispatch addresses for the PO payload (vendor
+    # ships from its own warehouses).
+    addresses_linked = _link_ee_managed_addresses_to(
+        doctype="Supplier",
+        docname=supplier.name,
+        companies=[represents_company],
+    )
+
+    push_summary: dict[str, Any] | None = None
+    if int(push_to_ee or 0):
+        push_summary = _push_supplier_to_ee(supplier.name)
+
+    return {
+        "ok": True,
+        "supplier": supplier.name,
+        "supplier_created": created,
+        "represents_company": represents_company,
+        "companies_added": companies_added,
+        "companies_total": len(supplier.companies or []),
+        "addresses_linked": addresses_linked,
+        "push_to_ee": push_summary,
+    }
+
+
+def _default_supplier_name(represents_company: str) -> str:
+    return f"Internal — {represents_company} (Vendor)"
+
+
+def _create_internal_supplier(
+    *, supplier_name: str, represents_company: str
+) -> Any:
+    supplier = frappe.new_doc("Supplier")
+    supplier.supplier_name = supplier_name
+    supplier.supplier_type = "Company"
+    supplier.is_internal_supplier = 1
+    supplier.represents_company = represents_company
+    supplier.supplier_group = _resolve_default_supplier_group()
+    supplier.country = (
+        frappe.db.get_value("Company", represents_company, "country")
+        or "India"
+    )
+    supplier.flags.ignore_permissions = True
+    supplier.insert()
+    return supplier
+
+
+def _resolve_default_supplier_group() -> str:
+    return (
+        frappe.db.get_value("Supplier Group", "All Supplier Groups", "name")
+        or frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
+        or "All Supplier Groups"
+    )
+
+
+def _ensure_allowed_supplier_companies(supplier: Any, *, exclude: str) -> int:
+    """Mirror of `_ensure_allowed_companies` but for the Supplier's
+    `companies` (Allowed To Transact With) child. Adds every other
+    Company so the Supplier can sell to any destination."""
+    all_companies = frappe.db.get_all(
+        "Company", pluck="name", order_by="name asc"
+    )
+    existing = {
+        (row.company or "") for row in (supplier.companies or [])
+    }
+    added = 0
+    for c in all_companies:
+        if c == exclude:
+            continue
+        if c in existing:
+            continue
+        supplier.append("companies", {"company": c})
+        added += 1
+    return added
+
+
+def _push_supplier_to_ee(supplier_name: str) -> dict[str, Any]:
+    """Run the §8f push synchronously. Idempotent — UpdateVendor when
+    Map exists, CreateVendor otherwise."""
+    from ecommerce_super.easyecom.flows.supplier_push import (
+        push_one_supplier,
+    )
+
+    try:
+        outcome = push_one_supplier(supplier_name)
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    ee_vendor_id = frappe.db.get_value(
+        "EasyEcom Supplier Map",
+        {"erpnext_doctype": "Supplier", "erpnext_name": supplier_name},
+        "ee_vendor_id",
+    )
+    return {
+        "ok": bool(getattr(outcome, "pushed", False)) or bool(ee_vendor_id),
+        "operation": getattr(outcome, "operation", None),
+        "pushed": bool(getattr(outcome, "pushed", False)),
+        "ee_vendor_id": ee_vendor_id,
+        "flag_reasons": list(getattr(outcome, "flag_reasons", []) or []),
+    }
 
 
 def _push_to_ee(customer_name: str) -> dict[str, Any]:
