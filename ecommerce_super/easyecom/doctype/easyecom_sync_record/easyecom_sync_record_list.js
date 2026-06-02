@@ -15,16 +15,14 @@ frappe.listview_settings["EasyEcom Sync Record"] = {
     ],
 
     get_indicator(doc) {
+        // Sync Record outcome is BINARY per §7.3 — Success | Failed.
+        // Drift / discrepancy classification is carried in last_error
+        // and on child line_status, NOT on the parent status enum.
         const map = {
             Pending: ["Pending", "grey", "status,=,Pending"],
             Running: ["Running", "blue", "status,=,Running"],
             Success: ["Success", "green", "status,=,Success"],
             Failed: ["Failed", "red", "status,=,Failed"],
-            Discrepancy: [
-                "Discrepancy",
-                "orange",
-                "status,=,Discrepancy",
-            ],
             Cancelled: ["Cancelled", "darkgrey", "status,=,Cancelled"],
             AlreadySynced: [
                 "AlreadySynced",
@@ -60,19 +58,6 @@ frappe.listview_settings["EasyEcom Sync Record"] = {
                 ["EasyEcom Sync Record", "status", "=", "Failed"],
             ]);
         });
-        listview.page.add_menu_item(
-            __("Show only Discrepancy"),
-            () => {
-                listview.filter_area.add([
-                    [
-                        "EasyEcom Sync Record",
-                        "status",
-                        "=",
-                        "Discrepancy",
-                    ],
-                ]);
-            },
-        );
         listview.page.add_menu_item(
             __("Show only Running / Pending"),
             () => {

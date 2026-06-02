@@ -20,21 +20,15 @@ from frappe.model.document import Document
 # Valid status transitions (defensive — the integration owns transitions, but
 # the controller validates them so any out-of-band UPDATE is caught).
 #
-# Discrepancy is the §7.3 "succeeded-but-found-divergence" outcome — first
-# used by §8d drift detection. The operation ran cleanly; the result was a
-# divergence finding rather than a sync failure. Distinct from Failed so
-# §22 alert routing can subscribe to drift events without conflating them
-# with genuine push/pull failures. FDE can:
-#   - re-run detection (Pending → Running → ... → Discrepancy again or
-#     Success if the EE-side change was reverted),
-#   - acknowledge it (record stays Discrepancy; the Item Map row + a
-#     future §23 Integration Discrepancy carry the resolution state),
-#   - cancel it (e.g. when the divergence has been resolved upstream).
+# Per SPEC §7.3 the per-record outcome is BINARY — Success | Failed. Drift
+# findings (the §8d "succeeded-but-found-divergence" case) write Failed with
+# the divergence detail captured in last_error and on child line_status.
+# This map intentionally omits "Discrepancy" as a parent state — that was a
+# pre-§7.3-correction artefact migrated out by gh#16.
 ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "Pending": {"Running", "Cancelled", "AlreadySynced"},
-    "Running": {"Success", "Failed", "Discrepancy", "Pending"},
+    "Running": {"Success", "Failed", "Pending"},
     "Failed": {"Pending", "Cancelled"},  # FDE retry returns to Pending
-    "Discrepancy": {"Pending", "Cancelled"},  # FDE re-detection / dismissal
     "Success": set(),  # terminal
     "Cancelled": set(),  # terminal
     "AlreadySynced": {"Pending"},  # FDE force-resync
