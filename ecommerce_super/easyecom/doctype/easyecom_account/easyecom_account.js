@@ -882,6 +882,37 @@ function _runPauseAllAutoPush(frm) {
     d.show();
 }
 
+// gh#11 — instant in-page popup when a Discover RQ job finishes. The
+// worker calls frappe.publish_realtime("easyecom:discover_done", ...,
+// user=triggered_by); we subscribe ONCE per page load (not per form
+// refresh — refresh fires every time the user re-opens the form, and
+// stacking listeners would multiply popups). The Notification Log row
+// the worker also writes is the durable bell-icon trail; this listener
+// is the "you're still in the desk, here's the result now" channel.
+if (!window.__ecs_discover_listener_attached) {
+    window.__ecs_discover_listener_attached = true;
+    frappe.realtime.on("easyecom:discover_done", (data) => {
+        if (!data || typeof data !== "object") {
+            return;
+        }
+        const kind = data.kind || "?";
+        const ok = !!data.ok;
+        const summary = data.summary || "";
+        const route = data.list_route || "";
+        const message =
+            `<b>Discover ${frappe.utils.escape_html(kind)} ` +
+            (ok ? "complete" : "failed") + `</b><br>` +
+            frappe.utils.escape_html(summary) +
+            (route
+                ? `<br><a href="${frappe.utils.escape_html(route)}">Open list →</a>`
+                : "");
+        frappe.show_alert(
+            { message: message, indicator: ok ? "green" : "red" },
+            ok ? 10 : 20
+        );
+    });
+}
+
 frappe.ui.form.on("EasyEcom Account", {
     refresh(frm) {
         frm.trigger("update_connection_indicator");

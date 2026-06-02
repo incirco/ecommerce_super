@@ -54,11 +54,14 @@ def discover_customers(inline: int | bool = False) -> dict[str, Any]:
 
     if not bool(int(inline or 0)):
         import time as _time
+        from ecommerce_super.easyecom.utils.discover_notify import safe_caller
+        triggered_by = safe_caller()
         job = frappe.enqueue(
             "ecommerce_super.easyecom.api.customer_pull._discover_customers_worker",
             queue="long",
             timeout=3600,
             job_id=f"discover_customers_{int(_time.time())}",
+            triggered_by=triggered_by,
         )
         return {
             "ok": True,
@@ -101,13 +104,42 @@ def discover_customers(inline: int | bool = False) -> dict[str, Any]:
     }
 
 
-def _discover_customers_worker() -> None:
-    """Background worker entry-point for async customer discovery."""
+def _discover_customers_worker(triggered_by: str | None = None) -> None:
+    """Background worker entry-point for async customer discovery.
+
+    Notifies the user who enqueued the job on completion (gh#11) —
+    triggered_by is captured at the enqueue site because RQ workers
+    don't share `frappe.session.user` with the originating HTTP request.
+    """
+    from ecommerce_super.easyecom.utils.discover_notify import (
+        notify_discover_complete,
+    )
+
     try:
-        pull_customers()
+        outcome = pull_customers()
     except Exception as exc:  # noqa: BLE001
         frappe.log_error(
             title="EasyEcom Discover Customers (async) failed",
             message=f"{type(exc).__name__}: {exc}",
         )
+        notify_discover_complete(
+            triggered_by=triggered_by,
+            kind="Customers",
+            ok=False,
+            summary=f"Discover Customers failed: {type(exc).__name__}: {exc}",
+            list_route="/app/error-log",
+        )
         raise
+
+    summary = (
+        f"Total: {outcome.total} | Created: {outcome.created} | "
+        f"Skipped: {outcome.skipped} | Created-Flagged: {outcome.created_flagged} | "
+        f"FNC: {outcome.flagged_not_created} | Failed: {outcome.failed}"
+    )
+    notify_discover_complete(
+        triggered_by=triggered_by,
+        kind="Customers",
+        ok=True,
+        summary=summary,
+        list_route="/app/easyecom-customer-map",
+    )
