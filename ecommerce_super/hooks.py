@@ -98,6 +98,10 @@ doctype_js = {
     # both header warehouses picked, predicts the §10 branch (STN /
     # PO / B2B / Inert) so the FDE sees the consequence before submit.
     "Delivery Note": "public/js/delivery_note_ee_visibility.js",
+    # §10 UX: lock Address fields when mirrored from an EasyEcom
+    # Location (ecs_ee_location set). Renders a banner directing the
+    # FDE to edit on the Location side — single source of truth.
+    "Address": "public/js/address_ee_lock.js",
 }
 
 
@@ -384,7 +388,14 @@ doc_events: dict[str, dict[str, str]] = {
     # warehouse autocompletes so users can see EE-mapping at a glance
     # before they pick a warehouse.
     "EasyEcom Location": {
-        "after_save": "ecommerce_super.easyecom.flows.warehouse_label_sync.sync_on_location_save",
+        # Frappe accepts a list per event-slot — runs handlers in order.
+        # warehouse_label_sync keeps Warehouse.ecs_ee_location_label
+        # current; warehouse_address_sync mirrors the Location's
+        # address fields onto a Warehouse-linked Address.
+        "after_save": [
+            "ecommerce_super.easyecom.flows.warehouse_label_sync.sync_on_location_save",
+            "ecommerce_super.easyecom.flows.warehouse_address_sync.sync_on_location_save",
+        ],
         "on_trash": "ecommerce_super.easyecom.flows.warehouse_label_sync.sync_on_location_trash",
     },
 }
