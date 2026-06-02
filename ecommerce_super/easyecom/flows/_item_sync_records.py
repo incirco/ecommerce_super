@@ -81,12 +81,20 @@ from ecommerce_super.easyecom.utils.idempotency import (
     item_push_key,
 )
 
-# Stage 5 status enum values from the Sync Record DocType.
+# Sync Record status enum (SPEC §7.3 M1 binary state machine).
 STATUS_PENDING = "Pending"
 STATUS_RUNNING = "Running"
 STATUS_SUCCESS = "Success"
 STATUS_FAILED = "Failed"
-STATUS_DISCREPANCY = "Discrepancy"
+# gh#16: STATUS_DISCREPANCY is now an ALIAS for "Failed" — the per-record
+# outcome is binary by spec, so a discrepancy on any line makes the
+# whole record Failed. The constant is preserved to keep existing flow
+# callsites (item_pull / supplier_pull / grn_pull / po_push) intentful:
+# `status=STATUS_DISCREPANCY` reads as "this is a drift-flavored
+# failure" while writing the correct binary value to the DB. Drift
+# context is preserved in last_error so §22 alert routing can still
+# differentiate. New callsites should prefer STATUS_FAILED directly.
+STATUS_DISCREPANCY = "Failed"
 
 # Entity type — Item is the closest match in the §31.2.3 enum for
 # both normal items and Product Bundles. entity_doctype carries the

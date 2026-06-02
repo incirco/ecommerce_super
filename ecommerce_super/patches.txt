@@ -47,3 +47,7 @@ ecommerce_super.patches.v0_1.backfill_warehouse_addresses_from_locations
 # JSON changes auto-sync via `bench migrate`; this patch is just for
 # the workspace shortcut refresh on already-installed sites).
 ecommerce_super.patches.v0_1.refresh_workspace_gh18_api_calls_shortcut
+# gh#16: SPEC §7.3 M1 — Sync Record status is binary. Migrate any
+# existing rows with status="Discrepancy" to "Failed" before the JSON
+# enum change rejects them on the next save.
+ecommerce_super.patches.v0_1.migrate_sync_record_discrepancy_to_failed
