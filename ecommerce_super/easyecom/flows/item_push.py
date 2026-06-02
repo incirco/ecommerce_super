@@ -1326,6 +1326,23 @@ def build_push_payload(
     if ean:
         payload["EANUPC"] = ean
 
+    # 2b) ProductTaxCode (HSN) — hard mandatory. On sites where India
+    # Compliance isn't installed (or its custom-field migration hasn't
+    # run), `item.gst_hsn_code` resolves to None/absent, the ruleset's
+    # HSN→ProductTaxCode rule produces no value, and the None-strip in
+    # step (4) below would silently drop the field — letting a payload
+    # WITHOUT ProductTaxCode reach EE. Flag here so the item lands as
+    # FNC visibly, not pushed silently. This complements the sweep-side
+    # gh#17 fix that tolerates the missing column at SQL level — the
+    # sweep enqueues the item; this gate then refuses to push it.
+    if not payload.get("ProductTaxCode"):
+        flag_reasons.append(
+            "ProductTaxCode (HSN) missing — `Item.gst_hsn_code` is "
+            "empty or the column is absent (India Compliance not "
+            "installed / not migrated). Install IC and re-save the "
+            "Item with its HSN, then re-push."
+        )
+
     # 2) TaxRate — computed; if None, FLAG (hard mandatory, no defensible default).
     tax_rate = _resolve_tax_rate(item, enabled_companies=enabled_companies)
     if tax_rate is None:

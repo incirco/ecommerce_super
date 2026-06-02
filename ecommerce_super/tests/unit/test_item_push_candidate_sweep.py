@@ -66,5 +66,81 @@ class TestCandidateItemsForSweep(unittest.TestCase):
         self.assertNotIn("LIMIT", query)
 
 
+class TestBuildPushPayloadHsnGate(unittest.TestCase):
+    """gh#17 follow-up — verify build_push_payload flags items without
+    ProductTaxCode so column-less / IC-less sites don't silently push
+    HSN-less payloads.
+
+    The sweep-side fix (above) enqueues items even when gst_hsn_code is
+    absent. Without this payload-side gate, the per-item worker would
+    build a payload with no ProductTaxCode, the None-strip step would
+    drop the field, and EE would receive an HSN-less product — a silent
+    catalogue corruption. The flag turns it into a visible
+    Flagged-Not-Pushed outcome instead.
+    """
+
+    def _call(self, ruleset_output: dict) -> tuple[dict, list[str]]:
+        """Invoke build_push_payload with a stubbed executor that
+        returns the supplied dict, and stubs around TaxRate /
+        physical-dim resolution that aren't under test here."""
+        from ecommerce_super.easyecom.flows import item_push
+
+        executor = MagicMock()
+        executor.push = MagicMock(return_value=dict(ruleset_output))
+
+        item = MagicMock()
+        item.barcodes = []
+
+        # Patch the helpers build_push_payload calls inline so we
+        # exercise only the HSN gate, not TaxRate / dim resolution.
+        with (
+            patch.object(item_push, "_ean_barcode", return_value=None),
+            patch.object(item_push, "_resolve_tax_rate", return_value=18.0),
+            patch.object(item_push, "_is_missing_or_zero", return_value=False),
+        ):
+            return item_push.build_push_payload(
+                item, executor=executor, enabled_companies=["X"]
+            )
+
+    def test_hsn_present_no_flag(self) -> None:
+        """ProductTaxCode in ruleset output → no HSN flag, payload
+        carries the field."""
+        payload, reasons = self._call(
+            {
+                "ProductTaxCode": "8516",
+                "Weight": 100, "Length": 10, "Height": 10, "Width": 10,
+            }
+        )
+        self.assertEqual(reasons, [])
+        self.assertEqual(payload["ProductTaxCode"], "8516")
+
+    def test_hsn_absent_raises_flag(self) -> None:
+        """No ProductTaxCode (column missing / IC absent / Item HSN
+        empty) → flag and the item must NOT push."""
+        payload, reasons = self._call(
+            {
+                # No ProductTaxCode key at all.
+                "Weight": 100, "Length": 10, "Height": 10, "Width": 10,
+            }
+        )
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("ProductTaxCode (HSN) missing", reasons[0])
+        # Step (4) None-strip removes it; payload must NOT carry an
+        # empty / null ProductTaxCode that would slip past EE's gate.
+        self.assertNotIn("ProductTaxCode", payload)
+
+    def test_hsn_empty_string_treated_as_absent(self) -> None:
+        """ProductTaxCode='' (some rulesets emit empty when source is
+        missing) → flag, same as outright absent."""
+        payload, reasons = self._call(
+            {
+                "ProductTaxCode": "",
+                "Weight": 100, "Length": 10, "Height": 10, "Width": 10,
+            }
+        )
+        self.assertTrue(any("ProductTaxCode (HSN) missing" in r for r in reasons))
+        self.assertNotIn("ProductTaxCode", payload)
+
+
 if __name__ == "__main__":
     unittest.main()
