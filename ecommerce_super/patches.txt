@@ -51,3 +51,8 @@ ecommerce_super.patches.v0_1.refresh_workspace_gh18_api_calls_shortcut
 # existing rows with status="Discrepancy" to "Failed" before the JSON
 # enum change rejects them on the next save.
 ecommerce_super.patches.v0_1.migrate_sync_record_discrepancy_to_failed
+# gh#3 follow-up: refresh the EasyEcom Top Strip Custom HTML Block's
+# render payload (html / script / style) from JSON. Production sites
+# where the block was installed empty / corrupted were rendering the
+# literal string "undefined" in place of the strip.
+ecommerce_super.patches.v0_1.refresh_easyecom_top_strip_block
