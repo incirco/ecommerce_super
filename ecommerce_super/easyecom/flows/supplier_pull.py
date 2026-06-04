@@ -812,6 +812,11 @@ def _create_address_strict(
             "pincode": zipcode or "",
             "state": state_name or "",
             "country": country_name or "India",
+            # gh#24: see customer_pull._create_address_strict — same
+            # defensive set so ERPNextAddress.validate_reference doesn't
+            # AttributeError on sites missing the IC custom-field
+            # migration. Supplier-linked address; never Company.
+            "is_your_company_address": 0,
         }
     )
     if gstin:

@@ -569,6 +569,16 @@ def _create_address_strict(
             "pincode": zipcode or "",
             "state": state_name or "",
             "country": country_name or "India",
+            # gh#24: ERPNext seeds is_your_company_address as a Custom
+            # Field on Address (erpnext/accounts/custom/address.json),
+            # and ERPNextAddress.validate_reference reads it. On sites
+            # where that custom-field migration hasn't run, the
+            # attribute is missing and validate() AttributeError's. We
+            # never create Company addresses here (this is a Customer-
+            # linked address), so 0 is correct and the explicit set
+            # makes the attribute exist as an instance attribute
+            # regardless of meta state.
+            "is_your_company_address": 0,
         }
     )
     if gstin:

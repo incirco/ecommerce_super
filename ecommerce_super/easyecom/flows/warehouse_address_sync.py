@@ -96,6 +96,14 @@ def _upsert_warehouse_address(*, loc: Any, warehouse: str) -> str | None:
         "pincode": (loc.pincode or "").strip(),
         "gstin": gstin_valid,
         "ecs_ee_location": loc.name,
+        # gh#24: ERPNext seeds is_your_company_address as a Custom
+        # Field on Address; ERPNextAddress.validate_reference reads it.
+        # On sites where the IC / ERPNext custom-field migration hasn't
+        # run, the attribute is missing and validate() AttributeError's.
+        # Warehouse-linked addresses are never "Company addresses" in
+        # the IC sense (they hold the warehouse's GSTIN, not the
+        # Company's primary registered office), so 0 is correct.
+        "is_your_company_address": 0,
     }
     # GST category — Registered Regular when a VALID GSTIN was kept;
     # otherwise leave whatever's there (don't force Unregistered on
