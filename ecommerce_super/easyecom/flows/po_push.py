@@ -1360,6 +1360,69 @@ def candidate_pos_for_sweep(limit: int | None = None) -> list[str]:
     return [r["name"] for r in rows]
 
 
+def candidate_pos_diagnostic() -> dict[str, int]:
+    """Bucket counts that explain why `candidate_pos_for_sweep` returns
+    what it does (gh#29).
+
+    The user-facing pain (section 2.1: "Considered: 0, Enqueued: 0")
+    is that the sweep silently rejects POs without saying which gate
+    excluded them. This helper emits a per-gate count so the FDE sees
+    at a glance whether the issue is: nothing submitted, no warehouse
+    mapped to an EE Location, or everything already pushed.
+
+    Returns the per-bucket breakdown. Same query shape as
+    candidate_pos_for_sweep so the totals match.
+    """
+    rows = frappe.db.sql(
+        """
+        SELECT
+            COUNT(*) AS total_pos,
+            SUM(CASE WHEN po.docstatus = 0 THEN 1 ELSE 0 END) AS draft,
+            SUM(CASE WHEN po.docstatus = 2 THEN 1 ELSE 0 END) AS cancelled,
+            SUM(
+                CASE
+                    WHEN po.docstatus = 1
+                     AND po.set_warehouse NOT IN (
+                        SELECT mapped_warehouse
+                        FROM `tabEasyEcom Location`
+                        WHERE mapped_warehouse IS NOT NULL
+                     )
+                    THEN 1 ELSE 0
+                END
+            ) AS submitted_unmapped_warehouse,
+            SUM(
+                CASE
+                    WHEN po.docstatus = 1
+                     AND po.set_warehouse IN (
+                        SELECT mapped_warehouse
+                        FROM `tabEasyEcom Location`
+                        WHERE mapped_warehouse IS NOT NULL
+                     )
+                     AND EXISTS (
+                        SELECT 1 FROM `tabEasyEcom PO Map` pm
+                        WHERE pm.purchase_order = po.name
+                          AND pm.status = 'Mapped'
+                     )
+                    THEN 1 ELSE 0
+                END
+            ) AS already_mapped
+        FROM `tabPurchase Order` po
+        """,
+        as_dict=True,
+    )
+    row = rows[0] if rows else {}
+    # Coerce SUM(...) NULL to 0 for empty-table sites.
+    return {
+        "total_pos": int(row.get("total_pos") or 0),
+        "draft": int(row.get("draft") or 0),
+        "cancelled": int(row.get("cancelled") or 0),
+        "submitted_unmapped_warehouse": int(
+            row.get("submitted_unmapped_warehouse") or 0
+        ),
+        "already_mapped": int(row.get("already_mapped") or 0),
+    }
+
+
 @frappe.whitelist()
 def push_all_pending_pos(
     account: str | None = None,
@@ -1401,14 +1464,17 @@ def push_all_pending_pos(
     # Async path — one Queue Job per candidate, idempotent on
     # (company, po_name, location_key).
     enqueued: list[str] = []
+    failures: list[dict[str, str]] = []
     for po_name in candidates:
         try:
             _enqueue_push(po_docname=po_name, push_status_after_content=True)
             enqueued.append(po_name)
         except Exception as exc:
+            error_summary = f"{type(exc).__name__}: {exc}"
+            failures.append({"po_name": po_name, "error": error_summary})
             frappe.log_error(
                 title=f"PO push enqueue failed for {po_name}",
-                message=f"{type(exc).__name__}: {exc}",
+                message=error_summary,
             )
     return {
         "ok": True,
@@ -1416,6 +1482,12 @@ def push_all_pending_pos(
         "total_considered": len(candidates),
         "enqueued_count": len(enqueued),
         "queue_job_names_sample": enqueued[:10],
+        # gh#29: per-bucket diagnostic so "Considered: 0" answers WHY
+        # in one glance. Also surface per-candidate enqueue failures
+        # (same pattern as gh#27 supplier/customer sweep fix).
+        "diagnostic": candidate_pos_diagnostic(),
+        "failed_count": len(failures),
+        "failures_sample": failures[:10],
     }
 
 
