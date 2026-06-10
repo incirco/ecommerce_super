@@ -357,9 +357,9 @@
   "direction": "Push",
   "active": 1,
   "missing_field_policy": "Permissive",
-  "version": 3,
+  "version": 4,
   "last_modified_by": "Administrator",
-  "last_modified_at": "2026-05-26 14:00:00",
+  "last_modified_at": "2026-06-10 14:00:00",
   "change_reason": "\u00a78d Stage 3 \u2014 ERPNext Item \u2192 EasyEcom CreateMasterProduct / UpdateMasterProduct payload. Holds the REAL-DATA-FROM-ITEM mappings only (Sku, ItemName, ProductTaxCode, dimensions, Cost, productId for updates). The MANUFACTURED EE-mandatory fields ERPNext doesn't carry (materialType=1 Finished Good, itemType=0 normal in Stage 3, Brand/Category/ModelNumber fallbacks, TaxRate snapped to EE's allowed {0,3,5,12,18,28} set) are injected by the FLOW (item_push.py) after the engine produces this payload \u2014 they're flow decisions, not translations, and don't belong in the ruleset per the \u00a78.0 engine-as-translator policy. Stage 3 covers normal products only; bundles (combo_product) are Stage 4's job and use itemType=1 + subProducts. | v2 (FDE-configurability refactor per user direction): the manufactured constants (materialType=1, itemType=0, Brand fallback, Cost fallback chain, ModelNumber=item_code) are now ruleset rules instead of flow-code constants. FDE edits them via the desk EasyEcom Field Mapping > EasyEcom-Item-Push > Rules child table \u2014 no code deploy needed to change defaults or add company-conditional logic. TaxRate stays in the flow (it's a DB lookup + snap-to-set, not a constant or simple derivation). | v3 (\u00a78d Stage 4 \u2014 bundles): itemType becomes per-record conditional (Product Bundle wrapper \u2192 1, normal \u2192 0) by reading source_doc.flags.is_bundle_wrapper which the FLOW sets before push. Wrapper-Item push (combo path) and normal-item push share the same ruleset; the flow's pre-push flag-set decides which itemType the ruleset emits.",
   "rules": [
    {
@@ -406,6 +406,13 @@
     "transform_push": "identity",
     "transform_pull": "identity",
     "notes": "ERPNext Item.item_group is required, so this always has a value. Pushed as Category \u2014 EE will create/lookup its own side category from the string."
+   },
+   {
+    "erpnext_path": "stock_uom",
+    "easyecom_path": "accounting_unit",
+    "transform_push": "identity",
+    "transform_pull": "identity",
+    "notes": "gh#38 \u2014 the Push ruleset was missing this rule entirely. Pull side handled accounting_unit \u2192 stock_uom (with dirty-UOM substitution in the flow) but pushed payloads omitted accounting_unit, so EE-side UOM stayed frozen at whatever Create-time value EE had \u2014 even when the FDE corrected stock_uom on the ERPNext Item. Identity push: ERPNext's stock_uom string lands on EE's accounting_unit. EE accepts arbitrary strings on this field (per their FAQ; real values seen in production: \"PCS\", \"Nos\", \"111\", \"NA\"); no normalisation here \u2014 the FLOW's substitution is pull-side only because EE-side dirt shouldn't change what we push out from a clean ERPNext side."
    },
    {
     "erpnext_path": "weight_per_unit",

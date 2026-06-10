@@ -56,3 +56,8 @@ ecommerce_super.patches.v0_1.migrate_sync_record_discrepancy_to_failed
 # where the block was installed empty / corrupted were rendering the
 # literal string "undefined" in place of the strip.
 ecommerce_super.patches.v0_1.refresh_easyecom_top_strip_block
+# gh#38: append `stock_uom → accounting_unit` push rule to the
+# EasyEcom-Item-Push ruleset on deployed sites. The Pull ruleset has
+# had the inverse rule since §8d Stage 2; the Push side was missing
+# it entirely, so ERPNext-side UOM updates never propagated to EE.
+ecommerce_super.patches.v0_1.add_stock_uom_push_rule
