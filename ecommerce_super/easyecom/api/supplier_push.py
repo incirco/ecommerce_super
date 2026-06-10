@@ -93,4 +93,8 @@ def push_all_pending_suppliers(account: str) -> dict[str, Any]:
         "total_considered": result["total_considered"],
         "enqueued_count": result["enqueued_count"],
         "queue_job_names_sample": result["queue_job_names_sample"],
+        # gh#27: surface per-candidate enqueue failures back to the FDE
+        # so "Considered: N, Enqueued: 0" is no longer a silent black box.
+        "failed_count": result.get("failed_count", 0),
+        "failures_sample": result.get("failures_sample", []),
     }

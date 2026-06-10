@@ -1447,18 +1447,47 @@ frappe.ui.form.on("EasyEcom Account", {
                             });
                             return;
                         }
+                        // gh#27 sibling fix: surface per-candidate enqueue
+                        // failures so "Considered: N | Enqueued: 0" isn't
+                        // a silent black box.
+                        const failed_count = result.failed_count || 0;
+                        const failure_lines = (result.failures_sample || []).map(
+                            (f) =>
+                                "&bull; <code>" +
+                                frappe.utils.escape_html(f.customer_docname || "?") +
+                                "</code>: " +
+                                frappe.utils.escape_html(f.error || "?")
+                        );
+                        let body = __(
+                            "Considered: <b>{0}</b> | Enqueued: <b>{1}</b> | Failed: <b>{2}</b>",
+                            [
+                                result.total_considered,
+                                result.enqueued_count,
+                                failed_count,
+                            ]
+                        );
+                        body +=
+                            "<br>" +
+                            __("Sample Queue Jobs: {0}", [
+                                (result.queue_job_names_sample || []).join(", ") || "—",
+                            ]);
+                        if (failure_lines.length) {
+                            body +=
+                                "<br><br><b>" +
+                                __("Failure sample:") +
+                                "</b><br>" +
+                                failure_lines.join("<br>");
+                        }
+                        const indicator =
+                            failed_count > 0
+                                ? "orange"
+                                : result.total_considered === 0
+                                ? "grey"
+                                : "green";
                         frappe.msgprint({
                             title: __("Customer Push Enqueued"),
-                            message: __(
-                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
-                                    "Sample Queue Jobs: {2}",
-                                [
-                                    result.total_considered,
-                                    result.enqueued_count,
-                                    (result.queue_job_names_sample || []).join(", ") || "—",
-                                ]
-                            ),
-                            indicator: "green",
+                            message: body,
+                            indicator: indicator,
                         });
                     },
                 });
@@ -1495,18 +1524,49 @@ frappe.ui.form.on("EasyEcom Account", {
                             });
                             return;
                         }
+                        // gh#27: surface per-candidate enqueue failures so
+                        // "Considered: N | Enqueued: 0" isn't a silent black
+                        // box. Use orange when there are failures, green
+                        // when fully successful, grey when nothing
+                        // considered.
+                        const failed_count = result.failed_count || 0;
+                        const failure_lines = (result.failures_sample || []).map(
+                            (f) =>
+                                "&bull; <code>" +
+                                frappe.utils.escape_html(f.supplier_docname || "?") +
+                                "</code>: " +
+                                frappe.utils.escape_html(f.error || "?")
+                        );
+                        let body = __(
+                            "Considered: <b>{0}</b> | Enqueued: <b>{1}</b> | Failed: <b>{2}</b>",
+                            [
+                                result.total_considered,
+                                result.enqueued_count,
+                                failed_count,
+                            ]
+                        );
+                        body +=
+                            "<br>" +
+                            __("Sample Queue Jobs: {0}", [
+                                (result.queue_job_names_sample || []).join(", ") || "—",
+                            ]);
+                        if (failure_lines.length) {
+                            body +=
+                                "<br><br><b>" +
+                                __("Failure sample:") +
+                                "</b><br>" +
+                                failure_lines.join("<br>");
+                        }
+                        const indicator =
+                            failed_count > 0
+                                ? "orange"
+                                : result.total_considered === 0
+                                ? "grey"
+                                : "green";
                         frappe.msgprint({
                             title: __("Supplier Push Enqueued"),
-                            message: __(
-                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
-                                    "Sample Queue Jobs: {2}",
-                                [
-                                    result.total_considered,
-                                    result.enqueued_count,
-                                    (result.queue_job_names_sample || []).join(", ") || "—",
-                                ]
-                            ),
-                            indicator: "green",
+                            message: body,
+                            indicator: indicator,
                         });
                     },
                 });
