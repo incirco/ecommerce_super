@@ -94,6 +94,11 @@ doctype_js = {
     # §8e Stage 4: "Push to EasyEcom" button on the Customer form.
     # Only visible for customer_type=Company (§8e wholesale scope).
     "Customer": "public/js/customer_push_button.js",
+    # §8f Stage 4 (gh#36): "Push to EasyEcom" button on the Supplier
+    # form. Mirrors Customer; only visible for supplier_type=Company
+    # and enabled (§8f wholesale scope; /wms/CreateVendor +
+    # /wms/UpdateVendor only handle Company vendors).
+    "Supplier": "public/js/supplier_push_button.js",
     # §10 UX: warehouse autocomplete carries EE-mapping label; once
     # both header warehouses picked, predicts the §10 branch (STN /
     # PO / B2B / Inert) so the FDE sees the consequence before submit.
