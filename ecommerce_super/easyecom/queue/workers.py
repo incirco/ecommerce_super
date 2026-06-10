@@ -49,6 +49,19 @@ JOB_TYPE_HANDLERS: dict[str, str] = {
     # candidate, audit fix #8), (c) drift resolution's "Push
     # ERPNext → EE" action.
     "Item Push": "ecommerce_super.easyecom.flows.item_push.item_push_queue_handler",
+    # §8e Stage 4: per-Customer push. Enqueued by enqueue_customer_push
+    # from (a) the auto-push hook, (b) the batch sweep. gh#27 sibling
+    # fix — the JOB_TYPE_HANDLERS entry was missing entirely, so even a
+    # successful enqueue would have failed at execute_job time with
+    # "no handler for job_type Customer Push".
+    "Customer Push": (
+        "ecommerce_super.easyecom.flows.customer_push.customer_push_queue_handler"
+    ),
+    # §8f Stage 4: per-Supplier push. Same audit gap as Customer Push
+    # (gh#27).
+    "Supplier Push": (
+        "ecommerce_super.easyecom.flows.supplier_push.supplier_push_queue_handler"
+    ),
     # §9 Stage 2: PO push (content channel + optional status push to
     # po_status=3). Enqueued by the on_submit hook + the batch sweep.
     "PO Push": "ecommerce_super.easyecom.flows.po_push.po_push_queue_handler",

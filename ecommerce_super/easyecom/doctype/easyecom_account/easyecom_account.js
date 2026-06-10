@@ -406,6 +406,14 @@ function _runGoLiveEnableAutoPush(frm) {
     const currentItems = !!frm.doc.auto_push_on_save;
     const currentCust = !!frm.doc.auto_push_customers_on_save;
     const currentSupp = !!frm.doc.auto_push_suppliers_on_save;
+    // gh#29: POs were supported by the server's `go_live_enable_auto_push`
+    // since 2026-05-29 (the `pos` kwarg) but never wired into this
+    // dialog — so "Buying Go Live" was invisible from the UI. Adding
+    // the checkbox here closes that gap, which in turn unblocks
+    // sections 3.1 / 3.3 / 7.4 of the buying validation: those flows
+    // are all gated on auto_push_pos_on_save=1, which the FDE couldn't
+    // enable from the desk.
+    const currentPos = !!frm.doc.auto_push_pos_on_save;
 
     const d = new frappe.ui.Dialog({
         title: __("Go Live — Enable Auto-Push"),
@@ -448,10 +456,18 @@ function _runGoLiveEnableAutoPush(frm) {
                 description: __("Currently: {0}",
                     [currentSupp ? "<b>ON</b> — re-enabling is a no-op" : "OFF"]),
             },
+            {
+                fieldname: "pos",
+                fieldtype: "Check",
+                label: __("Enable Purchase Orders auto-push (§9 Buying)"),
+                default: currentPos ? 0 : 1,
+                description: __("Currently: {0}",
+                    [currentPos ? "<b>ON</b> — re-enabling is a no-op" : "OFF"]),
+            },
         ],
         primary_action_label: __("Confirm Go Live"),
         primary_action(values) {
-            if (!values.items && !values.customers && !values.suppliers) {
+            if (!values.items && !values.customers && !values.suppliers && !values.pos) {
                 frappe.msgprint({
                     title: __("Nothing Selected"),
                     message: __("Pick at least one entity to enable, or cancel."),
@@ -467,6 +483,7 @@ function _runGoLiveEnableAutoPush(frm) {
                     items: values.items ? 1 : 0,
                     customers: values.customers ? 1 : 0,
                     suppliers: values.suppliers ? 1 : 0,
+                    pos: values.pos ? 1 : 0,
                     confirm: 1,
                 },
                 freeze: true,
@@ -482,10 +499,15 @@ function _runGoLiveEnableAutoPush(frm) {
                         return;
                     }
                     let body = __(
-                        "<b>Enabled:</b> {0}<br><br><b>Current state:</b> Items=<code>{1}</code>, Customers=<code>{2}</code>, Suppliers=<code>{3}</code>",
+                        "<b>Enabled:</b> {0}<br><br><b>Current state:</b> Items=<code>{1}</code>, Customers=<code>{2}</code>, Suppliers=<code>{3}</code>, POs=<code>{4}</code>",
                         [
                             (result.transitioned || []).join(", ") || "(none)",
-                            result.state.items, result.state.customers, result.state.suppliers,
+                            result.state.items,
+                            result.state.customers,
+                            result.state.suppliers,
+                            // gh#29: surface POs in the state row so the
+                            // FDE can confirm what just changed.
+                            result.state.pos !== undefined ? result.state.pos : "—",
                         ]
                     );
                     if ((result.warnings || []).length) {
@@ -1081,18 +1103,67 @@ frappe.ui.form.on("EasyEcom Account", {
                             });
                             return;
                         }
+                        // gh#29: when Considered: 0, the diagnostic
+                        // explains WHY in one glance — draft / cancelled
+                        // / submitted-but-warehouse-unmapped / already-
+                        // mapped. Also surface per-candidate enqueue
+                        // failures (gh#27 pattern).
+                        const d = result.diagnostic || {};
+                        const failed_count = result.failed_count || 0;
+                        const failure_lines = (result.failures_sample || []).map(
+                            (f) =>
+                                "&bull; <code>" +
+                                frappe.utils.escape_html(f.po_name || "?") +
+                                "</code>: " +
+                                frappe.utils.escape_html(f.error || "?")
+                        );
+                        let body = __(
+                            "Considered: <b>{0}</b> | Enqueued: <b>{1}</b> | Failed: <b>{2}</b>",
+                            [
+                                result.total_considered,
+                                result.enqueued_count,
+                                failed_count,
+                            ]
+                        );
+                        body +=
+                            "<br>" +
+                            __("Sample PO names: {0}", [
+                                (result.queue_job_names_sample || []).join(", ") || "—",
+                            ]);
+                        if (result.total_considered === 0) {
+                            body +=
+                                "<br><br><b>" +
+                                __("Why nothing was considered:") +
+                                "</b><br>" +
+                                __("Total POs on site: {0}", [d.total_pos || 0]) +
+                                "<br>" +
+                                __("• Draft (need submit): {0}", [d.draft || 0]) +
+                                "<br>" +
+                                __("• Cancelled: {0}", [d.cancelled || 0]) +
+                                "<br>" +
+                                __("• Submitted but target warehouse not mapped to an EasyEcom Location: {0}", [
+                                    d.submitted_unmapped_warehouse || 0,
+                                ]) +
+                                "<br>" +
+                                __("• Already Mapped (pushed to EE): {0}", [d.already_mapped || 0]);
+                        }
+                        if (failure_lines.length) {
+                            body +=
+                                "<br><br><b>" +
+                                __("Failure sample:") +
+                                "</b><br>" +
+                                failure_lines.join("<br>");
+                        }
+                        const indicator =
+                            failed_count > 0
+                                ? "orange"
+                                : result.total_considered === 0
+                                ? "grey"
+                                : "green";
                         frappe.msgprint({
                             title: __("PO Push Enqueued"),
-                            message: __(
-                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
-                                    "Sample PO names: {2}",
-                                [
-                                    result.total_considered,
-                                    result.enqueued_count,
-                                    (result.queue_job_names_sample || []).join(", ") || "—",
-                                ]
-                            ),
-                            indicator: "green",
+                            message: body,
+                            indicator: indicator,
                         });
                     },
                     error() {
@@ -1447,18 +1518,47 @@ frappe.ui.form.on("EasyEcom Account", {
                             });
                             return;
                         }
+                        // gh#27 sibling fix: surface per-candidate enqueue
+                        // failures so "Considered: N | Enqueued: 0" isn't
+                        // a silent black box.
+                        const failed_count = result.failed_count || 0;
+                        const failure_lines = (result.failures_sample || []).map(
+                            (f) =>
+                                "&bull; <code>" +
+                                frappe.utils.escape_html(f.customer_docname || "?") +
+                                "</code>: " +
+                                frappe.utils.escape_html(f.error || "?")
+                        );
+                        let body = __(
+                            "Considered: <b>{0}</b> | Enqueued: <b>{1}</b> | Failed: <b>{2}</b>",
+                            [
+                                result.total_considered,
+                                result.enqueued_count,
+                                failed_count,
+                            ]
+                        );
+                        body +=
+                            "<br>" +
+                            __("Sample Queue Jobs: {0}", [
+                                (result.queue_job_names_sample || []).join(", ") || "—",
+                            ]);
+                        if (failure_lines.length) {
+                            body +=
+                                "<br><br><b>" +
+                                __("Failure sample:") +
+                                "</b><br>" +
+                                failure_lines.join("<br>");
+                        }
+                        const indicator =
+                            failed_count > 0
+                                ? "orange"
+                                : result.total_considered === 0
+                                ? "grey"
+                                : "green";
                         frappe.msgprint({
                             title: __("Customer Push Enqueued"),
-                            message: __(
-                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
-                                    "Sample Queue Jobs: {2}",
-                                [
-                                    result.total_considered,
-                                    result.enqueued_count,
-                                    (result.queue_job_names_sample || []).join(", ") || "—",
-                                ]
-                            ),
-                            indicator: "green",
+                            message: body,
+                            indicator: indicator,
                         });
                     },
                 });
@@ -1495,18 +1595,49 @@ frappe.ui.form.on("EasyEcom Account", {
                             });
                             return;
                         }
+                        // gh#27: surface per-candidate enqueue failures so
+                        // "Considered: N | Enqueued: 0" isn't a silent black
+                        // box. Use orange when there are failures, green
+                        // when fully successful, grey when nothing
+                        // considered.
+                        const failed_count = result.failed_count || 0;
+                        const failure_lines = (result.failures_sample || []).map(
+                            (f) =>
+                                "&bull; <code>" +
+                                frappe.utils.escape_html(f.supplier_docname || "?") +
+                                "</code>: " +
+                                frappe.utils.escape_html(f.error || "?")
+                        );
+                        let body = __(
+                            "Considered: <b>{0}</b> | Enqueued: <b>{1}</b> | Failed: <b>{2}</b>",
+                            [
+                                result.total_considered,
+                                result.enqueued_count,
+                                failed_count,
+                            ]
+                        );
+                        body +=
+                            "<br>" +
+                            __("Sample Queue Jobs: {0}", [
+                                (result.queue_job_names_sample || []).join(", ") || "—",
+                            ]);
+                        if (failure_lines.length) {
+                            body +=
+                                "<br><br><b>" +
+                                __("Failure sample:") +
+                                "</b><br>" +
+                                failure_lines.join("<br>");
+                        }
+                        const indicator =
+                            failed_count > 0
+                                ? "orange"
+                                : result.total_considered === 0
+                                ? "grey"
+                                : "green";
                         frappe.msgprint({
                             title: __("Supplier Push Enqueued"),
-                            message: __(
-                                "Considered: <b>{0}</b> | Enqueued: <b>{1}</b><br>" +
-                                    "Sample Queue Jobs: {2}",
-                                [
-                                    result.total_considered,
-                                    result.enqueued_count,
-                                    (result.queue_job_names_sample || []).join(", ") || "—",
-                                ]
-                            ),
-                            indicator: "green",
+                            message: body,
+                            indicator: indicator,
                         });
                     },
                 });

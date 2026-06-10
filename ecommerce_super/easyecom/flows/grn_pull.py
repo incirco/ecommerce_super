@@ -1849,9 +1849,34 @@ def _company_for_warehouse(warehouse: str) -> str:
 
 
 def _default_rejected_warehouse_for(company: str) -> str | None:
-    """Account setting; the field stores a single Warehouse Link (not
-    per-Company), so we just return its value. Stage 4 may add a
-    per-Company override on EasyEcom Company Settings."""
+    """Resolve the rejected warehouse for a GRN line received into
+    `company` (gh#29 Section 4.3).
+
+    Lookup order (matches the §3.3.6 contract baked into the field
+    descriptions):
+      1. EasyEcom Company Settings.default_rejected_warehouse_override
+         — per-Company override; the field's description explicitly
+         calls itself "Optional per-Company override of the
+         account-level GRN policy default (§3.3.6)".
+      2. EasyEcom Account.default_rejected_warehouse — account-level
+         default; the field description says "Resolved per receiving
+         Company", which only holds if step 1 above is honored.
+
+    Prior shape ignored the `company` arg entirely and only returned
+    step 2, so an FDE who configured the per-Company override
+    (because their two Companies post rejected qty into different
+    warehouses) found their setting silently ignored — the GRN line
+    landed in the account-wide default or, when that was also empty,
+    raised RejectedWarehouseMissingError aborting the build.
+    """
+    if company:
+        override = frappe.db.get_value(
+            "EasyEcom Company Settings",
+            {"company": company, "enabled": 1},
+            "default_rejected_warehouse_override",
+        )
+        if override:
+            return override
     return frappe.db.get_value(
         "EasyEcom Account", {"enabled": 1}, "default_rejected_warehouse"
     )

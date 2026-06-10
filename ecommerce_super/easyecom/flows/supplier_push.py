@@ -803,46 +803,82 @@ def enqueue_push_all_pending(
     *, account_name: str, limit: int | None = None
 ) -> dict[str, Any]:
     """Production batch entry — enqueues one push job per candidate via
-    the §6.3.1 facade. Returns immediately with counts."""
+    the §6.3.1 facade. Returns immediately with counts AND a per-failure
+    diagnostic so the FDE isn't left guessing why a candidate didn't
+    enqueue (gh#27).
+
+    Prior versions called enqueue_easyecom_job with stale kwargs
+    (`method=` / `kwargs=`) and without the required `company` and
+    `idempotency_key` arguments. Every call raised TypeError or
+    ValueError, was caught by the broad `except`, and logged silently
+    to Error Log — surfacing only as "Considered: N, Enqueued: 0" in
+    the FDE button response with no clue what went wrong.
+    """
     from ecommerce_super.easyecom.queue import enqueue_easyecom_job
 
     codes = candidate_suppliers_for_sweep(limit=limit)
     enqueued: list[str] = []
+    failures: list[dict[str, str]] = []
+    company = _company_for_supplier_push()
     for supplier_docname in codes:
         try:
+            payload = {
+                "supplier_docname": supplier_docname,
+                "account_name": account_name,
+            }
+            idem_key = _supplier_push_queue_idempotency_key(
+                supplier_docname=supplier_docname,
+                account_name=account_name,
+                company=company,
+            )
             qj_name = enqueue_easyecom_job(
                 job_type="Supplier Push",
+                company=company,
                 target_doctype="Supplier",
                 target_name=supplier_docname,
-                method="ecommerce_super.easyecom.flows.supplier_push.enqueue_supplier_push",
-                kwargs={
-                    "supplier_docname": supplier_docname,
-                    "account_name": account_name,
-                },
+                payload=payload,
+                idempotency_key=idem_key,
             )
             enqueued.append(qj_name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — surface every failure
+            error_summary = f"{type(exc).__name__}: {exc}"
+            failures.append(
+                {"supplier_docname": supplier_docname, "error": error_summary}
+            )
             frappe.log_error(
                 title=f"enqueue_supplier_push failed for {supplier_docname}",
-                message=f"{type(exc).__name__}: {exc}",
+                message=error_summary,
             )
     return {
         "total_considered": len(codes),
         "enqueued_count": len(enqueued),
         "queue_job_names_sample": enqueued[:10],
+        # gh#27: surface failures back so the FDE response isn't a black
+        # box. Same shape as item_push sweep failures.
+        "failures_sample": failures[:10],
+        "failed_count": len(failures),
     }
 
 
-def enqueue_supplier_push(
-    supplier_docname: str, *, account_name: str
-) -> str:
-    """Queue worker entry — pushes a single supplier."""
+def supplier_push_queue_handler(qj: Any) -> None:
+    """JOB_TYPE_HANDLERS['Supplier Push'] dispatch — workers.execute_job
+    calls this with the loaded Queue Job doc (gh#27).
+
+    Reads target_name (supplier_docname) + payload.account_name and
+    invokes push_one_supplier. Raises on EE error so the worker's
+    retry/back-off disposition fires per §6.3.8.
+    """
+    payload = frappe.parse_json(qj.payload) if qj.payload else {}
+    supplier_docname = qj.target_name or payload.get("supplier_docname")
+    account_name = payload.get("account_name")
+    if not supplier_docname or not account_name:
+        raise ValueError(
+            f"Supplier Push job {qj.name} missing supplier_docname or "
+            "account_name in payload"
+        )
     account = frappe.get_doc("EasyEcom Account", account_name)
     client = EasyEcomClient()
-    outcome = push_one_supplier(
-        supplier_docname, client=client, account=account
-    )
-    return f"{outcome.operation}:{outcome.ee_vendor_id or '-'}"
+    push_one_supplier(supplier_docname, client=client, account=account)
 
 
 # ----- Doc-event hook (auto-push) -----
@@ -870,12 +906,18 @@ def enqueue_on_supplier_change(
 
     from ecommerce_super.easyecom.queue import enqueue_easyecom_job
 
+    company = _company_for_supplier_push()
     enqueue_easyecom_job(
         job_type="Supplier Push",
+        company=company,
         target_doctype="Supplier",
         target_name=doc.name,
-        method="ecommerce_super.easyecom.flows.supplier_push.enqueue_supplier_push",
-        kwargs={"supplier_docname": doc.name, "account_name": account_name},
+        payload={"supplier_docname": doc.name, "account_name": account_name},
+        idempotency_key=_supplier_push_queue_idempotency_key(
+            supplier_docname=doc.name,
+            account_name=account_name,
+            company=company,
+        ),
     )
 
 
@@ -885,4 +927,51 @@ def _account_with_auto_push_enabled() -> str | None:
         "EasyEcom Account",
         {"enabled": 1, "auto_push_suppliers_on_save": 1},
         "name",
+    )
+
+
+def _company_for_supplier_push() -> str:
+    """Pick a Company for the Queue Job row (gh#27).
+
+    §8f suppliers are account-wide (not per-Company), but EasyEcom
+    Queue Job's `company` field is a required Link to Company. Mirror
+    the item_push helper: prefer the first enabled EasyEcom Company
+    Settings, fall back to the first Company on the site, raise if no
+    Company exists (pre-onboarding state).
+    """
+    row = frappe.db.get_value(
+        "EasyEcom Company Settings",
+        {"enabled": 1},
+        "company",
+        order_by="company asc",
+    )
+    if row:
+        return row
+    fallback = frappe.db.get_value(
+        "Company", filters={}, fieldname="name", order_by="creation asc"
+    )
+    if not fallback:
+        raise RuntimeError(
+            "Cannot enqueue Supplier Push: no Company exists on this site "
+            "(pre-onboarding state). Create a Company first."
+        )
+    return fallback
+
+
+def _supplier_push_queue_idempotency_key(
+    *, supplier_docname: str, account_name: str, company: str
+) -> str:
+    """Queue Job idempotency key for Supplier Push (gh#27).
+
+    Dedupes Frappe-side queue work: a duplicate hook fire (rapid
+    double-save on the Supplier form, or the batch sweep racing with
+    auto-push) collapses to one Queue Job. The inner EE call has its
+    OWN idempotency_key built by `supplier_push_key` inside
+    push_one_supplier — the two are separate by design (Queue-Job key
+    dedupes our worker; EE-side key dedupes EE-side calls).
+    """
+    from ecommerce_super.easyecom.utils.hashing import sha256_idempotency
+
+    return sha256_idempotency(
+        "supplier_push_queue", company, supplier_docname, account_name, "v1"
     )
