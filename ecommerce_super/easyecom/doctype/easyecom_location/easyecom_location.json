@@ -82,10 +82,12 @@
    "options": "Workflow State",
    "default": "To Map",
    "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
    "no_copy": 1,
    "hidden": 1,
    "read_only": 1,
-   "description": "Per §8.4.1: To Map → Mapped but not Live → Live, branch Skipped. Owned by the EasyEcom Location Workflow fixture. Hidden on the form because the workflow badge in the title bar already shows it and the Actions menu drives transitions — direct editing is not the path. Field is needed (Workflow reads/writes it) but never user-facing."
+   "description": "Per §8.4.1: To Map → Mapped but not Live → Live, branch Skipped. Owned by the EasyEcom Location Workflow fixture. Hidden on the form because the workflow badge in the title bar already shows it and the Actions menu drives transitions — direct editing is not the path. Exposed in the list-view standard filter (gh#28) so the §8A W1 test (filter Locations by workflow_state=To Map) can run from the standard list UI."
   },
   {
    "fieldname": "is_primary",
