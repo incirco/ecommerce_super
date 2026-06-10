@@ -971,7 +971,14 @@ def _account_with_auto_push_enabled() -> str | None:
     §8.1 assumes one EasyEcom Account per deployment (account-wide
     credentials, account-wide catalogue). If multiple are configured
     with auto_push on, returns the first by name — but flag the
-    config as ambiguous via Error Log (FDE should disable one)."""
+    config as ambiguous via Error Log (FDE should disable one).
+
+    NOTE: easyecom.api.item_sync_diagnostic.trace_item (gh#37) reads
+    the same EasyEcom Account directly (without the auto_push filter)
+    to surface the toggle state. The trace and this helper must agree
+    on the "first-by-name" tiebreak. Coordinate any change here with
+    the diagnostic's account_rows query.
+    """
     rows = frappe.db.get_all(
         "EasyEcom Account",
         filters={"enabled": 1, "auto_push_on_save": 1},

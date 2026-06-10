@@ -38,7 +38,15 @@ import frappe
 def trace_item(item_code: str) -> dict[str, Any]:
     """Walk every gate the Item sync flow touches (push hook + pull
     refresh) and report what's visible in the DB. Read-only — never
-    mutates state."""
+    mutates state.
+
+    Gate coverage note: the `enqueue_on_item_change` hook also gates on
+    `frappe.flags.in_easyecom_pull` to prevent pull→push ping-pong.
+    That flag is request-scoped and only ever set transiently during an
+    item-pull cycle — at FDE diagnostic call time it's always False, so
+    surfacing it here would always read "OK" and be misleading. We
+    intentionally omit it.
+    """
     roles = set(frappe.get_roles(frappe.session.user))
     if not roles.intersection(
         {"System Manager", "EasyEcom System Manager", "EasyEcom FDE"}
@@ -70,19 +78,41 @@ def trace_item(item_code: str) -> dict[str, Any]:
     item = frappe.get_doc("Item", item_code)
 
     # === Push (ERPNext → EE) gate walk ===
-    account_row = frappe.db.get_value(
+    # We query without the auto_push_on_save filter (unlike
+    # item_push._account_with_auto_push_enabled which combines both)
+    # because the diagnostic needs to surface the Account state
+    # regardless of the toggle, so the auto_push_on_save gate below
+    # can say "OFF" with the right context. Multi-account ambiguity
+    # also worth surfacing — push silently picks first-by-name and
+    # logs an Error Log row; the FDE has no reason to discover that
+    # without this trace pointing at it.
+    account_rows = frappe.db.get_all(
         "EasyEcom Account",
-        {"enabled": 1},
-        ["name", "auto_push_on_save", "item_master_mode"],
-        as_dict=True,
+        filters={"enabled": 1},
+        fields=["name", "auto_push_on_save", "item_master_mode"],
+        order_by="name asc",
+        limit_page_length=2,
     )
+    account_row = account_rows[0] if account_rows else None
+    multi_account = len(account_rows) > 1
 
     trace["push_gates"].append(
         {
             "gate": "easyecom_account_enabled",
             "passed": account_row is not None,
             "detail": (
-                f"account={account_row.name}" if account_row else "no enabled Account"
+                (
+                    f"account={account_row.name}"
+                    + (
+                        " — WARNING: multiple Accounts have enabled=1; "
+                        "push picks first-by-name and logs an Error Log row. "
+                        "Disable the others to remove ambiguity."
+                        if multi_account
+                        else ""
+                    )
+                )
+                if account_row
+                else "no enabled Account"
             ),
         }
     )
