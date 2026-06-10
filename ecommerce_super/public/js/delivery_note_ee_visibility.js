@@ -23,6 +23,16 @@ frappe.ui.form.on("Delivery Note", {
         wire_warehouse_queries(frm);
         refresh_all_warehouse_labels(frm);
         refresh_section10_branch_indicator(frm);
+        // gh#26: diagnostic for submitted DNs — when the FDE says
+        // "I submitted but nothing showed up in Harmony", the button
+        // walks every gate and returns the trace.
+        if (frm.doc.docstatus === 1 && frm.doc.is_internal_customer) {
+            frm.add_custom_button(
+                __("Trace Outbound Push (§10)"),
+                () => trace_outbound(frm),
+                __("EasyEcom")
+            );
+        }
     },
     set_warehouse(frm) {
         refresh_warehouse_label(frm, "set_warehouse");
@@ -48,6 +58,114 @@ frappe.ui.form.on("Delivery Note", {
         refresh_section10_branch_indicator(frm);
     },
 });
+
+
+// gh#26 — render the trace returned by the diagnostic endpoint as a
+// readable msgprint. The user gets a per-gate pass/fail breakdown +
+// downstream artifacts (Transfer Map, Sync Records, Queue Jobs, API
+// Calls) + a one-line verdict. Read-only — does NOT re-fire the push.
+function trace_outbound(frm) {
+    frappe.show_alert({
+        message: __("Tracing §10 outbound push…"),
+        indicator: "blue",
+    });
+    frappe.call({
+        method:
+            "ecommerce_super.easyecom.api.transfer_diagnostic.trace_dn",
+        args: {dn_name: frm.doc.name},
+        freeze: true,
+        freeze_message: __("Tracing…"),
+        callback(r) {
+            const t = r.message || {};
+            const gates = t.gates || [];
+            const dn = t.downstream || {};
+
+            const gate_rows = gates
+                .map((g) => {
+                    const icon = g.passed ? "✓" : "✗";
+                    const color = g.passed ? "#16a34a" : "#dc2626";
+                    return (
+                        `<tr><td style="color:${color};width:24px;">${icon}</td>` +
+                        `<td><code>${frappe.utils.escape_html(g.gate)}</code></td>` +
+                        `<td>${frappe.utils.escape_html(g.detail || "")}</td></tr>`
+                    );
+                })
+                .join("");
+
+            const tm = dn.transfer_map;
+            const tm_block = tm
+                ? `<b>Transfer Map:</b> <code>${frappe.utils.escape_html(tm.name)}</code> ` +
+                  `· status=<code>${frappe.utils.escape_html(tm.status || "—")}</code> ` +
+                  `· ee_order_id=<code>${frappe.utils.escape_html(tm.ee_order_id || "—")}</code><br>`
+                : "<b>Transfer Map:</b> <i>none</i><br>";
+
+            const sr = dn.sync_records || [];
+            const sr_block = sr.length
+                ? `<b>Sync Records (${sr.length}):</b><br>` +
+                  sr
+                      .map(
+                          (s) =>
+                              `&nbsp;&nbsp;<code>${frappe.utils.escape_html(s.name)}</code> ` +
+                              `[${frappe.utils.escape_html(s.status)}] ` +
+                              (s.last_error
+                                  ? frappe.utils.escape_html(s.last_error.slice(0, 120))
+                                  : "—")
+                      )
+                      .join("<br>")
+                : "<b>Sync Records:</b> <i>none</i>";
+
+            const qj = dn.queue_jobs || [];
+            const qj_block = qj.length
+                ? `<br><b>Queue Jobs (${qj.length}):</b><br>` +
+                  qj
+                      .map(
+                          (j) =>
+                              `&nbsp;&nbsp;<code>${frappe.utils.escape_html(j.name)}</code> ` +
+                              `[${frappe.utils.escape_html(j.state)}] attempts=${j.attempts || 0}`
+                      )
+                      .join("<br>")
+                : "<br><b>Queue Jobs:</b> <i>none</i>";
+
+            const ac = dn.api_calls || [];
+            const ac_block = ac.length
+                ? `<br><b>API Calls (${ac.length}):</b><br>` +
+                  ac
+                      .map(
+                          (a) =>
+                              `&nbsp;&nbsp;<code>${frappe.utils.escape_html(a.endpoint)}</code> ` +
+                              `[${frappe.utils.escape_html(a.status)} ${a.response_status_code || ""}]`
+                      )
+                      .join("<br>")
+                : "<br><b>API Calls:</b> <i>none</i>";
+
+            const body =
+                `<b>Verdict:</b> ${frappe.utils.escape_html(t.verdict || "—")}<br><br>` +
+                `<table style="font-size:12px;width:100%;">${gate_rows}</table><br>` +
+                tm_block +
+                sr_block +
+                qj_block +
+                ac_block;
+
+            const failed = (t.gates || []).some((g) => !g.passed);
+            frappe.msgprint({
+                title: __("Outbound Push Trace — {0}", [frm.doc.name]),
+                message: body,
+                indicator: failed ? "orange" : "green",
+                wide: true,
+            });
+        },
+        error() {
+            frappe.msgprint({
+                title: __("Trace Failed"),
+                message: __(
+                    "Could not run the trace (network, server, or permission). " +
+                        "Check Error Log."
+                ),
+                indicator: "red",
+            });
+        },
+    });
+}
 
 frappe.ui.form.on("Delivery Note Item", {
     items_add(frm) {

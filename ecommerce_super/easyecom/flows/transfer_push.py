@@ -286,6 +286,11 @@ def push_one_transfer(
 def _resolve_source_target_pair(dn: Any) -> tuple[str, str] | None:
     """Resolve the (source_wh, target_wh) pair from DN-header fields.
 
+    NOTE: also imported by easyecom.api.transfer_diagnostic.trace_dn
+    (gh#26 diagnostic) so the FDE-facing trace walks the same gates the
+    on_submit hook uses. Treat any signature/semantics change as a
+    coordinated change with that endpoint.
+
     GROUNDING CORRECTION (live Harmony smoke 2026-05-30): routing is
     Customer-anchored — the FDE sets Transfer From + Transfer To
     Warehouses on the DN header. Items' warehouse/target_warehouse are
@@ -330,7 +335,12 @@ def _resolve_source_target_pair(dn: Any) -> tuple[str, str] | None:
 
 def _is_ee_mapped_warehouse(warehouse: str) -> bool:
     """True iff this Warehouse is the mapped_warehouse of some Live +
-    enabled EasyEcom Location."""
+    enabled EasyEcom Location.
+
+    Also imported by easyecom.api.transfer_diagnostic.trace_dn (gh#26)
+    so the FDE trace and the on_submit gate share one definition of
+    "EE-mapped". Coordinate any change with that endpoint.
+    """
     return bool(
         frappe.db.get_value(
             "EasyEcom Location",
