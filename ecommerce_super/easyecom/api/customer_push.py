@@ -93,4 +93,7 @@ def push_all_pending_customers(account: str) -> dict[str, Any]:
         "total_considered": result["total_considered"],
         "enqueued_count": result["enqueued_count"],
         "queue_job_names_sample": result["queue_job_names_sample"],
+        # gh#27 sibling fix — surface per-candidate enqueue failures.
+        "failed_count": result.get("failed_count", 0),
+        "failures_sample": result.get("failures_sample", []),
     }
