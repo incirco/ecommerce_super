@@ -16,6 +16,16 @@ Two things in one patch — both idempotent:
    already had the b3dc218 workspace needs a one-shot refresh.
    import_file_by_path(force=True) is the standard mechanism Frappe
    uses for app-shipped workspace updates.
+
+SEE ALSO (gh#3 follow-up #2): on deployments where the JSON fixture
+didn't reach the bench (Frappe Cloud surface where the file system
+isn't introspectable from inside the patch), the `if not
+json_path.exists(): return` defensive clause below turns into a
+silent no-op that still logs the patch as executed.
+`insert_easyecom_top_strip_from_inline` is the rescue path — it
+carries the same html/script/style as embedded Python strings.
+Both patches must produce the same final block content; the drift
+check lives in tests/integration/test_top_strip_inline_matches_json.py.
 """
 
 from __future__ import annotations
