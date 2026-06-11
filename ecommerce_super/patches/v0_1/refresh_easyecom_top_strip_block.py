@@ -17,6 +17,13 @@ source of truth for the strip's render payload; the EasyEcom System
 Manager has no legitimate reason to hand-edit it. Existing audit fields
 (creation, owner) are preserved — only the render-payload fields are
 rewritten.
+
+SEE ALSO (gh#3 follow-up #2): same `if not json_path.exists(): return`
+silent-no-op problem as install_easyecom_top_strip_block on
+deployments where the JSON fixture didn't reach the bench. The
+`insert_easyecom_top_strip_from_inline` patch carries the same
+content as embedded strings and is reachable on those deployments.
+Drift check: tests/integration/test_top_strip_inline_matches_json.py.
 """
 
 from __future__ import annotations
