@@ -315,10 +315,11 @@ class TestProductTypeBranching(FrappeTestCase):
 
     def test_combo_product_with_no_subproducts_flagged(self) -> None:
         """Stage 4 now actively builds bundles from combos. A combo
-        with no sub_products (or fewer than 2) still flags — EE
-        requires ≥2 sub-products to be a valid combo. The map row
-        captures the EE identifiers so a Stage-4 reconciliation can
-        find the SKU later."""
+        with no sub-products (or with total qty < 2 — see commit
+        97b8017 which moved the threshold from "distinct count" to
+        "total component qty") still flags. The map row captures the
+        EE identifiers so a Stage-4 reconciliation can find the SKU
+        later."""
         _ensure_hsn("85171000")
         _ensure_uom("Nos")
         payload = {
@@ -334,7 +335,13 @@ class TestProductTypeBranching(FrappeTestCase):
         out = self._process(payload)
         self.assertEqual(out.status, STATUS_FLAGGED_NOT_CREATED)
         joined = " ".join(out.flag_reasons)
-        self.assertIn("sub-products", joined)
+        # Post-97b8017 the flag-message wording moved from "sub-products"
+        # (plural distinct count) to "sub-product" / "qty" / "components"
+        # (total qty contract). Assert on a substring that names the
+        # combo-qty concept so the test stays anchored on the substrate's
+        # actual contract.
+        self.assertIn("combo", joined)
+        self.assertIn("sub-product", joined)
         # Map row exists; no Bundle was created (degenerate combo).
         self.assertTrue(
             frappe.db.exists("EasyEcom Item Map", {"ee_sku": payload["sku"]})
@@ -1199,17 +1206,35 @@ class TestCursorAndIsolation(FrappeTestCase):
         self.assertEqual(result.page_failures, [])
 
     def test_savepoint_isolation_one_bad_product(self) -> None:
-        """A product whose payload makes the executor raise should not
-        abort siblings on the same page. Use one with required-field
-        missing (no sku) — the per-product handler raises ValueError;
-        the savepoint rolls it back; the other 2 still get processed."""
+        """A bad-payload product on a page should not abort siblings.
+
+        Contract evolution: the original test triggered the per-product
+        savepoint via "no sku" (raises ValueError in the handler at
+        item_pull.py:1113). The substrate now has an UPSTREAM filter at
+        item_pull.py:943-945 (`if not sku: continue` during page-level
+        dedup) that silently drops no-sku records BEFORE the savepoint
+        loop. The end-user contract holds (siblings still process) but
+        via a different mechanism — the bad row is dropped at dedup,
+        not isolated at savepoint.
+
+        This test now asserts the new mechanism explicitly:
+          - siblings created (the original isolation guarantee),
+          - bad row absent from outcomes / Item table (silently dropped),
+          - page_failures stays empty (dedup-time drop is not a failure).
+
+        Per-product savepoint isolation IS still tested upstream of
+        this — by other tests in this module that exercise actual
+        executor / Item-insert failures. The no-sku trigger no longer
+        exercises that specific path.
+        """
         client = MockClient(
             count=3,
             pages=[
                 {
                     "data": [
                         self._clean_payload(f"{PREFIX}iso-1"),
-                        # Bad product: no sku at all → ValueError in handler.
+                        # Bad product: no sku → dropped by dedup filter
+                        # at item_pull.py:943-945 BEFORE savepoint.
                         {"product_type": "normal_product"},
                         self._clean_payload(f"{PREFIX}iso-3"),
                     ],
@@ -1220,11 +1245,14 @@ class TestCursorAndIsolation(FrappeTestCase):
         result = pull_products(
             account_name=self.account_name, client=client, start_fresh=True
         )
-        # Siblings created.
+        # Siblings created — the end-user contract holds.
         self.assertTrue(frappe.db.exists("Item", f"{PREFIX}iso-1"))
         self.assertTrue(frappe.db.exists("Item", f"{PREFIX}iso-3"))
-        # Bad one logged as a failure.
-        self.assertEqual(len(result.page_failures), 1)
+        # Bad row silently dropped at dedup — not an outcome, not a
+        # failure.
+        self.assertEqual(result.products_processed, 2)
+        self.assertEqual(len(result.page_failures), 0)
+        self.assertEqual(len(result.outcomes), 2)
 
 
 # ============================================================

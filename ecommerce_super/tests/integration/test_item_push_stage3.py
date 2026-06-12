@@ -532,6 +532,12 @@ class TestUpdatePath(FrappeTestCase):
     def test_existing_map_routes_to_update_keyed_on_product_id(self) -> None:
         item = _make_item(f"{PREFIX}update-1", tax_template=self.tax_template)
         # Pre-existing map row with product_id (as if pulled in Stage 2).
+        # Also stamp ecs_ee_cp_id on the Item — UpdateMasterProduct's
+        # write contract reads `productId` from item.ecs_ee_cp_id (NOT
+        # the Map's ee_product_id), see item_push.py:1597 + the long
+        # EE-naming-inconsistency comment above it. ee_cp_id is what EE
+        # returns as `cp_id` on GetProductMaster and what EE expects
+        # as `productId` on UpdateMasterProduct.
         map_doc = frappe.new_doc("EasyEcom Item Map")
         map_doc.update(
             {
@@ -539,10 +545,14 @@ class TestUpdatePath(FrappeTestCase):
                 "erpnext_doctype": "Item",
                 "erpnext_name": item.item_code,
                 "ee_product_id": "7777",
+                "ee_cp_id": "7777",
                 "status": STATUS_MAPPED,
             }
         )
         map_doc.insert(ignore_permissions=True)
+        item.db_set("ecs_ee_cp_id", "7777", update_modified=False)
+        item.db_set("ecs_ee_product_id", "7777", update_modified=False)
+        item.reload()
         frappe.db.commit()
 
         client = MockPushClient()
@@ -555,8 +565,10 @@ class TestUpdatePath(FrappeTestCase):
         self.assertEqual(len(client.calls), 1)
         endpoint, payload = client.calls[0]
         self.assertEqual(endpoint, PRODUCT_MASTER_UPDATE)
-        # Update payload includes productId for keying.
-        self.assertEqual(payload.get("productId"), "7777")
+        # Update payload includes productId for keying. Substrate writes
+        # it as int (EE's typed expectation), so compare against int 7777
+        # rather than the string "7777".
+        self.assertEqual(payload.get("productId"), 7777)
 
 
 # ============================================================
@@ -779,6 +791,11 @@ class TestLifecyclePush(FrappeTestCase):
 
     def test_disabled_item_with_product_id_sends_deactivate(self) -> None:
         # Pre-create Item and a map row with product_id.
+        # See sibling test (test_existing_map_routes_to_update_keyed_on_product_id):
+        # the substrate's write contracts read identifiers from the
+        # Item's ecs_ee_cp_id / ecs_ee_product_id custom fields, NOT
+        # from the Map row. Stamp both to mirror what a real Pull/Push
+        # cycle would have put on the Item.
         item = _make_item(f"{PREFIX}life-deact", disabled=1)
         map_doc = frappe.new_doc("EasyEcom Item Map")
         map_doc.update(
@@ -787,10 +804,14 @@ class TestLifecyclePush(FrappeTestCase):
                 "erpnext_doctype": "Item",
                 "erpnext_name": item.item_code,
                 "ee_product_id": "8888",
+                "ee_cp_id": "8888",
                 "status": STATUS_MAPPED,
             }
         )
         map_doc.insert(ignore_permissions=True)
+        item.db_set("ecs_ee_cp_id", "8888", update_modified=False)
+        item.db_set("ecs_ee_product_id", "8888", update_modified=False)
+        item.reload()
         frappe.db.commit()
         client = MockPushClient()
         outcome = push_lifecycle(
@@ -800,7 +821,10 @@ class TestLifecyclePush(FrappeTestCase):
         self.assertEqual(len(client.calls), 1)
         endpoint, payload = client.calls[0]
         self.assertEqual(endpoint, PRODUCT_MASTER_ACTIVATE_DEACTIVATE)
-        self.assertEqual(payload["product_id"], "8888")
+        # The activate/deactivate endpoint sends product_id (snake_case,
+        # int) per the EE-naming flip noted at item_push.py:457-460:
+        # "takes product_id (snake, int) but the value is the cp_id".
+        self.assertEqual(payload["product_id"], 8888)
         self.assertEqual(payload["status"], 0)
 
     def test_unmapped_item_lifecycle_is_noop(self) -> None:

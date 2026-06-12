@@ -633,6 +633,13 @@ class TestSameGstinIprAutoSubmit(FrappeTestCase):
                 "currency": "INR",
                 "conversion_rate": 1,
                 "ignore_pricing_rule": 1,
+                # §10 UX layer (post-2026-05-30) requires the header
+                # Transfer From / To Warehouse fields on
+                # internal-customer DNs. Substrate gate
+                # validate_pre_submit throws otherwise.
+                "ecs_is_section10_transfer": 1,
+                "ecs_section10_transfer_from_warehouse": self.src_wh,
+                "ecs_section10_transfer_to_warehouse": self.tgt_wh,
             }
         )
         dn.append(

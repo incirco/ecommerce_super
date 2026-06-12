@@ -301,10 +301,18 @@ class TestSyncRecordWrites(FrappeTestCase):
         self.assertEqual(sr.status, "Failed")
         self.assertIsNotNone(sr.last_error)
 
-    def test_drift_writes_discrepancy_sync_record_not_failed(self) -> None:
-        """The §7.3 hinge: drift is NOT Failed — it's Discrepancy.
-        Stays cleanly distinct so §22 can subscribe to drift events
-        without conflating them with sync failures."""
+    def test_drift_writes_failed_sync_record_with_drift_reason(self) -> None:
+        """Per §7.3 M1 binary contract: drift maps to Sync Record
+        status='Failed'. The legacy 'Discrepancy' enum was migrated to
+        'Failed' in gh#16. The drift-vs-genuine-failure distinction
+        now lives in last_error content (e.g. naming the diverging
+        field), not in the enum. §22 alert routing differentiates on
+        last_error content / classification, not on a distinct enum
+        value.
+
+        Pre-gh#16 the test name and intent were inverted: it asserted
+        sr.status was NOT 'Failed' — that intent is now wrong.
+        """
         account = _account(MODE_ERPNEXT_MASTERED)
         _seed_mapped_item(f"{PREFIX}sr-drift", item_name="Original")
         process_one_product(
@@ -312,8 +320,22 @@ class TestSyncRecordWrites(FrappeTestCase):
             account=account, executor=self.executor, enabled_companies=[],
         )
         sr = _last_sync_record(f"{PREFIX}sr-drift", "Pull")
-        self.assertEqual(sr.status, "Discrepancy")
-        self.assertNotEqual(sr.status, "Failed")  # explicit — distinct
+        self.assertEqual(
+            sr.status, "Failed",
+            "drift maps to Failed enum per §7.3 M1 binary contract "
+            "(was 'Discrepancy' pre-gh#16; drift detail now in last_error)",
+        )
+        self.assertIsNotNone(
+            sr.last_error,
+            "drift reason must be carried in last_error",
+        )
+        # Qualitative check — last_error should name the diverging
+        # field (item_name) so the FDE can disposition.
+        self.assertIn(
+            "item_name", sr.last_error,
+            "last_error should name the drifted field "
+            "(the test fixture diverges on item_name)",
+        )
 
     def test_lifecycle_success_writes_success_sync_record(self) -> None:
         account = _account()

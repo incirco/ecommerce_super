@@ -194,22 +194,30 @@ class TestSyncRecordLineSchema(FrappeTestCase):
 
 
 class TestSyncRecordStatusIsBinary(FrappeTestCase):
-    """§7.3: the per-record outcome is *not* simply binary — it's
-    Success | Failed | Discrepancy. Discrepancy is the
-    "succeeded-but-found-divergence" outcome (first used by §8d drift
-    detection). The §7.3 line says conflict/divergence routes to a
-    Discrepancy outcome, NOT Failed — keeping the two visibly
-    distinct so §22 alert routing can subscribe to drift events
-    without conflating with sync failures.
+    """§7.3 M1: the per-record outcome is BINARY — Success | Failed
+    are the terminal states; Pending / Running / AlreadySynced are
+    pre-terminal; Cancelled is FDE-triggered. There is no
+    'Discrepancy' enum value; drift detection writes Failed with the
+    divergence detail captured in `last_error` (gh#16 migration).
+
+    The drift-vs-genuine-failure distinction now lives in last_error
+    content, NOT in a distinct enum value. §22 alert routing
+    differentiates on last_error content / classification.
 
     Partial is still forbidden — partial outcomes belong at the line
-    level, not the parent Sync Record."""
+    level (Sync Record Line's `line_status`, which DOES allow
+    Discrepancy per §31.2.3), not the parent Sync Record.
 
-    def test_status_enum_includes_discrepancy(self) -> None:
+    Pre-gh#16 this class's docstring and the test it contains both
+    asserted the OPPOSITE — that drift was a distinct 'Discrepancy'
+    enum value. Updated 2026-06-12 along with the sibling sweep
+    (test_customer_lifecycle_drift_stage5 / supplier /
+    test_item_audit_followup)."""
+
+    def test_status_enum_is_binary_no_discrepancy(self) -> None:
         """Status options: Pending | Running | Success | Failed |
-        Discrepancy | Cancelled | AlreadySynced. Discrepancy added by
-        the §8d audit follow-up; matches the same value already
-        present on Sync Record Line's line_status enum."""
+        Cancelled | AlreadySynced. No 'Discrepancy' (gh#16 migration);
+        no 'Partial' (line-level only); no 'Completed With Discrepancy'."""
         meta = frappe.get_meta("EasyEcom Sync Record")
         field = meta.get_field("status")
         options = set(field.options.split("\n"))
@@ -218,11 +226,17 @@ class TestSyncRecordStatusIsBinary(FrappeTestCase):
             "Running",
             "Success",
             "Failed",
-            "Discrepancy",
             "Cancelled",
             "AlreadySynced",
         }
         self.assertEqual(options, expected)
+        # Discrepancy is forbidden post-gh#16 — drift maps to Failed
+        # with detail in last_error.
+        self.assertNotIn(
+            "Discrepancy", options,
+            "Sync Record status enum must NOT carry 'Discrepancy' "
+            "post-gh#16; drift now lands as Failed + last_error",
+        )
         # Partial remains forbidden — partial outcomes are line-level,
         # never parent-level (§7.3).
         self.assertNotIn("Partial", options)

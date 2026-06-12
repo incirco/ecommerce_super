@@ -109,13 +109,22 @@ class TestGoLivePosWiring(unittest.TestCase):
         def _fake_set_value(_doctype, _name, updates, **_kwargs):
             captured_updates.update(updates)
 
+        # Production calls `frappe.db.get_value(..., as_dict=True)`,
+        # which returns a `frappe._dict` that supports BOTH dict access
+        # (`modes["item_master_mode"]`) and attribute access
+        # (`modes.item_master_mode`). The handler at
+        # auto_push_controls.py:182 uses attribute access. A plain
+        # `dict` mock here was the wrong shape and produced
+        # `AttributeError: 'dict' object has no attribute
+        # 'item_master_mode'` — gh#33 audit follow-up.
+        modes_mock = frappe._dict(
+            item_master_mode="erpnext_mastered",
+            customer_master_mode="erpnext_mastered",
+            supplier_master_mode="erpnext_mastered",
+        )
         with (
             patch("frappe.db.exists", return_value=True),
-            patch("frappe.db.get_value", return_value={
-                "item_master_mode": "erpnext_mastered",
-                "customer_master_mode": "erpnext_mastered",
-                "supplier_master_mode": "erpnext_mastered",
-            }),
+            patch("frappe.db.get_value", return_value=modes_mock),
             patch.object(frappe.db, "set_value", side_effect=_fake_set_value),
             patch("frappe.get_doc") as get_doc_mock,
             patch.object(auto_push_controls, "_check_role"),
