@@ -74,6 +74,55 @@ def append_only(doc: Any, ptype: str, user: str | None = None) -> bool:
     return False
 
 
+def company_scope_doc(doc: Any, ptype: str, user: str | None = None) -> bool:
+    """has_permission hook — per-document Company scoping (gh#14 follow-up).
+
+    `permission_query_conditions` (company_scope) filters list views, but
+    Frappe's per-doc read/write path (e.g. opening
+    `/app/easyecom-company-settings/SomeCompany` directly, or
+    `frappe.get_doc(...)` from another flow) takes the DocPerm chain via
+    `has_permission_hooks`. Without a hook on this surface, a user with
+    DocPerm read/write at perm-level 0 could open any document, including
+    those for Companies they have no User Permission for.
+
+    Symptom (mmpl16 UAT, 2026-06-12, per garv999's reopen): an EasyEcom
+    FDE with `User Permission { allow: Company, for_value: Co A }` could
+    still open AND edit `EasyEcom Company Settings / Co B`.
+
+    This hook returns False when the doc's Company isn't in the user's
+    User Permission allowlist, blocking the per-doc path symmetrically
+    with the list filter.
+
+    Always allows:
+      - Administrator (Frappe convention)
+      - System Manager (highest built-in role; can see/edit everything)
+      - any user whose User Permissions contain no Company restriction
+        (matches the list filter's `allowed is None → ""` branch)
+      - `create` ptype (the new-doc form has no `doc.company` yet; the
+        controller's `validate` rejects mismatches at save time)
+    """
+    user = user or frappe.session.user
+    if user in {"Administrator", None}:
+        return True
+
+    roles = set(frappe.get_roles(user))
+    if "System Manager" in roles:
+        return True
+
+    # New-doc / unsaved → defer to validate-time check. Company hasn't
+    # been chosen yet for `create`; refusing here would block the New
+    # button entirely.
+    if ptype == "create" or not getattr(doc, "company", None):
+        return True
+
+    allowed = _user_company_filter(user)
+    if allowed is None:
+        # No Company restrictions configured → no scoping.
+        return True
+
+    return doc.company in allowed
+
+
 def audit_no_modify(doc: Any, ptype: str, user: str | None = None) -> bool:
     """has_permission hook for EasyEcom Configuration Audit. Identical to
     append_only — append-only with no UPDATE/DELETE even for System

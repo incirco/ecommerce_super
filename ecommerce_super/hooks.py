@@ -546,8 +546,23 @@ permission_query_conditions = {
     for dt in _COMPANY_SCOPED_DOCTYPES
 }
 
-has_permission = {
+# gh#14 follow-up — per-doc Company scoping. permission_query_conditions
+# above only filters list views; without a has_permission hook, direct
+# URL access (/app/easyecom-company-settings/<name>) lets a user open
+# any doc regardless of User Permission. _COMPANY_SCOPED_DOCTYPES that
+# don't already have a specialized has_permission hook (the three
+# append-only / audit_no_modify entries below) get company_scope_doc.
+_HAS_PERMISSION_OVERRIDES = {
     "EasyEcom API Call": "ecommerce_super.easyecom.permissions.append_only",
     "EasyEcom Webhook Event": "ecommerce_super.easyecom.permissions.append_only",
     "EasyEcom Configuration Audit": "ecommerce_super.easyecom.permissions.audit_no_modify",
+}
+
+has_permission = {
+    **_HAS_PERMISSION_OVERRIDES,
+    **{
+        dt: "ecommerce_super.easyecom.permissions.company_scope_doc"
+        for dt in _COMPANY_SCOPED_DOCTYPES
+        if dt not in _HAS_PERMISSION_OVERRIDES
+    },
 }
