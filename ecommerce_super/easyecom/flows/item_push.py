@@ -1418,13 +1418,22 @@ def _ean_barcode(item: Any) -> str | None:
 
 
 def _erpnext_dim_field(ee_field: str) -> str:
-    """Translate the EE dimension field name back to the ERPNext
-    source field for the flag's "set X" message."""
+    """Translate the EE dimension field name back to the ERPNext source
+    field for the flag's "set X" message.
+
+    gh#44: the v5 push ruleset's `custom_python` expressions read a
+    fallback chain (e.g. `ecs_length_cm → custom_length →
+    unicommerce_item_length → length`) so the FDE doesn't need every
+    Item to have the canonical `ecs_*` field populated. Surface the
+    canonical field name FIRST in the flag message (it's the
+    primary source); the FDE can also populate any of the fallback
+    fields documented in the ruleset's notes.
+    """
     return {
-        "Weight": "weight_per_unit",
-        "Length": "ecs_length_cm",
-        "Height": "ecs_height_cm",
-        "Width": "ecs_width_cm",
+        "Weight": "weight_per_unit (or custom_weight)",
+        "Length": "ecs_length_cm (or custom_length / length)",
+        "Height": "ecs_height_cm (or custom_height / height)",
+        "Width": "ecs_width_cm (or custom_width / custom_breadth / width)",
     }.get(ee_field, ee_field)
 
 

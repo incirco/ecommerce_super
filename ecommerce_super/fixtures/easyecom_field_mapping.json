@@ -357,9 +357,9 @@
   "direction": "Push",
   "active": 1,
   "missing_field_policy": "Permissive",
-  "version": 4,
+  "version": 5,
   "last_modified_by": "Administrator",
-  "last_modified_at": "2026-06-10 14:00:00",
+  "last_modified_at": "2026-06-12 06:00:00",
   "change_reason": "\u00a78d Stage 3 \u2014 ERPNext Item \u2192 EasyEcom CreateMasterProduct / UpdateMasterProduct payload. Holds the REAL-DATA-FROM-ITEM mappings only (Sku, ItemName, ProductTaxCode, dimensions, Cost, productId for updates). The MANUFACTURED EE-mandatory fields ERPNext doesn't carry (materialType=1 Finished Good, itemType=0 normal in Stage 3, Brand/Category/ModelNumber fallbacks, TaxRate snapped to EE's allowed {0,3,5,12,18,28} set) are injected by the FLOW (item_push.py) after the engine produces this payload \u2014 they're flow decisions, not translations, and don't belong in the ruleset per the \u00a78.0 engine-as-translator policy. Stage 3 covers normal products only; bundles (combo_product) are Stage 4's job and use itemType=1 + subProducts. | v2 (FDE-configurability refactor per user direction): the manufactured constants (materialType=1, itemType=0, Brand fallback, Cost fallback chain, ModelNumber=item_code) are now ruleset rules instead of flow-code constants. FDE edits them via the desk EasyEcom Field Mapping > EasyEcom-Item-Push > Rules child table \u2014 no code deploy needed to change defaults or add company-conditional logic. TaxRate stays in the flow (it's a DB lookup + snap-to-set, not a constant or simple derivation). | v3 (\u00a78d Stage 4 \u2014 bundles): itemType becomes per-record conditional (Product Bundle wrapper \u2192 1, normal \u2192 0) by reading source_doc.flags.is_bundle_wrapper which the FLOW sets before push. Wrapper-Item push (combo path) and normal-item push share the same ruleset; the flow's pre-push flag-set decides which itemType the ruleset emits.",
   "rules": [
    {
@@ -419,9 +419,9 @@
     "easyecom_path": "Weight",
     "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Weight is Integer (grams). ERPNext Item.weight_per_unit is a Float with a sibling Item.weight_uom Link. The expression below reads weight_uom and converts to grams, then int-rounds for EE. FDE: edit transform_args.expression to add UOMs your client uses (e.g. \"Pound\": 453.592). If weight_uom is empty or unrecognised, value is treated as grams (back-compat with EE-pulled items where weight already arrived in grams). 0g still flags as Not-Pushed by the push validator - that's intentional.",
+    "notes": "EE contract: Weight is Integer (grams). Source fallback chain (gh#44): weight_per_unit → custom_weight → unicommerce_item_weight → 0. ERPNext-born Items often carry weight in vendor-specific custom fields (custom_*) or migration fields (unicommerce_*) instead of the canonical weight_per_unit; the pull side populates weight_per_unit but ERPNext-side users save data wherever their existing customization put the field. Falling back lets the FDE's manual push find the value where the user actually entered it. UOM conversion still reads source_doc.weight_uom (the canonical UOM field — FDE: edit transform_args.expression to add UOMs your client uses, e.g. \"Pound\": 453.592). 0g still flags as Not-Pushed by the push validator (intentional). FDE override: edit the fallback list in transform_args.expression to add bench-specific fields, e.g. 'gross_weight_grams'.",
     "transform_args": {
-     "expression": "int(round((value or 0) * {\"Kg\": 1000, \"Gram\": 1, \"Mg\": 0.001, \"Lbs\": 453.592, \"Oz\": 28.3495, \"Tonne\": 1000000}.get(source_doc.weight_uom, 1)))"
+     "expression": "int(round((value or source_doc.get(\"custom_weight\") or source_doc.get(\"unicommerce_item_weight\") or 0) * {\"Kg\": 1000, \"Gram\": 1, \"Mg\": 0.001, \"Lbs\": 453.592, \"Oz\": 28.3495, \"Tonne\": 1000000}.get(source_doc.weight_uom, 1)))"
     }
    },
    {
@@ -429,9 +429,9 @@
     "easyecom_path": "Length",
     "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Length is Integer (cm). Item.ecs_length_cm is a read-only Float populated by the pull (already in cm). The expression below reads an optional source_doc.ecs_dim_uom and converts to cm; if no such field exists or it's empty, value is treated as cm (default). FDE: to enable non-cm input, add an 'ecs_dim_uom' custom field on Item (Data or Link to UOM) - the rule already reads it. Multiplier table is shared by Length/Height/Width.",
+    "notes": "EE contract: Length is Integer (cm). Source fallback chain (gh#44): ecs_length_cm → custom_length → unicommerce_item_length → length → 0. ecs_length_cm is populated by the EE pull; ERPNext-born Items use vendor-specific custom fields. Falling back finds the value wherever the FDE actually entered it. UOM-aware conversion reads source_doc.ecs_dim_uom (FDE-extendable; multiplier table shared by Length/Height/Width). FDE override: edit the fallback list in transform_args.expression to add bench-specific fields.",
     "transform_args": {
-     "expression": "int(round((value or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
+     "expression": "int(round((value or source_doc.get(\"custom_length\") or source_doc.get(\"unicommerce_item_length\") or source_doc.get(\"length\") or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
     }
    },
    {
@@ -439,9 +439,9 @@
     "easyecom_path": "Height",
     "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Height is Integer (cm). Same UOM-aware conversion as Length/Width (see Length rule's notes for the FDE extension story).",
+    "notes": "EE contract: Height is Integer (cm). Source fallback chain (gh#44): ecs_height_cm → custom_height → unicommerce_item_height → height → 0. Same rationale as Length — see that rule's notes.",
     "transform_args": {
-     "expression": "int(round((value or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
+     "expression": "int(round((value or source_doc.get(\"custom_height\") or source_doc.get(\"unicommerce_item_height\") or source_doc.get(\"height\") or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
     }
    },
    {
@@ -449,9 +449,9 @@
     "easyecom_path": "Width",
     "transform_push": "custom_python",
     "transform_pull": "str_to_float",
-    "notes": "EE contract: Width is Integer (cm). Same UOM-aware conversion as Length/Height (see Length rule's notes for the FDE extension story).",
+    "notes": "EE contract: Width is Integer (cm). Source fallback chain (gh#44): ecs_width_cm → custom_width → custom_breadth (one reporter used 'breadth' on the form) → unicommerce_item_width → width → 0. Same rationale as Length — see that rule's notes.",
     "transform_args": {
-     "expression": "int(round((value or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
+     "expression": "int(round((value or source_doc.get(\"custom_width\") or source_doc.get(\"custom_breadth\") or source_doc.get(\"unicommerce_item_width\") or source_doc.get(\"width\") or 0) * {\"Cm\": 1, \"M\": 100, \"Mm\": 0.1, \"Inch\": 2.54, \"Ft\": 30.48}.get(source_doc.get(\"ecs_dim_uom\"), 1)))"
     }
    },
    {
