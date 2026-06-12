@@ -315,10 +315,11 @@ class TestProductTypeBranching(FrappeTestCase):
 
     def test_combo_product_with_no_subproducts_flagged(self) -> None:
         """Stage 4 now actively builds bundles from combos. A combo
-        with no sub_products (or fewer than 2) still flags — EE
-        requires ≥2 sub-products to be a valid combo. The map row
-        captures the EE identifiers so a Stage-4 reconciliation can
-        find the SKU later."""
+        with no sub-products (or with total qty < 2 — see commit
+        97b8017 which moved the threshold from "distinct count" to
+        "total component qty") still flags. The map row captures the
+        EE identifiers so a Stage-4 reconciliation can find the SKU
+        later."""
         _ensure_hsn("85171000")
         _ensure_uom("Nos")
         payload = {
@@ -334,7 +335,13 @@ class TestProductTypeBranching(FrappeTestCase):
         out = self._process(payload)
         self.assertEqual(out.status, STATUS_FLAGGED_NOT_CREATED)
         joined = " ".join(out.flag_reasons)
-        self.assertIn("sub-products", joined)
+        # Post-97b8017 the flag-message wording moved from "sub-products"
+        # (plural distinct count) to "sub-product" / "qty" / "components"
+        # (total qty contract). Assert on a substring that names the
+        # combo-qty concept so the test stays anchored on the substrate's
+        # actual contract.
+        self.assertIn("combo", joined)
+        self.assertIn("sub-product", joined)
         # Map row exists; no Bundle was created (degenerate combo).
         self.assertTrue(
             frappe.db.exists("EasyEcom Item Map", {"ee_sku": payload["sku"]})

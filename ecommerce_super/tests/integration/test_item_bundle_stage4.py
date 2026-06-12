@@ -416,7 +416,13 @@ class TestComboPull(FrappeTestCase):
         ))
         self.assertEqual(out.status, STATUS_FLAGGED_NOT_CREATED)
         joined = " ".join(out.flag_reasons)
-        self.assertIn("sub-products", joined)
+        # Post-97b8017 the flag-message wording moved from "sub-products"
+        # (plural distinct count) to "sub-product" / "qty" / "components"
+        # (total qty contract). Assert on substrings that name the
+        # combo-qty concept so the test stays anchored on the substrate's
+        # actual contract.
+        self.assertIn("combo", joined)
+        self.assertIn("sub-product", joined)
         self.assertFalse(
             frappe.db.exists("Product Bundle", {"new_item_code": combo_sku})
         )
