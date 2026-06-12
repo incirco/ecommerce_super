@@ -69,3 +69,13 @@ ecommerce_super.patches.v0_1.add_stock_uom_push_rule
 # fixture wasn't bundled in the deploy. This patch carries the render
 # payload inline so it works regardless of fixture bundling.
 ecommerce_super.patches.v0_1.insert_easyecom_top_strip_from_inline
+# gh#26: rescue patch for sites where `add_warehouse_ee_location_label`
+# silently no-op'd. Recreates the `Warehouse.ecs_ee_location_label`
+# Custom Field via plain doc.insert() (bypassing create_custom_fields'
+# silent-no-op behavior on missing insert_after target) and forces
+# `db.updatedb('Warehouse')` to materialize the column. Confirmed on
+# mmpl16 UAT 2026-06-12: Patch Log shows the prior patch ran, but the
+# column doesn't exist — `warehouse_query.predict_section10_branch`
+# crashes with "Unknown column 'ecs_ee_location_label'" on every DN
+# form load.
+ecommerce_super.patches.v0_1.add_warehouse_ee_location_label_inline
