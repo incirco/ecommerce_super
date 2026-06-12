@@ -84,8 +84,21 @@ def _recompute_label_for_warehouse(warehouse: str) -> str:
 def _set_warehouse_label(warehouse: str, label: str) -> None:
     """Write the label via db.set_value to bypass Warehouse.validate
     (the field is read-only and computed; no need to round-trip the
-    full controller)."""
+    full controller).
+
+    Defensive on column presence (gh#26 follow-up): on a deployment
+    where the rescue patch `add_warehouse_ee_location_label_inline`
+    hasn't run yet, the column doesn't exist and reading/writing it
+    would crash every Location save (this function fires from
+    Location's after_save hook). Skip silently — the rescue patch
+    re-runs the backfill once the column lands, picking up any
+    missed updates."""
     if not warehouse:
+        return
+    from ecommerce_super.easyecom.api.warehouse_query import (
+        _warehouse_has_label_column,
+    )
+    if not _warehouse_has_label_column():
         return
     current = frappe.db.get_value("Warehouse", warehouse, LABEL_FIELDNAME)
     if (current or "") == (label or ""):
@@ -141,7 +154,28 @@ def sync_on_location_trash(doc: Any, method: str | None = None) -> None:
 
 def backfill_all() -> dict[str, int]:
     """Walk every Warehouse and recompute its label. Idempotent.
-    Returns a summary count for the patch log."""
+    Returns a summary count for the patch log.
+
+    Defensive on column presence (gh#26 follow-up): if the column
+    doesn't exist (rescue patch hasn't run yet), return a no-op
+    summary rather than crashing the backfill patch. The
+    `add_warehouse_ee_location_label_inline` rescue patch runs the
+    backfill again itself after creating the column, so a deployment
+    that picks up the substrate change before the rescue patch
+    eventually converges."""
+    from ecommerce_super.easyecom.api.warehouse_query import (
+        _warehouse_has_label_column,
+    )
+    if not _warehouse_has_label_column():
+        return {
+            "warehouses_scanned": 0,
+            "labels_updated": 0,
+            "skipped_reason": (
+                "Warehouse.ecs_ee_location_label column missing — "
+                "rescue patch add_warehouse_ee_location_label_inline "
+                "will run the backfill after creating the column."
+            ),
+        }
     warehouses = frappe.db.get_all(
         "Warehouse", pluck="name", filters={"disabled": 0}
     )

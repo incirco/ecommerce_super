@@ -16,9 +16,40 @@ Two whitelisted callables:
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 import frappe
+
+
+# gh#26: the `ecs_ee_location_label` Custom Field on Warehouse is shipped
+# by `patches.v0_1.add_warehouse_ee_location_label`. On mmpl16 (and
+# potentially other Frappe Cloud deploys) that patch silently no-op'd
+# during a previous deploy — Patch Log records "executed" but the
+# column doesn't exist, so any reference to it raises
+#   MySQLdb.OperationalError: Unknown column 'ecs_ee_location_label'
+# until the rescue patch (`add_warehouse_ee_location_label_inline`)
+# runs and creates the column.
+#
+# Every database access in this module guards against the missing
+# column via `_warehouse_has_label_column()` and a fallback that
+# returns empty labels. The §10 branch prediction still works —
+# `_is_ee_mapped_warehouse` reads `tabEasyEcom Location`, not the
+# Warehouse label — so the FDE form continues to render even on a
+# pre-patch site.
+
+
+@lru_cache(maxsize=1)
+def _warehouse_has_label_column() -> bool:
+    """Return True iff `Warehouse.ecs_ee_location_label` exists in the
+    site's schema. Memoised per process — the underlying schema is
+    stable within a bench worker lifetime, and `bench restart` rebuilds
+    the worker. After the rescue patch lands, the next worker pickup
+    sees the column."""
+    try:
+        return bool(frappe.db.has_column("Warehouse", "ecs_ee_location_label"))
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -63,6 +94,28 @@ def warehouse_with_ee_label(
             params["warehouse_type"] = filters["warehouse_type"]
 
     where = " AND ".join(conditions)
+
+    # gh#26: graceful degrade when the label column is missing — return
+    # the autocomplete with empty labels rather than 500'ing every
+    # warehouse picker on the site.
+    if not _warehouse_has_label_column():
+        rows = frappe.db.sql(
+            f"""
+            SELECT
+                w.name,
+                '' AS ee_label
+            FROM `tabWarehouse` w
+            WHERE {where}
+              AND (
+                  w.name LIKE %(txt)s
+                  OR w.warehouse_name LIKE %(txt)s
+              )
+            ORDER BY w.name
+            LIMIT %(start)s, %(page_len)s
+            """,
+            params,
+        )
+        return rows
 
     rows = frappe.db.sql(
         f"""
@@ -127,12 +180,20 @@ def predict_section10_branch(
 
     src_ee = _is_ee_mapped_warehouse(src)
     tgt_ee = _is_ee_mapped_warehouse(tgt)
-    src_label = (
-        frappe.db.get_value("Warehouse", src, "ecs_ee_location_label") or ""
-    )
-    tgt_label = (
-        frappe.db.get_value("Warehouse", tgt, "ecs_ee_location_label") or ""
-    )
+    # gh#26: skip the label lookup when the column doesn't exist yet.
+    # `_is_ee_mapped_warehouse` reads `tabEasyEcom Location` (a separate
+    # table), so branch resolution still works — only the description
+    # strings are blanked.
+    if _warehouse_has_label_column():
+        src_label = (
+            frappe.db.get_value("Warehouse", src, "ecs_ee_location_label") or ""
+        )
+        tgt_label = (
+            frappe.db.get_value("Warehouse", tgt, "ecs_ee_location_label") or ""
+        )
+    else:
+        src_label = ""
+        tgt_label = ""
 
     if src_ee and tgt_ee:
         branch = "STN"

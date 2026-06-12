@@ -185,13 +185,26 @@ function refresh_warehouse_label(frm, fname) {
         set_field_description(frm, fname, "");
         return;
     }
-    frappe.db.get_value("Warehouse", value, "ecs_ee_location_label").then((r) => {
-        const label = (r && r.message && r.message.ecs_ee_location_label) || "";
-        const html = label
-            ? `<span style="color:#1F7AEC;font-weight:500;">${frappe.utils.escape_html(label)}</span>`
-            : `<span style="color:#888;">Not EE-mapped</span>`;
-        set_field_description(frm, fname, html);
-    });
+    // Defensive on column presence (gh#26 follow-up): if the rescue
+    // patch hasn't run on this deployment yet, the column doesn't
+    // exist and `frappe.db.get_value` will 500. Catch + render the
+    // neutral "Not EE-mapped" state instead of crashing the form.
+    frappe.db
+        .get_value("Warehouse", value, "ecs_ee_location_label")
+        .then((r) => {
+            const label = (r && r.message && r.message.ecs_ee_location_label) || "";
+            const html = label
+                ? `<span style="color:#1F7AEC;font-weight:500;">${frappe.utils.escape_html(label)}</span>`
+                : `<span style="color:#888;">Not EE-mapped</span>`;
+            set_field_description(frm, fname, html);
+        })
+        .catch(() => {
+            // Column missing or backend error — degrade gracefully.
+            set_field_description(
+                frm, fname,
+                `<span style="color:#888;">Not EE-mapped</span>`,
+            );
+        });
 }
 
 function set_field_description(frm, fname, html) {
