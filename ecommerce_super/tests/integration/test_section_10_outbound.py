@@ -66,14 +66,53 @@ def _ensure_warehouse(name: str, *, company: str) -> str:
 
 
 def _ensure_warehouse_address(warehouse: str) -> None:
-    has = frappe.db.sql(
-        """SELECT 1 FROM `tabDynamic Link`
+    # Joint (Warehouse + canonical Internal Customer) Dynamic Link is
+    # required by §10 substrate (transfer_push.section10_before_save
+    # runs a Warehouse+Customer join to resolve customer_address). A
+    # warehouse-only address triggers ERPNext's
+    # validate_party_address "Billing Address does not belong" throw.
+    wh_company = frappe.db.get_value("Warehouse", warehouse, "company")
+    canonical_cust = (
+        frappe.db.get_value(
+            "Customer",
+            {"is_internal_customer": 1, "represents_company": wh_company},
+            "name",
+        )
+        if wh_company
+        else None
+    )
+    existing_addr = frappe.db.sql(
+        """SELECT parent FROM `tabDynamic Link`
            WHERE parenttype='Address' AND link_doctype='Warehouse'
              AND link_name=%s LIMIT 1""",
         (warehouse,),
     )
-    if has:
+    if existing_addr:
+        addr_name = existing_addr[0][0]
+        if canonical_cust and not frappe.db.exists(
+            "Dynamic Link",
+            {
+                "parenttype": "Address",
+                "parent": addr_name,
+                "link_doctype": "Customer",
+                "link_name": canonical_cust,
+            },
+        ):
+            doc = frappe.get_doc("Address", addr_name)
+            doc.append(
+                "links",
+                {"link_doctype": "Customer", "link_name": canonical_cust},
+            )
+            doc.flags.ignore_permissions = True
+            doc.save()
         return
+    links: list[dict] = [
+        {"link_doctype": "Warehouse", "link_name": warehouse}
+    ]
+    if canonical_cust:
+        links.append(
+            {"link_doctype": "Customer", "link_name": canonical_cust}
+        )
     addr = frappe.get_doc(
         {
             "doctype": "Address",
@@ -86,7 +125,7 @@ def _ensure_warehouse_address(warehouse: str) -> None:
             "country": "India",
             "phone": "9999999999",
             "email_id": "wh@test.local",
-            "links": [{"link_doctype": "Warehouse", "link_name": warehouse}],
+            "links": links,
         }
     )
     addr.insert(ignore_permissions=True)

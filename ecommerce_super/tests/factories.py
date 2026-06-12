@@ -274,11 +274,31 @@ def cleanup_easyecom_state() -> None:
     frappe.db.commit()
 
 
+# Canonical Internal-pair rows seeded once by seed_ci_test_local.py.
+# These mirror the FDE-created Internal Customer / Supplier pairs that
+# exist on a deployed client site and survive across test classes; the
+# §10 isolation cleanup below preserves them so the seed step does not
+# need to re-run between test classes (and so the seeded billing
+# Address Dynamic Link is not lost — without it, every §10 DN test
+# fails inside ERPNext's validate_party_address).
+_SEEDED_INTERNAL_CUSTOMERS = (
+    "INTL-CUST-for-_Test Company",
+    "INTL-CUST-for-_Other Test Co",
+)
+
+
 def _cleanup_internal_pair_fabric() -> None:
     """Wipe §10 Internal Customer / Internal Supplier + their Maps
-    scoped by the auto-creation naming convention. Idempotent."""
+    scoped by the auto-creation naming convention. Idempotent.
+
+    Customers listed in _SEEDED_INTERNAL_CUSTOMERS are preserved — they
+    were planted by ci-test.local's seed step to model a deployed
+    client site's Internal Customer fabric, and removing them would
+    break every subsequent §10 DN test (no Customer-linked Address →
+    "Billing Address does not belong" inside ERPNext)."""
     # EasyEcom Customer Map rows linked to Internal Customers — wipe
-    # FIRST so the Customer rows can be deleted afterwards.
+    # FIRST so the Customer rows can be deleted afterwards. Preserve
+    # the maps that target seeded canonical customers.
     for n in frappe.db.sql(
         """
         SELECT cm.name
@@ -286,7 +306,9 @@ def _cleanup_internal_pair_fabric() -> None:
         JOIN `tabCustomer` c ON c.name = cm.erpnext_name
         WHERE c.customer_name LIKE 'INTL-CUST-%%'
           AND cm.erpnext_doctype = 'Customer'
+          AND c.name NOT IN %(seeded)s
         """,
+        {"seeded": _SEEDED_INTERNAL_CUSTOMERS},
         as_dict=True,
     ):
         try:
@@ -324,10 +346,13 @@ def _cleanup_internal_pair_fabric() -> None:
     # row has linked submitted transactions — accept the leak in that
     # case (tests shouldn't leave submitted SI/DN on Internal Customers
     # in the first place; if they do, the next layer of cleanup needs
-    # to wipe those upstream).
+    # to wipe those upstream). Preserves seeded canonical customers.
     for n in frappe.db.get_all(
         "Customer",
-        filters={"customer_name": ("like", "INTL-CUST-%")},
+        filters={
+            "customer_name": ("like", "INTL-CUST-%"),
+            "name": ("not in", _SEEDED_INTERNAL_CUSTOMERS),
+        },
         pluck="name",
     ):
         try:

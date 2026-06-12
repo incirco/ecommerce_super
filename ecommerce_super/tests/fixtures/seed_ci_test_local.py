@@ -54,6 +54,12 @@ def seed() -> dict:
         "tax_templates_created": _step(
             "tax_templates_created", _seed_gst_templates
         ),
+        "internal_customers_seeded": _step(
+            "internal_customers_seeded", _seed_internal_customers
+        ),
+        "fiscal_years_seeded": _step(
+            "fiscal_years_seeded", _seed_fiscal_years
+        ),
     }
 
 
@@ -112,6 +118,137 @@ def _seed_hsn_codes() -> int:
         doc.flags.ignore_permissions = True
         doc.insert()
         created += 1
+    return created
+
+
+def _seed_internal_customers() -> int:
+    """Seed Internal Customers + billing Addresses for the canonical
+    test Companies. Mirrors what a deployed client site looks like —
+    the FDE creates Internal Customer pairs during §10 setup, and each
+    pair ships with a primary Address Dynamic-Linked to the Customer.
+
+    Without this seed, every §10 outbound / inbound / stage4 / substrate
+    integration test that submits an Internal-Customer DN fails inside
+    ERPNext's `validate_party_address`: the test factory creates a DN
+    whose only available address is the warehouse's shipping Address
+    (linked to `Warehouse` only), and ERPNext throws "Billing Address
+    does not belong to the {customer}" because the Customer has zero
+    Dynamic-Linked Addresses to fall back on.
+
+    Each seeded Customer also gets `customer_primary_address` pointed
+    at its own Address, so ERPNext's `set_missing_values` cascade picks
+    that up for both `customer_address` (billing) and
+    `shipping_address_name` on the DN.
+    """
+    test_companies = [
+        c for c in ["_Test Company", "_Other Test Co"]
+        if frappe.db.exists("Company", c)
+    ]
+    if not test_companies:
+        return 0
+    group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+    if not group:
+        return 0
+    created = 0
+    for company in test_companies:
+        cust_name = f"INTL-CUST-for-{company}"
+        existing = frappe.db.get_value(
+            "Customer",
+            {"is_internal_customer": 1, "represents_company": company},
+            "name",
+        )
+        if existing:
+            cust_name = existing
+        else:
+            cust = frappe.new_doc("Customer")
+            cust.update(
+                {
+                    "customer_name": cust_name,
+                    "customer_type": "Company",
+                    "customer_group": group,
+                    "is_internal_customer": 1,
+                    "represents_company": company,
+                    "companies": [{"company": company}],
+                }
+            )
+            cust.flags.ignore_permissions = True
+            cust.insert()
+            cust_name = cust.name
+            created += 1
+        addr_title = f"Addr-{cust_name}"
+        addr_name = frappe.db.get_value(
+            "Address", {"address_title": addr_title}, "name"
+        )
+        if not addr_name:
+            safe = company.replace(" ", "").replace("_", "").lower()
+            addr = frappe.new_doc("Address")
+            addr.update(
+                {
+                    "address_title": addr_title,
+                    "address_type": "Billing",
+                    "address_line1": "Internal Customer Test Premises",
+                    "city": "Bengaluru",
+                    "state": "Karnataka",
+                    "pincode": "560001",
+                    "country": "India",
+                    "phone": "7777777777",
+                    "email_id": f"intl-{safe}@test.local",
+                    "links": [
+                        {"link_doctype": "Customer", "link_name": cust_name}
+                    ],
+                }
+            )
+            addr.flags.ignore_permissions = True
+            addr.insert()
+            addr_name = addr.name
+            created += 1
+        current_primary = frappe.db.get_value(
+            "Customer", cust_name, "customer_primary_address"
+        )
+        if (current_primary or "") != addr_name:
+            frappe.db.set_value(
+                "Customer", cust_name, "customer_primary_address",
+                addr_name, update_modified=False,
+            )
+    return created
+
+
+def _seed_fiscal_years() -> int:
+    """Seed Indian Fiscal Year rows for the current + adjacent years.
+
+    Without an active Fiscal Year that covers today's date, every
+    PR / GRN / SI test that goes through ERPNext's
+    `validate_fiscal_year` blows up with `FiscalYearError: Date
+    {today} is not in any active Fiscal Year`. The §9 GRN pull
+    stage3 test class cascades ~12 errors from this single fixture
+    gap — the setUpClass creates a Purchase Order with `posting_date
+    = today`, which is what triggers the throw.
+
+    ci-test.local was provisioned without `setup_complete` running
+    end-to-end (the seed comment at the top of this file mentions
+    UOMs, Company, and HSN codes missing for the same reason).
+    """
+    from datetime import date
+    today = date.today()
+    # Indian FY: April 1 → March 31. Determine current FY's start year.
+    fy_start_year = today.year if today.month >= 4 else today.year - 1
+    target_years = [fy_start_year - 1, fy_start_year, fy_start_year + 1]
+    created = 0
+    for start_year in target_years:
+        fy_name = f"{start_year}-{start_year + 1}"
+        if frappe.db.exists("Fiscal Year", fy_name):
+            continue
+        doc = frappe.new_doc("Fiscal Year")
+        doc.year = fy_name
+        doc.year_start_date = date(start_year, 4, 1)
+        doc.year_end_date = date(start_year + 1, 3, 31)
+        doc.flags.ignore_permissions = True
+        try:
+            doc.insert()
+            created += 1
+        except Exception:
+            # Some Frappe versions enforce non-overlap; tolerate.
+            pass
     return created
 
 

@@ -72,13 +72,56 @@ def _ensure_warehouse(name: str, *, company: str) -> str:
 
 
 def _ensure_warehouse_address(warehouse: str) -> None:
-    if frappe.db.sql(
-        """SELECT 1 FROM `tabDynamic Link`
+    # Skip address creation only if BOTH the Warehouse link AND a
+    # Customer link to the canonical Internal Customer (for the
+    # warehouse's company) exist on the same Address row — the §10
+    # substrate's section10_before_save runs a JOINT (Warehouse +
+    # Customer) Dynamic Link query to resolve customer_address.
+    # Without the Customer link, the substrate falls back to the
+    # warehouse-only address, and ERPNext's validate_party_address
+    # then throws "Billing Address does not belong to the {customer}".
+    wh_company = frappe.db.get_value("Warehouse", warehouse, "company")
+    canonical_cust = (
+        frappe.db.get_value(
+            "Customer",
+            {"is_internal_customer": 1, "represents_company": wh_company},
+            "name",
+        )
+        if wh_company
+        else None
+    )
+    existing_addr = frappe.db.sql(
+        """SELECT parent FROM `tabDynamic Link`
            WHERE parenttype='Address' AND link_doctype='Warehouse'
              AND link_name=%s LIMIT 1""",
         (warehouse,),
-    ):
+    )
+    if existing_addr:
+        addr_name = existing_addr[0][0]
+        if canonical_cust and not frappe.db.exists(
+            "Dynamic Link",
+            {
+                "parenttype": "Address",
+                "parent": addr_name,
+                "link_doctype": "Customer",
+                "link_name": canonical_cust,
+            },
+        ):
+            doc = frappe.get_doc("Address", addr_name)
+            doc.append(
+                "links",
+                {"link_doctype": "Customer", "link_name": canonical_cust},
+            )
+            doc.flags.ignore_permissions = True
+            doc.save()
         return
+    links: list[dict] = [
+        {"link_doctype": "Warehouse", "link_name": warehouse}
+    ]
+    if canonical_cust:
+        links.append(
+            {"link_doctype": "Customer", "link_name": canonical_cust}
+        )
     addr = frappe.get_doc(
         {
             "doctype": "Address",
@@ -89,9 +132,7 @@ def _ensure_warehouse_address(warehouse: str) -> None:
             "state": "Karnataka",
             "pincode": "560001",
             "country": "India",
-            "links": [
-                {"link_doctype": "Warehouse", "link_name": warehouse}
-            ],
+            "links": links,
         }
     )
     addr.insert(ignore_permissions=True)
