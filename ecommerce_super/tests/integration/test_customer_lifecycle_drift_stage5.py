@@ -12,7 +12,9 @@ ALL MOCKED — no real EE traffic. Mirrors §8d Stage 5 coverage:
   - Resolution actions: dismiss_drift, push_to_ee_for_drift; no Accept-EE.
   - Field-level exclusion via EasyEcom Exclude Field child
     (reused from §8d — generic shape).
-  - Sync Record Discrepancy mapping for drift (not Failed).
+  - Drift outcome maps to Sync Record status=Failed per §7.3 M1
+    binary contract (the legacy 'Discrepancy' enum was migrated to
+    'Failed' in gh#16 — drift detail now lives in last_error).
 """
 
 from __future__ import annotations
@@ -684,13 +686,17 @@ class TestNoAcceptEeAction(FrappeTestCase):
 
 
 # ---------------------------------------------------------------------
-# Sync Record Discrepancy
+# Sync Record drift outcome (binary enum per §7.3 M1)
 # ---------------------------------------------------------------------
 
 
 class TestSyncRecordDiscrepancy(FrappeTestCase):
-    """Drift outcome → Sync Record status = Discrepancy (not Failed).
-    §7.3: divergence is not failure."""
+    """Drift outcome → Sync Record status = Failed; the drift detail is
+    captured in `last_error` (not encoded in the status enum). Per
+    §7.3 M1 the per-record outcome is BINARY (Success | Failed); the
+    legacy 'Discrepancy' status was migrated to 'Failed' in gh#16.
+    The drift-vs-genuine-failure distinction now lives in last_error
+    content, not the enum."""
 
     def setUp(self) -> None:
         _wipe_state()
@@ -698,7 +704,7 @@ class TestSyncRecordDiscrepancy(FrappeTestCase):
     def tearDown(self) -> None:
         _wipe_state()
 
-    def test_drift_writes_discrepancy_sync_record(self) -> None:
+    def test_drift_writes_failed_sync_record_with_drift_reason(self) -> None:
         c_name, map_name = _make_mapped_customer(
             customer_name=f"{PREFIX}DISCR", ee_c_id="8570001"
         )
@@ -711,8 +717,22 @@ class TestSyncRecordDiscrepancy(FrappeTestCase):
             ["status", "last_error"],
             as_dict=True,
         )
-        self.assertEqual(sr.status, "Discrepancy", "drift must NOT map to Failed")
-        self.assertIsNotNone(sr.last_error)
+        self.assertEqual(
+            sr.status, "Failed",
+            "drift maps to Failed enum per §7.3 M1 binary contract "
+            "(was 'Discrepancy' pre-gh#16; drift detail now in last_error)",
+        )
+        self.assertIsNotNone(
+            sr.last_error,
+            "drift reason must be carried in last_error",
+        )
+        # Qualitative check — last_error should name the diverging
+        # field so the FDE can disposition.
+        self.assertIn(
+            "customer_name", sr.last_error,
+            "last_error should name the drifted field "
+            "(the test fixture diverges on customer_name)",
+        )
 
 
 # ---------------------------------------------------------------------
