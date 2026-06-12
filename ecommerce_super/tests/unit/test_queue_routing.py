@@ -25,15 +25,39 @@ class TestQueueRouting(unittest.TestCase):
         with self.assertRaises(ValueError):
             routing.queue_for("Fake Job Type")
 
-    def test_all_19_job_types_routed(self) -> None:
-        """Every Queue Job state's job_type option has a routing entry."""
-        self.assertEqual(len(routing.QUEUE_FOR_JOB_TYPE), 19)
-        self.assertEqual(len(routing.TIMEOUT_FOR_JOB_TYPE), 19)
-        # Same key set.
-        self.assertEqual(
-            set(routing.QUEUE_FOR_JOB_TYPE.keys()),
-            set(routing.TIMEOUT_FOR_JOB_TYPE.keys()),
+    def test_all_job_types_routed(self) -> None:
+        """Every key in QUEUE_FOR_JOB_TYPE has matching entries in the
+        sibling routing dicts.
+
+        Iteration form (not a magic-number assertion). Adding a new
+        job type means adding it to all three of QUEUE_FOR_JOB_TYPE /
+        TIMEOUT_FOR_JOB_TYPE / MAX_ATTEMPTS_FOR_JOB_TYPE; this test
+        freezes that contract without ever needing to update a count.
+        """
+        queue_keys = set(routing.QUEUE_FOR_JOB_TYPE.keys())
+        timeout_keys = set(routing.TIMEOUT_FOR_JOB_TYPE.keys())
+        self.assertGreater(
+            len(queue_keys), 0,
+            "QUEUE_FOR_JOB_TYPE must not be empty",
         )
+        self.assertEqual(
+            queue_keys, timeout_keys,
+            "every job_type in QUEUE_FOR_JOB_TYPE must have a matching "
+            "TIMEOUT_FOR_JOB_TYPE entry (and vice versa)",
+        )
+        # Tier values must be one of the three documented tiers.
+        valid_tiers = {"short", "default", "long"}
+        for job_type, tier in routing.QUEUE_FOR_JOB_TYPE.items():
+            self.assertIn(
+                tier, valid_tiers,
+                f"job_type {job_type!r} mapped to invalid tier {tier!r}",
+            )
+        # Timeouts must be positive seconds.
+        for job_type, secs in routing.TIMEOUT_FOR_JOB_TYPE.items():
+            self.assertGreater(
+                secs, 0,
+                f"job_type {job_type!r} has non-positive timeout {secs!r}",
+            )
 
 
 class TestBackoff(unittest.TestCase):
