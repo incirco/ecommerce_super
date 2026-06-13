@@ -45,10 +45,9 @@
   },
   {
    "fieldname": "cursor_value",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Cursor Value",
    "reqd": 1,
-   "length": 2000,
    "description": "ISO datetime, Next-Page URL, or opaque token from EE."
   },
   {

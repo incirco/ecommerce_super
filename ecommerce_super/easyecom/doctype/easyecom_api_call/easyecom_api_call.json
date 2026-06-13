@@ -147,10 +147,9 @@
   },
   {
    "fieldname": "request_url",
-   "fieldtype": "Data",
+   "fieldtype": "Small Text",
    "label": "Request URL (redacted)",
-   "reqd": 1,
-   "length": 2000
+   "reqd": 1
   },
   {
    "fieldname": "request_headers",
