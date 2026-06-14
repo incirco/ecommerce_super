@@ -75,6 +75,9 @@ JOB_TYPE_HANDLERS: dict[str, str] = {
     # §10 Stage 2: Stock Transfer outbound. Enqueued by DN on_submit +
     # the push_all_pending_transfers batch sweep.
     "Transfer Push": "ecommerce_super.easyecom.flows.transfer_push.transfer_push_queue_handler",
+    # §11 Phase 1 Stage 2: B2B Sales Order outbound (Old + New B2B
+    # createOrder). Enqueued by Sales Order on_submit_push.
+    "SO Push": "ecommerce_super.easyecom.flows.b2b_sales.push.b2b_push_queue_handler",
 }
 
 

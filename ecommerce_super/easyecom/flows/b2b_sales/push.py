@@ -110,7 +110,7 @@ def on_submit_push(doc: Any, method: str | None = None) -> None:
         ee_location_key=str(location_key or ""),
     )
     enqueue_easyecom_job(
-        job_type="b2b_push",
+        job_type="SO Push",
         company=doc.company,
         target_doctype="Sales Order",
         target_name=doc.name,
@@ -122,6 +122,24 @@ def on_submit_push(doc: Any, method: str | None = None) -> None:
 # ============================================================
 # Queue job worker — registered via queue routing.
 # ============================================================
+
+
+def b2b_push_queue_handler(qj: Any) -> None:
+    """JOB_TYPE_HANDLERS['SO Push'] dispatch — workers.execute_job calls
+    this with the loaded Queue Job. Reads sales_order from target_name
+    (the §11 hook always sets it), falls back to payload for parity
+    with §10's transfer_push handler."""
+    payload = frappe.parse_json(qj.payload) if qj.payload else {}
+    so_name = qj.target_name or payload.get("sales_order")
+    if not so_name:
+        raise ValueError(
+            f"SO Push job {qj.name} missing sales_order in "
+            "target_name/payload"
+        )
+    push_b2b_order_async(
+        sales_order=so_name,
+        correlation_id=qj.correlation_id or None,
+    )
 
 
 def push_b2b_order_async(
