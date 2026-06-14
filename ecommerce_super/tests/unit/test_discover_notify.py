@@ -137,7 +137,10 @@ class TestNotifyDiscoverComplete(unittest.TestCase):
             summary="Discover Products failed: ValueError: boom",
             list_route="/app/error-log",
         )
-        new_doc.assert_called_once_with("Notification Log")
+        # gh#11 retest — failure path also fans out (triggering user +
+        # FDE role user list = 2 inserts in this mock setup).
+        self.assertEqual(new_doc.call_count, 2)
+        new_doc.assert_any_call("Notification Log")
         publish.assert_called_once()
         self.assertFalse(publish.call_args.kwargs["message"]["ok"])
 
