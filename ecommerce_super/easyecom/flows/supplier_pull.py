@@ -709,23 +709,40 @@ def _create_supplier(
     **Dup-name resilience**: Harmony's sandbox + plenty of real-client
     EE tenants have multiple vendors that legitimately share the
     same vendor_name (e.g. 'MSTEST_123', 'Akanksha', 'library' in
-    Harmony — terse / test-data-ish names that collide on
-    Supplier.name because ERPNext autonames by supplier_name). The
-    second insert would raise DuplicateEntryError and the savepoint
-    isolation would surface it as a failed pull. Catch on first
-    failure, append a `-{ee_vendor_c_id}` suffix (guaranteed unique
-    by EE), retry once. supplier_name itself stays as the EE value
-    (only `.name` carries the disambiguation), so the FDE sees the
-    real EE name in the list view + on linked POs/GRNs.
+    Harmony — terse / test-data-ish names). Two suppliers with the
+    same supplier_name would otherwise land as `"X"` and `"X - 1"`
+    because ERPNext's autonaming silently disambiguates docnames.
+    The second supplier loses its EE-side identifier at a glance,
+    and §9 PO/GRN lookups that join on supplier_name break silently.
+
+    **gh#50** (mirror of customer_pull) — the original implementation
+    caught `frappe.DuplicateEntryError` reactively. Dead code under
+    current ERPNext: autoname appends ` - N` BEFORE the duplicate
+    exception fires. Fix is a pre-check against existing
+    `supplier_name` rows; collision triggers a proactive
+    `(vendor_c_id)` suffix BEFORE the insert. EE vendor_c_id is
+    unique by definition.
+
+    Race window between pre-check and insert is theoretical only
+    (FDEs don't run concurrent pulls). We leave the
+    `DuplicateEntryError` catch as a belt-and-braces tertiary
+    fallback.
 
     Caller is responsible for catching frappe.ValidationError from
     India Compliance — we don't swallow here so the caller can decide
     between FNC (validate failure) vs raise (infra failure).
     """
-    supplier_name = (
+    base_supplier_name = (
         (erpnext_fields.get("supplier_name") or "").strip()
         or f"EE Supplier {ee_vendor_c_id}"
     )
+
+    # gh#50 pre-check — disambiguate proactively when another Supplier
+    # already carries this supplier_name. We check `supplier_name` (not
+    # docname) because that's the field §9 PO/GRN flows join on.
+    supplier_name = base_supplier_name
+    if frappe.db.exists("Supplier", {"supplier_name": base_supplier_name}):
+        supplier_name = f"{base_supplier_name} ({ee_vendor_c_id})"
 
     def _build(name_for_docname: str) -> Any:
         s = frappe.new_doc("Supplier")
@@ -755,21 +772,20 @@ def _create_supplier(
         supplier.insert(ignore_permissions=True)
         return supplier
     except frappe.DuplicateEntryError:
-        # ERPNext autoname collision — another Supplier already
-        # carries this docname. Disambiguate by appending the EE
-        # read-key (guaranteed unique). The new supplier_name shows
-        # both pieces so the FDE can still find/identify the row.
-        disambiguated = f"{supplier_name} ({ee_vendor_c_id})"
+        # Belt-and-braces — pre-check above should have caught this
+        # already. Reached only via a race (two concurrent pulls).
+        disambiguated = f"{base_supplier_name} ({ee_vendor_c_id})"
         supplier = _build(disambiguated)
         supplier.insert(ignore_permissions=True)
         frappe.log_error(
-            title=f"supplier_pull: dup-name disambiguation for vendor_c_id={ee_vendor_c_id}",
+            title=f"supplier_pull: dup-name race for vendor_c_id={ee_vendor_c_id}",
             message=(
-                f"EE vendor_name={supplier_name!r} collided with an existing "
-                f"Supplier docname; created as {disambiguated!r} (docname="
-                f"{supplier.name!r}). vendor_c_id remains the join key on "
-                "the Supplier Map; downstream lookups via the Map are "
-                "unaffected."
+                f"EE vendor_name={base_supplier_name!r} collided with an "
+                f"existing Supplier between pre-check and insert "
+                f"(concurrent pull?); created as {disambiguated!r} "
+                f"(docname={supplier.name!r}). vendor_c_id remains the join "
+                "key on the Supplier Map; downstream lookups via the Map "
+                "are unaffected."
             ),
         )
         return supplier
