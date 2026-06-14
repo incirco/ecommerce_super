@@ -63,9 +63,14 @@ class TestNotifyDiscoverComplete(unittest.TestCase):
 
     def test_real_user_gets_notification_log_and_realtime(self) -> None:
         new_doc, publish, _, _ = self._run(triggered_by="fde-real@x.com")
-        # One Notification Log row for the user.
-        new_doc.assert_called_once_with("Notification Log")
-        # Realtime published to that user with the right shape.
+        # gh#11 retest — Notification Log fans out to both the
+        # triggering user AND the FDE role user list (one of each in
+        # the mock fixture = 2 inserts). Pre-fix this was 1 (triggering
+        # user only) and FDE-role users watching the worklist saw
+        # nothing.
+        self.assertEqual(new_doc.call_count, 2)
+        new_doc.assert_any_call("Notification Log")
+        # Realtime published to the triggering user with the right shape.
         publish.assert_called_once()
         call_kwargs = publish.call_args.kwargs
         self.assertEqual(call_kwargs["event"], REALTIME_EVENT)
@@ -76,13 +81,54 @@ class TestNotifyDiscoverComplete(unittest.TestCase):
         self.assertEqual(msg["list_route"], "/app/easyecom-item-map")
         self.assertIn("Created", msg["summary"])
 
-    def test_administrator_caller_skips_realtime_fans_out_to_fde_role(self) -> None:
+    def test_no_caller_fans_out_to_fde_role_only(self) -> None:
+        """When triggered_by is None (cron path / Guest), Notification
+        Log goes to FDE role users only; realtime is skipped (nobody
+        to push to in real time)."""
         new_doc, publish, _, users_with_role = self._run(triggered_by=None)
-        # No realtime publish — there's no human in the desk to push to.
         publish.assert_not_called()
-        # Notification Log written to each FDE-role user (one per row).
         users_with_role.assert_called_once_with("EasyEcom FDE")
         self.assertEqual(new_doc.call_count, 1)  # one FDE user in the mock
+
+    def test_administrator_caller_gets_notification_and_realtime(self) -> None:
+        """gh#11 retest — Administrator-triggered runs now get the
+        notification + realtime popup. Pre-fix this was filtered out
+        on the assumption Administrator = smoke-test; the mmpl16
+        retest confirmed real testers use the superuser."""
+        new_doc, publish, _, users_with_role = self._run(
+            triggered_by="Administrator"
+        )
+        # Realtime fires for Administrator now.
+        publish.assert_called_once()
+        self.assertEqual(publish.call_args.kwargs["user"], "Administrator")
+        # Notification Log fans out to Administrator AND the FDE role
+        # user list (2 inserts in the mock setup).
+        self.assertEqual(new_doc.call_count, 2)
+        users_with_role.assert_called_once_with("EasyEcom FDE")
+
+    def test_triggering_user_not_duplicated_in_fanout(self) -> None:
+        """If the triggering user is ALSO in the FDE role list, they
+        get one notification, not two."""
+        new_doc = MagicMock(return_value=MagicMock())
+        publish = MagicMock()
+        # Triggering user is the same as the single FDE-role user.
+        users_with_role = MagicMock(return_value=["fde-real@x.com"])
+        with (
+            patch.object(frappe, "new_doc", new_doc),
+            patch.object(frappe, "publish_realtime", publish),
+            patch.object(frappe, "log_error", MagicMock()),
+            patch(
+                "ecommerce_super.easyecom.utils.discover_notify._users_with_role",
+                users_with_role,
+            ),
+        ):
+            notify_discover_complete(
+                triggered_by="fde-real@x.com",
+                kind="Products",
+                ok=True,
+                summary="Total: 10",
+            )
+        self.assertEqual(new_doc.call_count, 1)  # not 2 — dedup'd
 
     def test_failure_path_still_notifies(self) -> None:
         new_doc, publish, _, _ = self._run(
@@ -91,7 +137,10 @@ class TestNotifyDiscoverComplete(unittest.TestCase):
             summary="Discover Products failed: ValueError: boom",
             list_route="/app/error-log",
         )
-        new_doc.assert_called_once_with("Notification Log")
+        # gh#11 retest — failure path also fans out (triggering user +
+        # FDE role user list = 2 inserts in this mock setup).
+        self.assertEqual(new_doc.call_count, 2)
+        new_doc.assert_any_call("Notification Log")
         publish.assert_called_once()
         self.assertFalse(publish.call_args.kwargs["message"]["ok"])
 
@@ -158,9 +207,12 @@ class TestSafeCaller(unittest.TestCase):
         with self._with_user("fde-real@x.com"):
             self.assertEqual(safe_caller(), "fde-real@x.com")
 
-    def test_administrator_is_none(self) -> None:
+    def test_administrator_passes_through(self) -> None:
+        """gh#11 retest — Administrator is now a real notification
+        target (mmpl16 confirmed testers use the superuser and expect
+        the bell-icon notification). Pre-fix this returned None."""
         with self._with_user("Administrator"):
-            self.assertIsNone(safe_caller())
+            self.assertEqual(safe_caller(), "Administrator")
 
     def test_guest_is_none(self) -> None:
         with self._with_user("Guest"):
