@@ -115,6 +115,7 @@ def write_item_pull_sync_record(
     sku: str,
     status: str,
     last_error: str | None = None,
+    request_payload: dict | None = None,
 ) -> str:
     """Upsert and transition the Sync Record for one Item Pull
     operation. Called from process_one_product / drift detector.
@@ -124,6 +125,15 @@ def write_item_pull_sync_record(
     creation happened) entity_name CAN be None — pass the SKU as
     entity_name to keep the row identifiable.
 
+    gh#52: when `request_payload` is provided (the EE product dict
+    received from /Products/GetProductMaster), it lands on the Sync
+    Record's `last_request_payload` field as JSON. This preserves
+    the EE-side data context for failure analysis — without it, a
+    pull that fails inside ERPNext validation (e.g. UOM change on
+    transacted Item) leaves the Sync Record with no way to tell
+    whether EE sent a real divergent value or whether our flow
+    attempted an unnecessary mutation.
+
     Returns the Sync Record docname (for tests / FDE links)."""
     return _upsert_with_status(
         entity_doctype=entity_doctype,
@@ -132,6 +142,7 @@ def write_item_pull_sync_record(
         sku=sku,
         status=status,
         last_error=last_error,
+        request_payload=request_payload,
     )
 
 
@@ -165,6 +176,7 @@ def _upsert_with_status(
     sku: str,
     status: str,
     last_error: str | None,
+    request_payload: dict | None = None,
 ) -> str | None:
     # Sync Record's entity_name is a Dynamic Link — Frappe validates
     # the target exists on insert. For Flagged-Not-Created outcomes
@@ -211,6 +223,21 @@ def _upsert_with_status(
         updates["last_error"] = (last_error or "")[:1000]
     else:
         updates["last_error"] = None
+
+    # gh#52: preserve the EE-side request payload when supplied. The
+    # Sync Record's `last_request_payload` field exists for exactly
+    # this purpose; failures inside ERPNext validation that fire
+    # BEFORE any /Products/GetProductMaster API Call lands need the
+    # payload preserved here or the FDE has no way to know whether
+    # EE sent a real divergent value or our flow over-mutated.
+    if request_payload is not None:
+        try:
+            updates["last_request_payload"] = frappe.as_json(request_payload)
+        except Exception:
+            # Defensive — if the payload isn't JSON-serializable for
+            # any reason, fall back to a repr() so we preserve something
+            # rather than nothing.
+            updates["last_request_payload"] = repr(request_payload)[:65000]
 
     # db_set bypasses validate (which guards the state machine for
     # out-of-band human edits, per the controller). The integration

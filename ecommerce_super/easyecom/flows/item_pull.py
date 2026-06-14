@@ -1048,6 +1048,12 @@ def _process_page(
         )
         # Audit #1: write a Failed Sync Record OUTSIDE the rolled-back
         # savepoint so the failure is visible in §18 / §22 routing.
+        # gh#52: pass the EE product payload through so the Sync Record's
+        # last_request_payload preserves the EE-side context. Without
+        # this, a pull that fails inside ERPNext validation (e.g.
+        # ValidationError on UOM change for a transacted Item) leaves
+        # no record of WHAT EE sent — root cause analysis on these
+        # failures was impossible per the gh#52 report.
         try:
             from ecommerce_super.easyecom.flows._item_sync_records import (
                 STATUS_FAILED,
@@ -1060,6 +1066,7 @@ def _process_page(
                 sku=sku,
                 status=STATUS_FAILED,
                 last_error=f"{type(exc).__name__}: {exc}",
+                request_payload=product,
             )
         except Exception as inner_exc:  # noqa: BLE001
             frappe.log_error(
@@ -2231,11 +2238,27 @@ def _refresh_existing_item(item: Any, erpnext_fields: dict) -> None:
     """Refresh EE-supplied fields on an existing Item (auto-map path
     or persisted-map path). Skip None values so an EE payload that
     momentarily drops a field doesn't NULL out an existing value
-    (same additive-refresh semantics as §8a Location)."""
+    (same additive-refresh semantics as §8a Location).
+
+    gh#52: do NOT touch stock_uom on an existing Item. ERPNext refuses
+    `Item.stock_uom` updates once any transaction (Stock Entry / PR /
+    SI / DN / etc.) references the Item — it throws ValidationError
+    aborting the entire Sync Record before any EE API call lands.
+    UOM correction on a transacted Item is an FDE-side concern
+    (rename SKU + re-create), not something the pull should attempt.
+    For never-transacted Items, the flow's auto-map path already
+    creates the Item with the substituted stock_uom on first encounter;
+    re-refresh shouldn't try again.
+
+    item_code is the join key and changing it would break the mapping;
+    always dropped from the refresh payload.
+    """
     updates = {k: v for k, v in erpnext_fields.items() if v is not None}
-    # Don't overwrite item_code — that's the join key and changing it
-    # would break the mapping.
     updates.pop("item_code", None)
+    # gh#52: preserve the existing stock_uom on refresh. The first-pull
+    # path that CREATED the Item already wrote stock_uom via _create_item;
+    # subsequent refreshes leave it alone.
+    updates.pop("stock_uom", None)
     item.update(updates)
     item.save(ignore_permissions=True)
 
