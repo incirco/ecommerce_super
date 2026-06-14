@@ -12,11 +12,76 @@
 
 frappe.ui.form.on("Sales Order", {
     refresh(frm) {
+        // Branch chip + descriptor render on every refresh — they're
+        // visible pre-submit too (so the FDE sees the §11 routing
+        // before clicking Save).
+        refresh_b2b_branch_chip(frm);
         if (frm.doc.docstatus !== 1) return;
         maybe_add_cancel_button(frm);
         maybe_add_trace_button(frm);
     },
+    set_warehouse(frm) {
+        refresh_b2b_branch_chip(frm);
+    },
 });
+
+
+// §11 Phase 1 Stage 3 — branch chip on the SO form. Mirrors §10's
+// "§10 branch" chip on the DN form. Renders one of:
+//   - No chip — set_warehouse empty or non-EE-mapped (pure ERPNext)
+//   - "§11 → Old B2B" (blue) — EE-mapped + Account configured Old B2B
+//   - "§11 → New B2B" (green) — EE-mapped + Account configured New B2B
+// Plus a description line: "When submitted, this SO will push to EE
+// as a Business Order. Module: {module}. E-way origination: {origination}."
+function refresh_b2b_branch_chip(frm) {
+    if (!frm.doc.set_warehouse) {
+        clear_b2b_chip(frm);
+        return;
+    }
+    frappe.call({
+        method: "ecommerce_super.easyecom.api.trace_b2b_so.b2b_branch_chip",
+        args: { warehouse: frm.doc.set_warehouse },
+        callback(r) {
+            if (!r || !r.message) {
+                clear_b2b_chip(frm);
+                return;
+            }
+            render_b2b_chip(frm, r.message);
+        },
+        error() {
+            clear_b2b_chip(frm);
+        },
+    });
+}
+
+
+function render_b2b_chip(frm, info) {
+    const { module, eway_origination, gated } = info;
+    if (!gated || !module) {
+        clear_b2b_chip(frm);
+        return;
+    }
+    const label = `§11 → ${module}`;
+    const color = module === "Old B2B" ? "blue" : "green";
+    frm.dashboard.add_indicator(label, color);
+    const desc_html = `<div class="text-muted small" style="margin-top:4px;">
+        <b>§11 routing:</b> When submitted, this SO pushes to EE as a Business Order.
+        Module: <code>${frappe.utils.escape_html(module)}</code>.
+        E-way origination: <code>${frappe.utils.escape_html(eway_origination || "EasyEcom")}</code>.
+    </div>`;
+    if (frm.fields_dict.set_warehouse) {
+        frm.set_df_property("set_warehouse", "description", desc_html);
+        frm.refresh_field("set_warehouse");
+    }
+}
+
+
+function clear_b2b_chip(frm) {
+    if (frm.fields_dict && frm.fields_dict.set_warehouse) {
+        frm.set_df_property("set_warehouse", "description", "");
+        frm.refresh_field("set_warehouse");
+    }
+}
 
 
 function maybe_add_cancel_button(frm) {

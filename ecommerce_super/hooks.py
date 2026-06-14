@@ -483,8 +483,15 @@ scheduler_events = {
             "ecommerce_super.easyecom.flows.supplier_pull.scheduled_discover_suppliers",
         ],
         # Connection health rollup — every 5 minutes.
+        # §11 Phase 1 Stage 3 — B2B Order Map polling reconciliation.
+        # Scheduler tick is fixed at 5 min; per-Account
+        # ecs_polling_cadence_minutes Custom Field (default 15) gates
+        # which Maps qualify per tick. Per-Map probe via
+        # /orders/V2/getOrderDetails?reference_code=<SO.name> — no
+        # cursor, no watermark, no date constraint.
         "*/5 * * * *": [
             "ecommerce_super.easyecom.operational.connection_health.update_account_connection_status",
+            "ecommerce_super.easyecom.flows.b2b_sales.polling.reconcile_all_pending_b2b_orders",
         ],
         # Reclaim Queue Job rows in state=Running with no live RQ job (§6.3.9).
         "0 */1 * * *": [

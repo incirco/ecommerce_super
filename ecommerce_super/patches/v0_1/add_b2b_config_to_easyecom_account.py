@@ -56,6 +56,25 @@ def execute() -> None:
         },
     )
     _ensure_field(
+        dt="EasyEcom Account",
+        fieldname="ecs_polling_cadence_minutes",
+        spec={
+            "label": "B2B Polling Cadence (minutes)",
+            "fieldtype": "Int",
+            "default": "15",
+            "description": (
+                "How often each pending B2B Order Map is re-polled "
+                "via /orders/V2/getOrderDetails. The scheduler tick "
+                "is fixed at 5 minutes; this field gates which Maps "
+                "get re-polled per tick. Default 15 — B2B invoice "
+                "lifecycle is hours-to-days, so faster polling burns "
+                "EE quota without operational benefit. EE's own "
+                "marketplace cancellation sync runs every 5 min, so "
+                "anything faster is wasted."
+            ),
+        },
+    )
+    _ensure_field(
         dt="Sales Order",
         fieldname="ecs_b2b_order_map",
         spec={

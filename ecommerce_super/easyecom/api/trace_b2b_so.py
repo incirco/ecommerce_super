@@ -350,6 +350,29 @@ def _b2b_order_map_snapshot(so: Any) -> dict | None:
     return dict(row) if row else None
 
 
+@frappe.whitelist()
+def b2b_branch_chip(warehouse: str) -> dict[str, Any]:
+    """Lightweight endpoint for the SO form's branch chip — returns
+    whether this warehouse is §11-gated and (if so) which module +
+    e-way origination its EE Account is configured for.
+
+    Read-only. Always returns a dict so the JS callback has a stable
+    shape even when no chip should render.
+    """
+    if not warehouse:
+        return {"gated": False, "module": None, "eway_origination": None}
+    ee_account = get_ee_account_for_warehouse(warehouse)
+    if not ee_account:
+        return {"gated": False, "module": None, "eway_origination": None}
+    module = (ee_account.get("ecs_b2b_module") or "").strip() or None
+    eway = (ee_account.get("ecs_eway_origination") or "").strip() or "EasyEcom"
+    return {
+        "gated": bool(module),
+        "module": module,
+        "eway_origination": eway,
+    }
+
+
 def _recent_discrepancies(so_name: str) -> list[dict]:
     rows = frappe.db.get_all(
         "EasyEcom Integration Discrepancy",
