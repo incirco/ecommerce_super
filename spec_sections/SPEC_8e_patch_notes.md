@@ -44,3 +44,10 @@ Real EE data has heavily-duplicated customer display names (per the matching pol
 
 ## §8.2.x — Discover-Customers async-by-default (NEW, commit `9280d58`)
 The Discover-Customers desk button (Account form + top-bar dropdown) **enqueues into the `long` queue (3600s timeout) via `frappe.enqueue` and returns immediately with the RQ job_id**. The synchronous path tripped Frappe's 120s desk-whitelist budget on real-client catalogues (>2000 customers); the server-side pull continued in the worker but the browser had already disconnected, surfacing a misleading "(network or permission)" error to the FDE. Async-by-default is now the only pathway; progress visible via Account-form refresh + Customer Map list.
+
+## §8.2.x — Dup-name disambiguation made proactive (gh#50, supersedes "NEW, commit `4108048`")
+The prior `DuplicateEntryError`-catch approach is **dead code under current ERPNext**. ERPNext's autonaming silently disambiguates the docname with ` - N` suffixes BEFORE raising `DuplicateEntryError`, so the catch never fires. The result is two same-named EE customers landing as `"DupName"` and `"DupName - 1"` — the second customer loses its EE-side identifier at a glance, and §10 Internal Customer / §11 B2B-buyer flows that join on `customer_name` resolve ambiguously.
+
+**Fix (substrate)**: pre-check `frappe.db.exists("Customer", {"customer_name": <base>})` BEFORE the insert; on collision proactively append the `(c_id)` suffix to `customer_name`. EE c_id is unique by definition. The `DuplicateEntryError` catch remains as a tertiary belt-and-braces fallback for any concurrent-pull race that slips through the pre-check.
+
+Identity is still keyed on the Map row (`ee_c_id`); the `(c_id)` suffix is **identity-bearing in the customer_name field** so the FDE can disambiguate at a glance. §10 Internal Customer paths are unaffected (they join on `(is_internal_customer, represents_company)`, not customer_name). §8.3 supplier_pull mirrors the same contract on `supplier_name + (vendor_c_id)`.
