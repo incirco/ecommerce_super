@@ -79,9 +79,39 @@ COMPOSITE_INDEXES: list[tuple[str, str, str, bool]] = [
 
 
 def after_install() -> None:
-    """First-run setup. Idempotent."""
+    """First-run setup. Idempotent.
+
+    gh#48: at the end of after_install, run the Custom Field audit so
+    a fresh install that race-condition'd its way to missing fields
+    self-heals before the FDE first touches the desk. Audit results
+    land in the bench console + Error Log when anything needed rescue.
+    """
     _add_composite_indexes()
+    _run_custom_field_audit()
     frappe.db.commit()
+
+
+def _run_custom_field_audit() -> None:
+    """gh#48 — verify + rescue every Custom Field the integration ships."""
+    from ecommerce_super.easyecom.install.custom_field_verify import run_audit
+
+    summary = run_audit()
+    needs_rescue = summary["total"] - summary["ok"] - summary["doctype_missing"]
+    if needs_rescue == 0:
+        return
+    print(
+        f"[ecommerce_super] after_install: rescued "
+        f"{summary['rescued']}/{summary['total']} Custom Fields "
+        f"(gh#48 audit)"
+    )
+    if summary["rescued"] > 0:
+        frappe.log_error(
+            title=(
+                f"gh#48 (after_install): rescued {summary['rescued']} "
+                "Custom Field(s)"
+            ),
+            message=str(summary),
+        )
 
 
 def _add_composite_indexes() -> None:
