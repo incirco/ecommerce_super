@@ -74,6 +74,46 @@ def append_only(doc: Any, ptype: str, user: str | None = None) -> bool:
     return False
 
 
+def restrict_account_write(
+    doc: Any, ptype: str, user: str | None = None
+) -> bool:
+    """has_permission hook for EasyEcom Account (gh#14 follow-up #2).
+
+    Backstop the DocPerm shape: only System Manager and EasyEcom System
+    Manager can write/delete/create EasyEcom Account. Every other role —
+    including EasyEcom FDE — is read-only.
+
+    Frappe's DocPerm already encodes this (the FDE role's permission
+    entry has only `read: 1`), but the reporter (mmpl16, 2026-06-13)
+    found that the form's edit-flow UI surfaces (Actions menu, Bulk
+    Edit dialog) still render and let the user "proceed toward record
+    modification" before the server-side save rejection fires. Adding
+    a has_permission hook means the rejection fires AT permission-check
+    time — Frappe's form layer reads it via `frappe.has_permission` and
+    hides edit affordances accordingly.
+
+    Pass-throughs:
+      - Administrator (Frappe convention).
+      - System Manager (highest built-in role).
+      - EasyEcom System Manager (the role we designate for Account
+        management in production deployments).
+    Everyone else: read / report / export only.
+    """
+    user = user or frappe.session.user
+    if user in {"Administrator", None}:
+        return True
+
+    if ptype in {"read", "report", "export"}:
+        return True
+
+    roles = set(frappe.get_roles(user))
+    if "System Manager" in roles or "EasyEcom System Manager" in roles:
+        return True
+
+    # FDE / Operator / Auditor / Replay Approver — read-only.
+    return False
+
+
 def company_scope_doc(doc: Any, ptype: str, user: str | None = None) -> bool:
     """has_permission hook — per-document Company scoping (gh#14 follow-up).
 

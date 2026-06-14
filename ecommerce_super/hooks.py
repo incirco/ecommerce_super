@@ -556,6 +556,16 @@ _HAS_PERMISSION_OVERRIDES = {
     "EasyEcom API Call": "ecommerce_super.easyecom.permissions.append_only",
     "EasyEcom Webhook Event": "ecommerce_super.easyecom.permissions.append_only",
     "EasyEcom Configuration Audit": "ecommerce_super.easyecom.permissions.audit_no_modify",
+    # gh#14 follow-up #2 — restrict write/delete on EasyEcom Account to
+    # System Manager + EasyEcom System Manager. DocPerm already encodes
+    # this (FDE role only has `read: 1`), but the reporter found that
+    # the form's Actions menu / Bulk Edit UI surfaces still rendered for
+    # FDE users, letting them proceed toward modification before the
+    # server-side reject. has_permission hooks fire at perm-check time,
+    # so the form layer reads them and hides the edit affordances.
+    "EasyEcom Account": (
+        "ecommerce_super.easyecom.permissions.restrict_account_write"
+    ),
 }
 
 has_permission = {
