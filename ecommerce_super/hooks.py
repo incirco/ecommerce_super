@@ -103,6 +103,11 @@ doctype_js = {
     # both header warehouses picked, predicts the §10 branch (STN /
     # PO / B2B / Inert) so the FDE sees the consequence before submit.
     "Delivery Note": "public/js/delivery_note_ee_visibility.js",
+    # §11 Phase 1: Sales Order form — "Cancel on EasyEcom" button
+    # (visible when Map status ∈ {Pushed, Queued}) + "Trace B2B Push"
+    # button (visible for any submitted SO with an EE-mapped
+    # set_warehouse).
+    "Sales Order": "public/js/sales_order_b2b_visibility.js",
     # §10 UX: lock Address fields when mirrored from an EasyEcom
     # Location (ecs_ee_location set). Renders a banner directing the
     # FDE to edit on the Location side — single source of truth.
@@ -331,10 +336,16 @@ doc_events: dict[str, dict[str, str]] = {
         "after_insert": "ecommerce_super.easyecom.flows.supplier_push.enqueue_on_supplier_change",
         "on_update": "ecommerce_super.easyecom.flows.supplier_push.enqueue_on_supplier_change",
     },
-    # "Sales Order": {
-    #     "validate": "ecommerce_super.easyecom.flows.b2b_sales.validate_pre_push",
-    #     "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.on_submit_push",
-    # },
+    # §11 Phase 1 Stage 2: B2B sales push hooks.
+    #   - validate: §11.2 preconditions (mixed warehouses, GSTIN strict
+    #     for Old B2B, customer/item synced, HSN, billing address, etc.).
+    #     Throws block the SO save before any persisted state exists.
+    #   - on_submit: Gate 0 + enqueue the async createOrder push.
+    #     Non-EE-mapped set_warehouse → silently inert (pure ERPNext).
+    "Sales Order": {
+        "validate": "ecommerce_super.easyecom.flows.b2b_sales.push.validate_pre_push",
+        "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.push.on_submit_push",
+    },
     # §9 Stage 2: PO push hooks.
     #   - validate: mixed-warehouse refusal + warehouse-flip refusal on
     #     amend (BLOCKING — these are user-correctable invariants).
