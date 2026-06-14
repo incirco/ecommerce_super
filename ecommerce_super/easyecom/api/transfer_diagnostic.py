@@ -139,6 +139,16 @@ def trace_dn(dn_name: str) -> dict[str, Any]:
 
     # Downstream — what artifacts has the push (attempted or
     # successful) left in the DB?
+    # gh#26 (mmpl16 retest): `branch` was speculatively included in
+    # the field list when the diagnostic was first written, but it's
+    # NOT a field on EasyEcom Transfer Map (branch resolution is
+    # computed dynamically by predict_section10_branch from the
+    # warehouse pair). The query was crashing with
+    # `MySQLdb.OperationalError: Unknown column 'branch'` and aborting
+    # the entire diagnostic before any artifact reached the FDE.
+    # Fix: drop `branch` from the column list; FDE-visible branch
+    # routing lives in the gates above (source/target warehouse
+    # EE-mapped flags).
     map_row = frappe.db.get_value(
         "EasyEcom Transfer Map",
         {"delivery_note": dn_name},
@@ -148,7 +158,6 @@ def trace_dn(dn_name: str) -> dict[str, Any]:
             "ee_order_id",
             "flag_reason",
             "sales_invoice",
-            "branch",
         ],
         as_dict=True,
     )
