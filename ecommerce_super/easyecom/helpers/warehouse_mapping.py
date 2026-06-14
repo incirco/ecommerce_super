@@ -45,14 +45,24 @@ def get_ee_location_for_warehouse(warehouse: str) -> Any | None:
 
 
 def get_ee_account_for_warehouse(warehouse: str) -> Any | None:
-    """Return the EasyEcom Account that owns the Live Location mapped
-    to this Warehouse, or None if the Warehouse is not EE-mapped or
-    its Location row doesn't point at an Account.
+    """Return the enabled EasyEcom Account when the Warehouse is
+    EE-mapped, or None.
+
+    Combines Gate 0 (Warehouse → Live EE Location) with the
+    singleton-Account lookup. Per CLAUDE.md §3.1 / the foundation
+    packet, there is exactly one enabled Account per deployment —
+    the integration uses `frappe.db.get_value("EasyEcom Account",
+    {"enabled": 1}, "name")` everywhere (§9 grn_pull, §10
+    transfer_push, auth.py, queue/concurrency, etc.). EE Location
+    does NOT carry a per-Location Account FK (that was a survey
+    miscall during §11 Stage 2 build — corrected here).
     """
     location = get_ee_location_for_warehouse(warehouse)
     if not location:
         return None
-    account_name = getattr(location, "easyecom_account", None)
+    account_name = frappe.db.get_value(
+        "EasyEcom Account", {"enabled": 1}, "name"
+    )
     if not account_name:
         return None
     return frappe.get_doc("EasyEcom Account", account_name)
