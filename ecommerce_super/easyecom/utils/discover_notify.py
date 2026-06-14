@@ -79,7 +79,12 @@ def notify_discover_complete(
             message=f"{type(e).__name__}: {e}",
         )
 
-    if triggered_by and triggered_by not in ("Administrator", "Guest", ""):
+    # gh#11 retest — broaden the realtime channel to anyone with a
+    # session user (Guest excluded). Administrator was previously
+    # filtered out on the assumption it was always smoke-test traffic;
+    # the mmpl16 retest confirmed real testers use Administrator and
+    # expect the popup.
+    if triggered_by and triggered_by not in ("Guest", ""):
         try:
             frappe.publish_realtime(
                 event=REALTIME_EVENT,
@@ -121,11 +126,23 @@ def _create_notification_log(
         )
     body = "<br>".join(body_lines)
 
-    targets = [triggered_by] if triggered_by and triggered_by != "Guest" else []
+    targets: list[str] = []
+    if triggered_by and triggered_by != "Guest":
+        targets.append(triggered_by)
+    # gh#11 retest — also fan out to EasyEcom FDE role users. The
+    # original implementation only fanned out when there was no
+    # triggered_by; in practice that meant Administrator-triggered
+    # runs only notified Administrator, and other FDEs watching for
+    # the worklist update saw nothing. Belt-and-braces fan-out
+    # ensures every FDE who'd act on the completion sees it. Skip the
+    # triggering user from the fan-out to avoid duplicate bell rows.
+    fde_users = [u for u in _users_with_role("EasyEcom FDE") if u not in targets]
+    targets.extend(fde_users)
     if not targets:
-        # Cron / system path — fan out to EasyEcom FDE role users so the
-        # completion isn't invisible.
-        targets = _users_with_role("EasyEcom FDE") or ["Administrator"]
+        # Pre-onboarding state — no FDE role users yet, no triggering
+        # user. Send to Administrator so the completion is at least
+        # somewhere observable.
+        targets = ["Administrator"]
 
     for user in targets:
         notif = frappe.new_doc("Notification Log")
@@ -162,11 +179,18 @@ def safe_caller() -> str | None:
     Use this at the enqueue site (the whitelisted endpoint) to capture
     who clicked the button. The captured value is passed into the worker
     via kwargs because RQ workers don't share `frappe.session.user` with
-    the originating HTTP request. "Administrator" is treated as no
-    usable caller — operating as the superuser is typically a console
-    or smoke-test path, not a real FDE.
+    the originating HTTP request.
+
+    gh#11 retest (mmpl16, 2026-06-13): the original implementation
+    treated "Administrator" as None on the grounds that superuser is
+    typically a smoke-test path, not a real FDE. The reporter
+    confirmed that's the wrong call: testers click Discover as
+    Administrator, expect to see the bell-icon notification, get
+    nothing. Real FDE users in production also routinely have System
+    Manager role and DO want their own notifications. Only "Guest"
+    and empty/missing session user remain filtered.
     """
     user = getattr(frappe.session, "user", None) if frappe.session else None
-    if not user or user in ("Guest", "Administrator"):
+    if not user or user == "Guest":
         return None
     return user
