@@ -1,0 +1,267 @@
+"""Custom Field verification + auto-rescue (gh#48).
+
+Patches that use `frappe.custom.doctype.custom_field.create_custom_fields`
+have an observed silent-no-op failure mode on fresh installs: when the
+patch fires before the parent DocType's meta is fully loaded into the
+Frappe registry (a race intrinsic to `bench install-app`), the call
+returns normally, `tabPatch Log` records "executed", but the underlying
+column is never materialized. Documented on `ci-test.local` 2026-06-12
+(see gh#48 reproduction); confirmed on `mmpl16` for the
+`Warehouse.ecs_ee_location_label` column (gh#26).
+
+This module provides:
+
+  1. `verify_custom_field(dt, fieldname, ...)` — checks both the
+     `tabCustom Field` row AND the underlying schema column. Returns
+     an outcome string callers can branch on.
+
+  2. `ensure_custom_field(dt, fieldname, spec)` — calls
+     `verify_custom_field`, and if anything is missing, creates the
+     field via plain `frappe.new_doc().insert()` (which triggers the
+     per-doc `clear_cache + updatedb` in Custom Field's on_update)
+     instead of the buggy `create_custom_fields` path. Idempotent;
+     re-runs are a no-op once the field exists.
+
+  3. `EXPECTED_FIELDS` — the canonical registry of every Custom Field
+     the integration ships. The audit patch
+     (`patches/v0_1/audit_and_rescue_custom_fields.py`) walks this list
+     to rescue any field whose patch silently no-op'd.
+
+The registry is the source of truth, deliberately duplicated from the
+individual patches' specs. Two copies of the truth is the right tradeoff
+here because:
+  - The patches stay simple and call-site-tested (each does one thing).
+  - The audit pattern is debuggable: one file lists everything that
+    should exist.
+  - A registry-vs-patch drift would surface either as a missing field
+    (the audit creates it) or an unwanted field (no auto-deletion;
+    requires manual intervention — which is correct, deletion is
+    destructive).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+import frappe
+
+
+# Outcomes returned by `verify_custom_field`. Documented here so
+# downstream code can branch on a known set.
+VerifyOutcome = Literal[
+    "ok",
+    "missing_row",
+    "missing_column",
+    "missing_row_and_column",
+    "doctype_missing",
+]
+
+
+def verify_custom_field(
+    dt: str, fieldname: str, *, expected_fieldtype: str | None = None
+) -> VerifyOutcome:
+    """Check whether the Custom Field on `dt.fieldname` materialized.
+
+    Returns one of:
+      - "ok"                       — row exists in tabCustom Field AND
+                                     the column exists on the schema.
+      - "missing_row"              — row absent, column present (someone
+                                     created the column manually).
+      - "missing_column"           — row present, column absent
+                                     (`create_custom_fields` silent
+                                     no-op).
+      - "missing_row_and_column"   — neither present (patch didn't
+                                     run at all).
+      - "doctype_missing"          — parent DocType isn't on this
+                                     site (pre-EE install or stripped
+                                     deployment).
+
+    Defensive: catches every internal Frappe exception and returns the
+    most pessimistic outcome rather than raising, so verification
+    failures never block a migration step that called us for guidance.
+    """
+    if expected_fieldtype is None:
+        expected_fieldtype = "Data"
+
+    try:
+        if not frappe.db.table_exists(f"tab{dt}"):
+            return "doctype_missing"
+    except Exception:
+        return "doctype_missing"
+
+    try:
+        row_exists = bool(
+            frappe.db.exists(
+                "Custom Field", {"dt": dt, "fieldname": fieldname}
+            )
+        )
+    except Exception:
+        row_exists = False
+
+    try:
+        column_exists = bool(frappe.db.has_column(dt, fieldname))
+    except Exception:
+        column_exists = False
+
+    if row_exists and column_exists:
+        return "ok"
+    if row_exists and not column_exists:
+        return "missing_column"
+    if column_exists and not row_exists:
+        return "missing_row"
+    return "missing_row_and_column"
+
+
+def ensure_custom_field(dt: str, fieldname: str, spec: dict[str, Any]) -> str:
+    """Verify + repair a Custom Field via the plain-`doc.insert` path.
+
+    Mirrors the gh#26 inline rescue pattern: bypasses `create_custom_fields`
+    entirely so its silent-no-op race during install can't trip us.
+
+    `spec` should include the Frappe Custom Field fields (`label`,
+    `fieldtype`, `read_only`, etc.) — `dt` and `fieldname` are passed
+    separately because they're the identity. `insert_after` is
+    intentionally NOT respected: this rescue path puts the field at the
+    end of the field list because the UX-ordering concern is secondary
+    to having the column exist at all. Sites where the original patch
+    ran successfully keep their original `insert_after` placement —
+    `ensure_custom_field` is a no-op for them.
+
+    Returns the Custom Field docname or "" if the doctype is missing.
+    """
+    outcome = verify_custom_field(
+        dt, fieldname, expected_fieldtype=spec.get("fieldtype")
+    )
+    if outcome == "ok":
+        return f"{dt}-{fieldname}"
+    if outcome == "doctype_missing":
+        # Nothing we can do until the parent DocType ships. Don't raise
+        # — bench migrate against a partial install must not crash on us.
+        return ""
+
+    # Find or create the Custom Field row.
+    name = frappe.db.get_value(
+        "Custom Field", {"dt": dt, "fieldname": fieldname}, "name"
+    )
+
+    if not name:
+        doc = frappe.new_doc("Custom Field")
+        doc.update({"dt": dt, "fieldname": fieldname, **_sanitise_spec(spec)})
+        doc.insert(ignore_permissions=True)
+        name = doc.name
+        frappe.db.commit()
+
+    # At this point the row exists. Re-verify and force a schema sync
+    # if the column still isn't there.
+    after_insert = verify_custom_field(dt, fieldname)
+    if after_insert == "missing_column":
+        # Schema didn't materialize on insert (unusual but observed).
+        # Force the doctype-level updatedb.
+        try:
+            frappe.clear_cache(doctype=dt)
+            frappe.db.updatedb(dt)
+            frappe.db.commit()
+        except Exception as exc:
+            frappe.log_error(
+                title=f"gh#48: updatedb({dt!r}) failed",
+                message=f"{type(exc).__name__}: {exc}",
+            )
+
+    return name
+
+
+def _sanitise_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """Filter the spec to fields the Custom Field DocType actually
+    accepts. Drops `dt` and `fieldname` (we set those explicitly) and
+    `insert_after` (the rescue path doesn't honour positional placement)."""
+    drop = {"dt", "fieldname", "insert_after"}
+    return {k: v for k, v in spec.items() if k not in drop}
+
+
+def run_audit() -> dict[str, Any]:
+    """Walk the EXPECTED_FIELDS registry, rescue any missing fields,
+    and return a structured summary.
+
+    Returns:
+      {
+        "total": int,
+        "ok": int,
+        "rescued": int,
+        "doctype_missing": int,
+        "details": [{"dt": ..., "fieldname": ..., "before": ...,
+                     "after": ...}, ...]
+      }
+
+    Safe to call from `after_install`, from a patch, or from a bench
+    console command for ad-hoc verification.
+    """
+    summary: dict[str, Any] = {
+        "total": len(EXPECTED_FIELDS),
+        "ok": 0,
+        "rescued": 0,
+        "doctype_missing": 0,
+        "details": [],
+    }
+    for dt, fieldname, spec in EXPECTED_FIELDS:
+        before = verify_custom_field(dt, fieldname)
+        if before == "ok":
+            summary["ok"] += 1
+            continue
+        if before == "doctype_missing":
+            summary["doctype_missing"] += 1
+            summary["details"].append(
+                {"dt": dt, "fieldname": fieldname, "before": before, "after": before}
+            )
+            continue
+        ensure_custom_field(dt, fieldname, spec)
+        after = verify_custom_field(dt, fieldname)
+        if after == "ok":
+            summary["rescued"] += 1
+        summary["details"].append(
+            {"dt": dt, "fieldname": fieldname, "before": before, "after": after}
+        )
+    return summary
+
+
+# ============================================================
+# Canonical registry of all Custom Fields the integration ships.
+# ============================================================
+#
+# Each entry is a (doctype, fieldname, spec) tuple. The audit patch
+# walks this list, runs `ensure_custom_field` against each, and counts
+# how many needed rescue (logged so smoke tests can assert zero-rescue
+# on a healthy install).
+#
+# When adding a new Custom Field patch, ALSO add the field here. The
+# audit's smoke-check (see test_custom_field_audit.py) will catch a
+# missing entry — by design.
+#
+# Spec mirrors the originating patch's create_custom_fields() input
+# minus `insert_after` (rescue path appends to end of field list).
+
+
+EXPECTED_FIELDS: list[tuple[str, str, dict[str, Any]]] = [
+    # gh#26 — Warehouse EE-mapping label.
+    (
+        "Warehouse",
+        "ecs_ee_location_label",
+        {
+            "label": "EE Location",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "no_copy": 1,
+            "in_list_view": 1,
+            "in_standard_filter": 1,
+            "translatable": 0,
+            "length": 140,
+            "description": (
+                "Auto-computed from EasyEcom Location's mapped_warehouse. "
+                "Empty when not EE-mapped (or mapped only to a non-Live "
+                "location)."
+            ),
+        },
+    ),
+]
+# Additional entries are appended by individual flow packets as their
+# Custom Field patches are written. Keep this list sorted by gh#-issue
+# for ease of audit.

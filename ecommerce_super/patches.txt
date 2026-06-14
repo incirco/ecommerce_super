@@ -89,3 +89,10 @@ ecommerce_super.patches.v0_1.add_dimension_fallback_chain
 # crashes with "Unknown column 'ecs_ee_location_label'" on every DN
 # form load.
 ecommerce_super.patches.v0_1.add_warehouse_ee_location_label_inline
+# gh#48: audit every Custom Field the integration ships and rescue any
+# whose patches silently no-op'd during install. Reproduced on
+# ci-test.local 2026-06-12: 34 patches in tabPatch Log but 0 ecs_*
+# Custom Fields. This audit walks the canonical EXPECTED_FIELDS
+# registry and ensures each entry's column exists; idempotent re-runs
+# are quiet. Runs late so individual field patches get the first crack.
+ecommerce_super.patches.v0_1.audit_and_rescue_custom_fields
