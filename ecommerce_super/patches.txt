@@ -96,3 +96,9 @@ ecommerce_super.patches.v0_1.add_warehouse_ee_location_label_inline
 # registry and ensures each entry's column exists; idempotent re-runs
 # are quiet. Runs late so individual field patches get the first crack.
 ecommerce_super.patches.v0_1.audit_and_rescue_custom_fields
+# §11 Phase 1: B2B configuration Custom Fields on EasyEcom Account
+# (ecs_b2b_module + ecs_eway_origination) and Sales Order
+# (ecs_b2b_order_map link back-reference). Uses the plain doc.insert
+# rescue pattern + post-insert column verification (gh#48 hardening
+# specific to §11, not the broader install-verify layer).
+ecommerce_super.patches.v0_1.add_b2b_config_to_easyecom_account
