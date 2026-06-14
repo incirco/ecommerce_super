@@ -268,13 +268,17 @@ def _check_reconcile_soft_skip() -> dict:
 
 
 def _ensure_precheck_map(sales_order: str) -> str:
-    if frappe.db.exists("EasyEcom B2B Order Map", _PRECHECK_TARGET_NAME):
-        return _PRECHECK_TARGET_NAME
+    # Map autoname is format:ECS-B2B-{sales_order} — query by SO link,
+    # not by a hard-coded name (which the autoname formula overrides).
+    existing = frappe.db.get_value(
+        "EasyEcom B2B Order Map", {"sales_order": sales_order}, "name"
+    )
+    if existing:
+        return existing
     account_name = frappe.db.get_value(
         "EasyEcom Account", {}, "name"
     )
     doc = frappe.new_doc("EasyEcom B2B Order Map")
-    doc.name = _PRECHECK_TARGET_NAME
     doc.update(
         {
             "sales_order": sales_order,
