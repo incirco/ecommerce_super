@@ -211,7 +211,7 @@ class TestCancelShippedStateRefusalRaisesDiscrepancy(unittest.TestCase):
         self.assertEqual(len(captured_discrepancies), 1)
         self.assertEqual(
             captured_discrepancies[0]["kind"],
-            "B2B cancellation refused by EE",
+            "B2B cancellation refused by EE — unexpected error",
         )
 
 

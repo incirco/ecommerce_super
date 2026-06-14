@@ -85,7 +85,9 @@ def _raise_b2b_cancel_refusal_discrepancy(
     kind = (
         "B2B cancellation refused by EE — order already shipped "
         "or past cancel window"
-    ) if is_shipped_refusal else "B2B cancellation refused by EE"
+    ) if is_shipped_refusal else (
+        "B2B cancellation refused by EE — unexpected error"
+    )
 
     _raise_discrepancy(
         kind=kind,
