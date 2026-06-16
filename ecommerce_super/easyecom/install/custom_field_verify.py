@@ -187,6 +187,7 @@ def _sanitise_spec(spec: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in spec.items() if k not in drop}
 
 
+@frappe.whitelist()
 def run_audit() -> dict[str, Any]:
     """Walk the EXPECTED_FIELDS registry, rescue any missing fields,
     and return a structured summary.
@@ -201,9 +202,22 @@ def run_audit() -> dict[str, Any]:
                      "after": ...}, ...]
       }
 
-    Safe to call from `after_install`, from a patch, or from a bench
-    console command for ad-hoc verification.
+    Safe to call from `after_install`, from a patch, from a bench
+    console command, or via HTTP for sites without shell access:
+        GET /api/method/ecommerce_super.easyecom.install.custom_field_verify.run_audit
+    (must be authenticated as System Manager — the rescue writes
+    Custom Field rows and mutates schema).
     """
+    # Permission gate — the rescue path inserts Custom Field rows and
+    # runs `updatedb`, which would let any whitelisted-API caller
+    # mutate schema. Restrict to System Manager + Administrator.
+    if frappe.session.user != "Administrator" and (
+        "System Manager" not in frappe.get_roles(frappe.session.user)
+    ):
+        frappe.throw(
+            "run_audit requires the System Manager role.",
+            frappe.PermissionError,
+        )
     summary: dict[str, Any] = {
         "total": len(EXPECTED_FIELDS),
         "ok": 0,
