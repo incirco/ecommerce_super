@@ -261,6 +261,109 @@ EXPECTED_FIELDS: list[tuple[str, str, dict[str, Any]]] = [
             ),
         },
     ),
+    # §8d Stage 2 Item Pull data-bearing fields (originally shipped by
+    # `add_ecs_item_pull_fields` via `create_custom_fields`, which has
+    # the gh#48 silent-no-op race during install). Observed live on a
+    # deployed bench 2026-06-16: Item Push UPDATE failed with
+    # `OperationalError: Unknown column 'ecs_ee_product_id' in 'SET'`
+    # despite the patch appearing in tabPatch Log. Layout-only fields
+    # (Section Break ecs_ee_section, Column Break ecs_ee_col_2) are
+    # deliberately NOT in this list — they don't materialize columns
+    # and the verifier would loop on `missing_column` forever.
+    (
+        "Item", "ecs_ee_product_id",
+        {
+            "label": "EasyEcom product_id",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "no_copy": 1,
+            "description": (
+                "EE internal product identifier. The EasyEcom Item Map "
+                "owns this relationship; this field surfaces it on the "
+                "Item for quick visibility. Push endpoints (Update / "
+                "ActivateDeactivate) accept this as a key."
+            ),
+        },
+    ),
+    (
+        "Item", "ecs_ee_cp_id",
+        {
+            "label": "EasyEcom cp_id",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "no_copy": 1,
+        },
+    ),
+    (
+        "Item", "ecs_size",
+        {
+            "label": "EE Size",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "description": (
+                "Size attribute from the EE payload. ERPNext's Item "
+                "Variants machinery is intentionally not engaged here."
+            ),
+        },
+    ),
+    (
+        "Item", "ecs_colour",
+        {
+            "label": "EE Colour",
+            "fieldtype": "Data",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Item", "ecs_height_cm",
+        {
+            "label": "EE Height (cm)",
+            "fieldtype": "Float",
+            "read_only": 1,
+            "description": "Captured from EE payload (cm). EE's units.",
+        },
+    ),
+    (
+        "Item", "ecs_length_cm",
+        {
+            "label": "EE Length (cm)",
+            "fieldtype": "Float",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Item", "ecs_width_cm",
+        {
+            "label": "EE Width (cm)",
+            "fieldtype": "Float",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Item", "ecs_ee_cost",
+        {
+            "label": "EE Cost",
+            "fieldtype": "Currency",
+            "read_only": 1,
+            "description": (
+                "EE's `cost` at pull time. NOT written into Item."
+                "valuation_rate (auto-managed by the stock ledger)."
+            ),
+        },
+    ),
+    (
+        "Item", "ecs_ee_mrp",
+        {
+            "label": "EE MRP",
+            "fieldtype": "Currency",
+            "read_only": 1,
+            "description": (
+                "EE's `mrp` at pull time. The pull also writes EE's "
+                "mrp into Item.standard_rate as the selling-price "
+                "best-fit; this field preserves the original value."
+            ),
+        },
+    ),
 ]
 # Additional entries are appended by individual flow packets as their
 # Custom Field patches are written. Keep this list sorted by gh#-issue
