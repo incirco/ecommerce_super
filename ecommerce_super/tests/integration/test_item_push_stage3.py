@@ -240,6 +240,58 @@ def _first_gst_template(company: str) -> str:
     return row
 
 
+def _ensure_tax_rule_map(
+    company: str,
+    rule_name: str,
+    item_tax_template: str,
+) -> str:
+    """Ensure an EasyEcom Tax Rule Map exists for (rule_name, company)
+    with the given Item Tax Template attached.
+
+    Needed for tests that exercise build_push_payload — the push now
+    requires TaxRuleName, which is reverse-looked-up from the Map.
+    Without this fixture every test would flag at "TaxRuleName cannot
+    be resolved" (correctly, per the substrate contract).
+    """
+    existing = frappe.db.get_value(
+        "EasyEcom Tax Rule Map",
+        {"tax_rule_name": rule_name, "company": company},
+        "name",
+    )
+    if existing:
+        doc = frappe.get_doc("EasyEcom Tax Rule Map", existing)
+        if not any(
+            t.item_tax_template == item_tax_template
+            for t in (doc.taxes or [])
+        ):
+            doc.append("taxes", {"item_tax_template": item_tax_template})
+            doc.save(ignore_permissions=True)
+            frappe.db.commit()
+        return existing
+    doc = frappe.new_doc("EasyEcom Tax Rule Map")
+    doc.update(
+        {
+            "tax_rule_name": rule_name,
+            "company": company,
+        }
+    )
+    doc.append("taxes", {"item_tax_template": item_tax_template})
+    doc.flags.ignore_permissions = True
+    # Workflow + validate skipped for fixture setup — the substrate
+    # contract under test (TaxRuleName lookup) is purely about the
+    # SQL join from Item Tax Template → Map row, independent of the
+    # workflow_state field.
+    doc.flags.ignore_validate = True
+    doc.flags.ignore_workflow_attempt = True
+    frappe.flags.in_install = True
+    try:
+        doc.insert()
+    finally:
+        frappe.flags.in_install = False
+    frappe.db.commit()
+    return doc.name
+
+
 class MockPushClient:
     """A minimal swap-in for EasyEcomClient that records POST calls
     and returns canned responses keyed on endpoint. Tests assert what
@@ -441,6 +493,13 @@ class TestCreatePushAndWriteback(FrappeTestCase):
         cls.company = _ensure_test_company()
         _ensure_company_settings(cls.company)
         cls.tax_template = _first_gst_template(cls.company)
+        # Tax Rule Map needed for TaxRuleName push emission.
+        _ensure_tax_rule_map(
+            cls.company, "GST-Test", GST_18_TEMPLATE
+        )
+        _ensure_tax_rule_map(
+            cls.company, "GST-Test", cls.tax_template
+        )
 
     def setUp(self) -> None:
         _wipe()
@@ -586,6 +645,12 @@ class TestTaxRateSnap(FrappeTestCase):
         cls.company = _ensure_test_company()
         _ensure_company_settings(cls.company)
         cls.gst_18 = _first_gst_template(cls.company)
+        # TaxRuleName resolution requires a Tax Rule Map carrying the
+        # Item Tax Template. EE made TaxRuleName mandatory on push;
+        # tests must satisfy the same substrate contract.
+        _ensure_tax_rule_map(
+            cls.company, "GST-Test", GST_18_TEMPLATE
+        )
 
     def setUp(self) -> None:
         _wipe()
