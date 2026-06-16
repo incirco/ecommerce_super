@@ -295,7 +295,7 @@ def push_one_item(
     existing_map = frappe.db.get_value(
         "EasyEcom Item Map",
         {"erpnext_doctype": "Item", "erpnext_name": item_code},
-        ["name", "ee_product_id"],
+        ["name", "ee_product_id", "ee_cp_id"],
         as_dict=True,
     )
 
@@ -303,6 +303,7 @@ def push_one_item(
         return _do_update(
             item, payload, client=client, account=account,
             ee_product_id=existing_map.ee_product_id,
+            existing_map=existing_map,
             enabled_companies=enabled_companies,
         )
     return _do_create(
@@ -628,7 +629,7 @@ def push_one_bundle(
     existing_map = frappe.db.get_value(
         "EasyEcom Item Map",
         {"erpnext_doctype": "Product Bundle", "erpnext_name": bundle_name},
-        ["name", "ee_product_id"],
+        ["name", "ee_product_id", "ee_cp_id"],
         as_dict=True,
     )
     if existing_map and existing_map.ee_product_id:
@@ -639,6 +640,7 @@ def push_one_bundle(
             client=client,
             account=account,
             ee_product_id=existing_map.ee_product_id,
+            existing_map=existing_map,
         )
     return _do_create_bundle(
         bundle=bundle,
@@ -792,6 +794,7 @@ def _do_update_bundle(
     client: EasyEcomClient,
     account: Any,
     ee_product_id: str,
+    existing_map: dict | None = None,
 ) -> PushOutcome:
     """UpdateMasterProduct for a bundle. Sparse-payload semantics same
     as _push_update (productId + changed fields only) with one
@@ -799,10 +802,25 @@ def _do_update_bundle(
     (EE replaces the combo's component set on update, so a partial
     subProducts list would silently truncate the bundle on EE)."""
     full_payload = dict(payload)
-    write_id = wrapper_item.get("ecs_ee_cp_id")
-    full_payload["productId"] = (
-        int(write_id) if write_id else write_id
-    )
+    # Same productId-null landmine as the non-bundle path - see
+    # _resolve_update_write_id for the resolver chain rationale.
+    write_id = _resolve_update_write_id(wrapper_item, existing_map)
+    if not write_id:
+        reason = (
+            "Bundle Update path selected (Item Map has ee_product_id) "
+            "but no usable productId could be resolved from wrapper "
+            "Item or Map. Backfill cp_id or null the stale Map "
+            "identifiers and re-push as Create."
+        )
+        _upsert_map_row_flagged(wrapper_item.item_code, reasons=[reason])
+        return PushOutcome(
+            item_code=wrapper_item.item_code,
+            pushed=False,
+            operation="flagged",
+            flag_reasons=[reason],
+            ee_payload=full_payload,
+        )
+    full_payload["productId"] = int(write_id)
 
     sparse_payload = _build_sparse_update_payload(
         full_payload=full_payload, item_code=wrapper_item.item_code,
@@ -1666,6 +1684,7 @@ def _do_update(
     client: EasyEcomClient,
     account: Any,
     ee_product_id: str,
+    existing_map: dict | None = None,
     enabled_companies: list[str],
 ) -> PushOutcome:
     """UpdateMasterProduct keyed on productId. Sends a SPARSE payload:
@@ -1692,10 +1711,35 @@ def _do_update(
     # in the `cp_id` field - NOT the `product_id` field. This is an
     # EE-side naming inconsistency confirmed live 2026-05-26 in the
     # Harmony sandbox.
-    write_id = item.get("ecs_ee_cp_id")
-    full_payload["productId"] = (
-        int(write_id) if write_id else write_id
-    )
+    #
+    # Resolver chain (live finding 2026-06-16): on benches where the
+    # §8d Item custom fields didn't materialize (gh#48), or for items
+    # originally pulled from EE (where the Map row was stamped but the
+    # Item never carried cp_id), `item.ecs_ee_cp_id` is empty and we
+    # would emit `productId: null`. EE then rejects with
+    # "product/sku field missing". Fall back to the Map's `ee_cp_id`,
+    # then to `ee_product_id` (EE's CreateMasterProduct returns one
+    # identifier that doubles for both - see _do_create's stamp at
+    # ecs_ee_cp_id), and finally flag-and-stop rather than sending
+    # null.
+    write_id = _resolve_update_write_id(item, existing_map)
+    if not write_id:
+        reason = (
+            "Update path selected (Item Map has ee_product_id) but "
+            "no usable productId could be resolved from Item or Map "
+            "(ecs_ee_cp_id / ee_cp_id / ecs_ee_product_id / "
+            "ee_product_id all empty). Backfill cp_id or null the "
+            "stale Map identifiers and re-push as Create."
+        )
+        _upsert_map_row_flagged(item.item_code, reasons=[reason])
+        return PushOutcome(
+            item_code=item.item_code,
+            pushed=False,
+            operation="flagged",
+            flag_reasons=[reason],
+            ee_payload=full_payload,
+        )
+    full_payload["productId"] = int(write_id)
 
     # Build the sparse payload: productId + changed fields only.
     sparse_payload = _build_sparse_update_payload(
@@ -1720,6 +1764,49 @@ def _do_update(
         ee_product_id=ee_product_id,
         ee_payload=sparse_payload,
     )
+
+
+def _resolve_update_write_id(
+    item: Any, existing_map: dict | None
+) -> str | None:
+    """Walk the fallback chain to find a usable productId for
+    UpdateMasterProduct.
+
+    Order (live-derived 2026-06-16):
+      1. `Item.ecs_ee_cp_id`         — canonical source after a Create
+         we ran (set by `_do_create` to the value EE returned).
+      2. `Item Map.ee_cp_id`         — set by the Pull side when EE's
+         GetProductMaster returns `cp_id`. Falls in here on benches
+         where the gh#48 self-defeat blocked the Item custom field
+         from materializing OR for items first pulled (Map stamped,
+         Item never carried cp_id).
+      3. `Item.ecs_ee_product_id`    — EE returns one identifier on
+         Create that doubles as cp_id for subsequent updates
+         (live-confirmed 2026-05-26).
+      4. `Item Map.ee_product_id`    — last resort; the routing
+         predicate already asserted this is truthy, but if we reach
+         here both cp_id sources were empty AND so were the item-side
+         pid columns.
+
+    Returns the resolved id as a string, or None if everything is
+    empty (caller flag-and-stops to avoid emitting `productId: null`).
+    """
+    def _nonempty(v: Any) -> str | None:
+        if v in (None, "", 0, "0"):
+            return None
+        return str(v)
+
+    map_dict = existing_map or {}
+    candidates = (
+        _nonempty(item.get("ecs_ee_cp_id")),
+        _nonempty(map_dict.get("ee_cp_id")),
+        _nonempty(item.get("ecs_ee_product_id")),
+        _nonempty(map_dict.get("ee_product_id")),
+    )
+    for c in candidates:
+        if c:
+            return c
+    return None
 
 
 def _build_sparse_update_payload(
