@@ -1367,6 +1367,29 @@ def build_push_payload(
         # (per the live-verified pattern with productId).
         payload["TaxRate"] = int(tax_rate)
 
+    # 2c) TaxRuleName — reverse lookup from Item Tax Template to the
+    # EasyEcom Tax Rule Map that carries it. EE's CreateMasterProduct /
+    # UpdateMasterProduct require TaxRuleName as a mandatory parameter
+    # (live finding 2026-06-16 on Harmony: HTTP 400 "TaxRuleName is a
+    # mandatory parameter" when emitted only TaxRate). The opaque rule
+    # name (e.g. "GST5") is the same string §8c stores on the Tax Rule
+    # Map and §8d-pull stamps onto items — pull and push are symmetric.
+    tax_rule_name = _resolve_tax_rule_name(
+        item, enabled_companies=enabled_companies
+    )
+    if tax_rule_name is None and tax_rate is not None:
+        # TaxRate resolved but no Map row carries this Item Tax Template
+        # — substrate flag, FDE should add the template to the relevant
+        # Tax Rule Map's `taxes` child table.
+        flag_reasons.append(
+            "TaxRuleName cannot be resolved — item's Item Tax Template "
+            "isn't referenced by any EasyEcom Tax Rule Map's taxes child "
+            "table for the enabled Company. Add the template under the "
+            "matching Tax Rule Map (FDE: §8c desk) and re-push."
+        )
+    elif tax_rule_name is not None:
+        payload["TaxRuleName"] = tax_rule_name
+
     # 3) Hard-mandatory presence check for physical attributes.
     # Treat 0 / "0" / 0.0 / "0.0" / None / "" all as "not sourced".
     # ERPNext Float fields default to 0 when the user hasn't set them;
@@ -1499,6 +1522,72 @@ def _resolve_tax_rate(item: Any, *, enabled_companies: list[str]) -> float | Non
         resolved = _try_resolve_one(r)
         if resolved is not None:
             return resolved
+    return None
+
+
+def _resolve_tax_rule_name(
+    item: Any, *, enabled_companies: list[str]
+) -> str | None:
+    """Reverse-lookup TaxRuleName for the EE push payload.
+
+    EE's CreateMasterProduct / UpdateMasterProduct require TaxRuleName
+    (live finding 2026-06-16). The opaque rule name (e.g. "GST5") lives
+    on EasyEcom Tax Rule Map; the FDE configures Item Tax Templates
+    onto the map's `taxes` child table. To find the rule name for an
+    item: pick its Item Tax Template (mirroring _resolve_tax_rate's
+    deterministic ordering), then find the Tax Rule Map whose `taxes`
+    child carries that template AND whose company matches.
+
+    Returns the rule_name string, or None if no Map references the
+    item's tax template for any enabled Company.
+    """
+    if not item.get("taxes"):
+        return None
+    target_companies = enabled_companies or []
+    rows = list(item.taxes)
+
+    def _lookup_map(template: str, company: str) -> str | None:
+        rule_name = frappe.db.sql(
+            """
+            SELECT trm.tax_rule_name
+            FROM `tabEasyEcom Tax Rule Map` trm
+            INNER JOIN `tabItem Tax` it
+              ON it.parent = trm.name
+             AND it.parenttype = 'EasyEcom Tax Rule Map'
+            WHERE it.item_tax_template = %(template)s
+              AND trm.company = %(company)s
+            LIMIT 1
+            """,
+            {"template": template, "company": company},
+        )
+        return rule_name[0][0] if rule_name else None
+
+    # Pass 1: prefer the first enabled Company's row.
+    for target in target_companies:
+        for r in rows:
+            if not r.item_tax_template:
+                continue
+            owner = frappe.db.get_value(
+                "Item Tax Template", r.item_tax_template, "company"
+            )
+            if owner != target:
+                continue
+            rule_name = _lookup_map(r.item_tax_template, target)
+            if rule_name:
+                return rule_name
+
+    # Pass 2: any row whose template is referenced by a Map.
+    for r in rows:
+        if not r.item_tax_template:
+            continue
+        owner = frappe.db.get_value(
+            "Item Tax Template", r.item_tax_template, "company"
+        )
+        if not owner:
+            continue
+        rule_name = _lookup_map(r.item_tax_template, owner)
+        if rule_name:
+            return rule_name
     return None
 
 
