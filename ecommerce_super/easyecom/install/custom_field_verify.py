@@ -83,8 +83,17 @@ def verify_custom_field(
     if expected_fieldtype is None:
         expected_fieldtype = "Data"
 
+    # `frappe.db.table_exists` already prepends "tab" internally —
+    # passing `f"tab{dt}"` makes it probe for `tabtab<dt>` and report
+    # every DocType as missing. Probe via `has_column(dt, "name")`
+    # instead — every DocType table has a `name` column. This is the
+    # exact pattern PR #53's smoke-precheck was meant to teach but
+    # the audit framework itself had this same bug, defeating the
+    # entire rescue path on production benches (live finding
+    # 2026-06-16: smoke-test.local reported all 10 EXPECTED_FIELDS
+    # as `doctype_missing` despite Item and Warehouse being present).
     try:
-        if not frappe.db.table_exists(f"tab{dt}"):
+        if not frappe.db.has_column(dt, "name"):
             return "doctype_missing"
     except Exception:
         return "doctype_missing"
