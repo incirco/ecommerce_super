@@ -62,10 +62,12 @@ class TestValidateInputs(unittest.TestCase):
         with self.assertRaises(frappe.ValidationError):
             _validate_inputs("Acme", "")
 
-    def test_rejects_identical_pair(self):
+    def test_accepts_identical_pair_for_single_company_deployment(self):
+        """Single-Company deployments use one Internal Customer that
+        both represents and is allowed-to-transact-with the only
+        Company in the system — source == target must be allowed."""
         with patch.object(frappe.db, "exists", return_value=True):
-            with self.assertRaises(frappe.ValidationError):
-                _validate_inputs("Acme", "Acme")
+            _validate_inputs("Acme", "Acme")  # no raise
 
     def test_rejects_nonexistent_company(self):
         with patch.object(frappe.db, "exists", return_value=False):

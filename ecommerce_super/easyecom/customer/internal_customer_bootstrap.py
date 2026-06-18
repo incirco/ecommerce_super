@@ -191,15 +191,15 @@ def _check_permission() -> None:
 
 
 def _validate_inputs(source_company: str, target_company: str) -> None:
+    """Both Companies must exist. source == target is ALLOWED — the
+    single-Company deployment pattern uses one Internal Customer that
+    both represents and is allowed to transact with the only Company
+    in the system, so DN-driven Warehouse-to-Warehouse transfers
+    within that Company can flow through §10's routing.
+    """
     if not source_company or not target_company:
         frappe.throw(
             "Both source_company and target_company are required.",
-            frappe.ValidationError,
-        )
-    if source_company == target_company:
-        frappe.throw(
-            "source_company and target_company must differ — an "
-            "Internal Customer represents a counterparty Company.",
             frappe.ValidationError,
         )
     for company in (source_company, target_company):
