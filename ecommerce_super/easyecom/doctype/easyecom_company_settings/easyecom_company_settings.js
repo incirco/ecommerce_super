@@ -26,13 +26,18 @@ frappe.ui.form.on("EasyEcom Company Settings", {
 
         frm.add_custom_button(
             __("Bootstrap Internal Customer"),
-            () => _show_dialog(frm),
+            () => _show_customer_dialog(frm),
+            __("§10 STN"),
+        );
+        frm.add_custom_button(
+            __("Bootstrap Internal Supplier"),
+            () => _show_supplier_dialog(frm),
             __("§10 STN"),
         );
     },
 });
 
-function _show_dialog(frm) {
+function _show_customer_dialog(frm) {
     const d = new frappe.ui.Dialog({
         title: __("Bootstrap Internal Customer"),
         fields: [
@@ -144,6 +149,126 @@ function _render_result(result) {
             action() {
                 frappe.set_route(
                     "Form", "Customer", result.customer_name,
+                );
+            },
+        },
+    });
+}
+
+
+function _show_supplier_dialog(frm) {
+    const d = new frappe.ui.Dialog({
+        title: __("Bootstrap Internal Supplier"),
+        fields: [
+            {
+                fieldname: "intro",
+                fieldtype: "HTML",
+                options: `
+                    <div class="text-muted small" style="margin-bottom: 10px;">
+                        ${__("Creates an Internal Supplier that represents")}
+                        <b>${frappe.utils.escape_html(frm.doc.company)}</b>
+                        ${__("(source — sender) and accepts deliveries to the chosen target Company.")}
+                        <br>
+                        ${__("Single-Company deployments: leave target as-is.")}
+                        <br>
+                        <i>${__("Safe to re-run — only missing pieces are added.")}</i>
+                    </div>
+                `,
+            },
+            {
+                fieldname: "source_company",
+                fieldtype: "Link",
+                options: "Company",
+                label: __("Source Company (this settings' Company — the sender)"),
+                default: frm.doc.company,
+                read_only: 1,
+                reqd: 1,
+            },
+            {
+                fieldname: "target_company",
+                fieldtype: "Link",
+                options: "Company",
+                label: __("Target Company (receiver)"),
+                default: frm.doc.company,
+                reqd: 1,
+            },
+        ],
+        primary_action_label: __("Bootstrap"),
+        primary_action(values) {
+            d.hide();
+            frappe.show_alert({
+                message: __("Bootstrapping Internal Supplier…"),
+                indicator: "blue",
+            });
+            frappe.call({
+                method:
+                    "ecommerce_super.easyecom.customer.internal_supplier_bootstrap.bootstrap_internal_supplier",
+                args: {
+                    source_company: values.source_company,
+                    target_company: values.target_company,
+                },
+                freeze: true,
+                freeze_message: __("Bootstrapping…"),
+                callback(r) {
+                    _render_supplier_result(r.message || {});
+                },
+            });
+        },
+    });
+    d.show();
+}
+
+
+function _render_supplier_result(result) {
+    const safe = s => frappe.utils.escape_html(String(s || "—"));
+    const details = result.details || {};
+    const addresses = (details.addresses || [])
+        .map(
+            a =>
+                `${safe(a.address_type)}: ${safe(a.state)}, ${safe(a.pincode)}, ${safe(a.country)}`,
+        )
+        .join("<br>") || "—";
+    const lines = [
+        __("Supplier: <b>{0}</b>", [safe(result.supplier_name)]),
+        __("Created: <b>{0}</b>", [
+            result.created ? __("yes") : __("no — already existed"),
+        ]),
+        __("Added Allowed-To-Transact-With row: <b>{0}</b>", [
+            result.added_atw_row ? __("yes") : __("no — already present"),
+        ]),
+        __("Added Billing Address: <b>{0}</b>", [
+            result.added_billing_address
+                ? __("yes")
+                : __("no — already present"),
+        ]),
+        __("Added Shipping Address: <b>{0}</b>", [
+            result.added_shipping_address
+                ? __("yes")
+                : __("no — already present"),
+        ]),
+        "<br>",
+        __("Represents Company: {0}", [safe(details.represents_company)]),
+        __("Allowed To Transact With: {0}", [
+            (details.allowed_to_transact_with || [])
+                .map(safe)
+                .join(", ") || "—",
+        ]),
+        __("Email: {0}", [safe(details.email_id)]),
+        __("Mobile: {0}", [safe(details.mobile_no)]),
+        __("Currency: {0}", [safe(details.default_currency)]),
+        __("GST Category: {0}", [safe(details.gst_category)]),
+        __("GSTIN: {0}", [safe(details.gstin)]),
+        __("Addresses:<br>{0}", [addresses]),
+    ];
+    frappe.msgprint({
+        title: __("Internal Supplier Ready"),
+        message: lines.join("<br>"),
+        indicator: "green",
+        primary_action: {
+            label: __("Open Supplier"),
+            action() {
+                frappe.set_route(
+                    "Form", "Supplier", result.supplier_name,
                 );
             },
         },
