@@ -152,9 +152,18 @@ def sync_on_location_trash(doc: Any, method: str | None = None) -> None:
 # ============================================================
 
 
+@frappe.whitelist()
 def backfill_all() -> dict[str, int]:
     """Walk every Warehouse and recompute its label. Idempotent.
     Returns a summary count for the patch log.
+
+    Also callable over HTTP for sites without shell access:
+        GET /api/method/ecommerce_super.easyecom.flows.warehouse_label_sync.backfill_all
+    (must be authenticated as System Manager or Administrator — the
+    sweep writes to every Warehouse's read-only computed field).
+    Used for recovery on benches where the per-row sync hook either
+    never fired (Locations created before the hook landed) or silently
+    no-op'd in some past save.
 
     Defensive on column presence (gh#26 follow-up): if the column
     doesn't exist (rescue patch hasn't run yet), return a no-op
@@ -163,6 +172,16 @@ def backfill_all() -> dict[str, int]:
     backfill again itself after creating the column, so a deployment
     that picks up the substrate change before the rescue patch
     eventually converges."""
+    # Permission gate — the sweep writes to every Warehouse's
+    # ecs_ee_location_label, which would let any whitelisted-API
+    # caller mutate that field globally. System Manager only.
+    if frappe.session.user != "Administrator" and (
+        "System Manager" not in frappe.get_roles(frappe.session.user)
+    ):
+        frappe.throw(
+            "backfill_all requires the System Manager role.",
+            frappe.PermissionError,
+        )
     from ecommerce_super.easyecom.api.warehouse_query import (
         _warehouse_has_label_column,
     )
