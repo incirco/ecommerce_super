@@ -107,6 +107,10 @@ doctype_js = {
     # Location (ecs_ee_location set). Renders a banner directing the
     # FDE to edit on the Location side — single source of truth.
     "Address": "public/js/address_ee_lock.js",
+    # §10 onboarding helper: one-click "Bootstrap Internal Customer"
+    # button on the Company form. Creates a Customer ready for both
+    # §10 STN routing and §8e CreateCustomer push without flagging.
+    "Company": "public/js/company_internal_customer_button.js",
 }
 
 
