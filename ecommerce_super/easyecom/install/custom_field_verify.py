@@ -410,6 +410,44 @@ EXPECTED_FIELDS: list[tuple[str, str, dict[str, Any]]] = [
             ),
         },
     ),
+    # §10 DN-header routing fields. Shipped by
+    # `add_dn_section10_transfer_fields` via `create_custom_fields` —
+    # same gh#48 race. Live finding 2026-06-18 on mmpl16.frappe.cloud:
+    # `ecs_section10_transfer_to_warehouse` rendered on the DN form
+    # but `ecs_section10_transfer_from_warehouse` did not, i.e. the
+    # patch silently no-op'd on the "from" field. Without these in the
+    # audit registry, `run_audit` cannot rescue the partial install.
+    # Specs match the patch byte-for-byte so a rescue insert produces
+    # the same field configuration the original patch would have.
+    (
+        "Delivery Note", "ecs_is_section10_transfer",
+        {
+            "label": "Is Internal Transfer",
+            "fieldtype": "Check",
+            "default": 0,
+            "fetch_from": "customer.is_internal_customer",
+        },
+    ),
+    (
+        "Delivery Note", "ecs_section10_transfer_from_warehouse",
+        {
+            "label": "Transfer From Warehouse",
+            "fieldtype": "Link",
+            "options": "Warehouse",
+            "depends_on": "eval:doc.ecs_is_section10_transfer",
+            "mandatory_depends_on": "eval:doc.ecs_is_section10_transfer",
+        },
+    ),
+    (
+        "Delivery Note", "ecs_section10_transfer_to_warehouse",
+        {
+            "label": "Transfer To Warehouse",
+            "fieldtype": "Link",
+            "options": "Warehouse",
+            "depends_on": "eval:doc.ecs_is_section10_transfer",
+            "mandatory_depends_on": "eval:doc.ecs_is_section10_transfer",
+        },
+    ),
 ]
 # Additional entries are appended by individual flow packets as their
 # Custom Field patches are written. Keep this list sorted by gh#-issue
