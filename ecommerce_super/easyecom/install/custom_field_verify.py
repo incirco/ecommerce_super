@@ -387,6 +387,29 @@ EXPECTED_FIELDS: list[tuple[str, str, dict[str, Any]]] = [
             ),
         },
     ),
+    # §10 EE-managed Address back-pointer. Shipped by
+    # `add_address_ee_location_field` via the same `create_custom_fields`
+    # path with the gh#48 silent-no-op race. Live failure 2026-06-18 on
+    # mmpl16.frappe.cloud: the §10 Internal Customer bootstrap's
+    # Address-linking SQL `SELECT a.ecs_ee_location FROM tabAddress a`
+    # raised `OperationalError: Unknown column 'a.ecs_ee_location'`
+    # despite the Custom Field row being present.
+    (
+        "Address", "ecs_ee_location",
+        {
+            "label": "EasyEcom Location (managed)",
+            "fieldtype": "Link",
+            "options": "EasyEcom Location",
+            "read_only": 1,
+            "no_copy": 1,
+            "in_standard_filter": 1,
+            "description": (
+                "Set when this Address is mirrored from an EasyEcom "
+                "Location. Address fields lock on the form — edit "
+                "the Location, then re-save to push changes back."
+            ),
+        },
+    ),
 ]
 # Additional entries are appended by individual flow packets as their
 # Custom Field patches are written. Keep this list sorted by gh#-issue
