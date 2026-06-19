@@ -1278,7 +1278,28 @@ def handle_ee_originated_grn(
     #   2. Use the existing §9 "Create PR from this GRN" action on the
     #      drift-state GRN Map (the action handles standalone PRs).
     #   3. Supply an Internal Supplier on the PR before submit.
-    company = _company_for_warehouse_safe(inwarded_wh_c_id)
+    # Resolve Company for the Integration Discrepancy row. EE-originated
+    # self-GRNs sometimes carry an inwarded_warehouse_c_id whose
+    # location_key doesn't match any Live + enabled EasyEcom Location on
+    # this bench (FDE has the Location but it's still in
+    # `Mapped but not Live`, or the Location was disabled, or the
+    # warehouse hasn't been mapped yet). `_company_for_warehouse_safe`
+    # returns None in those cases; substituting an empty string would
+    # then trip the mandatory-Company validation on Integration
+    # Discrepancy and the entire GRN pull fails with
+    # "Value missing for EasyEcom Integration Discrepancy: Company"
+    # (live finding 2026-06-19 on mmpl16.frappe.cloud — GRN pull from
+    # EE Company Settings refused with this exact message).
+    #
+    # Fall back to any enabled Company so the Discrepancy still lands
+    # and the FDE has a surface to resolve. Single-Company deployments
+    # (the common case) get the only Company. Multi-Company deployments
+    # get a deterministic first match — the FDE will reassign during
+    # resolution if it picked the wrong one.
+    company = (
+        _company_for_warehouse_safe(inwarded_wh_c_id)
+        or frappe.db.get_value("Company", filters={}, fieldname="name")
+    )
     reason = (
         f"§10 EE-originated GRN (self-GRN: vendor_c_id == "
         f"inwarded_warehouse_c_id == {inwarded_wh_c_id}). No "
