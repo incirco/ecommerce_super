@@ -1,344 +1,450 @@
-# §10 STN User Manual
+# §10 Stock Transfer — User Manual
 
-End-to-end FDE walkthrough for the four §10 stock-transfer branches
-on a live deployment. Live-verified against `mmpl16.frappe.cloud`
-2026-06-19 (all four branches passed against Harmony EE).
-
----
-
-## What §10 does
-
-§10 routes a Delivery Note marked **Is Internal Transfer** to one of
-four branches based on the EE-mapping state of the source and target
-warehouses:
-
-| Source EE-mapped | Target EE-mapped | Branch | EE endpoint hit |
-|---|---|---|---|
-| ✓ | ✓ | **STN** | `/webhook/v2/createOrder` (Stock Transfer payload) |
-| ✓ | ✗ | **B2B** | `/webhook/v2/createOrder` (B2B Order payload) |
-| ✗ | ✓ | **PO** | `/WMS/Cart/CreatePurchaseOrder` |
-| ✗ | ✗ | **Inert** | none — pure ERPNext stock move |
-
-A Warehouse is *EE-mapped* when an `EasyEcom Location` with
-`workflow_state="Live"` AND `enabled=1` points at it via
-`mapped_warehouse`. The Warehouse's
-`ecs_ee_location_label` field will show `EE: <location_name>
-(#<location_key>)` when this is the case.
+A step-by-step guide for ERPNext users who need to move inventory
+between warehouses. Written from the operator's point of view —
+what to click, what to type, what to expect. Live-verified on
+`mmpl16.frappe.cloud` 2026-06-19 (see companion document
+`section_10_stn_mmpl_live_reference.md` for the actual entries
+this manual was tested against).
 
 ---
 
-## One-time prerequisites
+## What this is about
 
-Done once per deployment, before the first §10 DN is raised.
+You want to move stock from one warehouse to another. Sometimes
+both warehouses are inside EasyEcom (an EE-managed location). Other
+times only one is. Sometimes neither.
 
-### 1. Internal Customer
+The integration handles all four combinations automatically through
+**one form**: the standard ERPNext **Delivery Note**, with a few
+extra header fields. You don't pick an "STN type" — the integration
+decides based on which warehouses you choose.
 
-Required for the §10 routing predicate (an internal-customer DN is
-the §10 trigger) AND for the B2B/STN branches (their EE call carries
-the Internal Customer's `ee_customer_id`).
+> **In one sentence**: tick "Is Internal Transfer", pick the two
+> warehouses, save and submit. The right thing happens.
 
-1. Open **EasyEcom Company Settings** for your Company.
+---
+
+## The four use cases — pick the one that matches your move
+
+A warehouse is **EasyEcom-managed** if its `EE Location Label`
+field shows something like `EE: Mumbai WH (#en71352...)`. If the
+field is empty, it's a **plain ERPNext warehouse** (EasyEcom
+doesn't know about it).
+
+Read the table from the perspective of "what kind of move am I
+doing":
+
+### Case 1 — Move stock between two EasyEcom warehouses
+
+**Example.** Shift 5 boxes from your *EE Mumbai Warehouse* to your
+*EE Bengaluru Warehouse*. Both warehouses are inside the EasyEcom
+system.
+
+| Source warehouse | Target warehouse |
+|---|---|
+| EasyEcom-managed ✓ | EasyEcom-managed ✓ |
+
+**What the integration does for you.** Tells EasyEcom to record a
+stock transfer between its two locations. EasyEcom moves the
+inventory on its side; ERPNext routes the stock through your
+Goods-In-Transit warehouse on this side.
+
+**You'll see on Branch Chip**: `STN` (Stock Transfer Note).
+
+---
+
+### Case 2 — Move stock OUT of EasyEcom into your own warehouse
+
+**Example.** Take 1 saree out of your *EE Mumbai Warehouse* and put
+it on display at your *Paota Showroom* (your own warehouse, not
+in EasyEcom).
+
+| Source warehouse | Target warehouse |
+|---|---|
+| EasyEcom-managed ✓ | Plain ERPNext ✗ |
+
+**What the integration does for you.** Tells EasyEcom: *"Sell this
+item as a B2B order to my internal customer."* EasyEcom removes the
+item from its inventory and records the sale to your internal
+customer (which represents you, the recipient). On your side,
+ERPNext receives the stock at the target warehouse.
+
+**You'll see on Branch Chip**: `B2B`.
+
+---
+
+### Case 3 — Move stock INTO EasyEcom from your own warehouse
+
+**Example.** Send 10 new pieces from your *Workshop* (your own
+warehouse) to your *EE Mumbai Warehouse* for fulfilment.
+
+| Source warehouse | Target warehouse |
+|---|---|
+| Plain ERPNext ✗ | EasyEcom-managed ✓ |
+
+**What the integration does for you.** Tells EasyEcom: *"Receive
+this stock from my internal supplier."* EasyEcom creates a vendor
+Purchase Order on its side (you, in effect, "sell" stock to your
+own EE inventory). When EasyEcom confirms receipt, your ERPNext
+gets a Purchase Receipt automatically.
+
+**You'll see on Branch Chip**: `PO`.
+
+---
+
+### Case 4 — Move stock between two of your own warehouses
+
+**Example.** Shift stock from *Paota Showroom* to *Workshop*.
+Neither warehouse is in EasyEcom.
+
+| Source warehouse | Target warehouse |
+|---|---|
+| Plain ERPNext ✗ | Plain ERPNext ✗ |
+
+**What the integration does for you.** Nothing on the EasyEcom
+side — there's nothing for EasyEcom to know about. The integration
+still helps with the **address and GSTIN setup** so India
+Compliance computes the right CGST/SGST/IGST split, but it makes
+no EasyEcom call. Inventory moves between your warehouses as a
+normal internal transfer.
+
+**You'll see on Branch Chip**: `Inert`.
+
+---
+
+## Before you raise your first §10 DN — one-time prerequisites
+
+Set these up once per deployment. After that, every DN just works.
+Your finance/admin person typically does these during onboarding.
+
+### Step 1. The Internal Customer
+
+This Customer record represents *your own company* as a buyer.
+When you move stock OUT of EasyEcom (Cases 1, 2), EasyEcom needs a
+"buyer" to assign the order to — that's the Internal Customer.
+
+**How to create**:
+
+1. Open **EasyEcom Company Settings** form for your Company.
 2. Top-right menu → **§10 STN → Bootstrap Internal Customer**.
-3. Dialog pre-fills source/target Company. Click **Bootstrap**.
-4. A Customer is created representing your Company (in
-   single-Company deployments, source = target = the Company).
-5. The bootstrap mirrors GST category, GSTIN, currency from the
-   Company; creates Billing + Shipping Addresses linked via Dynamic
-   Link; populates placeholder email + mobile.
+3. Click **Bootstrap** in the dialog (defaults are right for
+   single-Company deployments).
+4. A Customer named `Internal - <YourCompany>` is created with
+   GST/currency/addresses pre-filled.
 
-#### Push the Internal Customer to EE
+**Push it to EasyEcom** so EasyEcom knows about this customer:
 
-The B2B and STN branches need the Internal Customer's
-`ee_customer_id`. On the new Customer form: top-right → **EasyEcom
-→ Push to EasyEcom**. Verify Customer Map status flips to
-`Mapped` and `ee_customer_id` is populated.
+1. Open the new Customer → top-right → **EasyEcom → Push to EasyEcom**.
+2. The Customer Map should change to status `Mapped` with a real
+   `ee_customer_id`.
 
-If the push refuses on `missing email_id` or `missing mobile_no`:
-ERPNext's primary-contact sync resets these on save. Either set
-them on the **primary Contact** (`Contact form → Phone Nos child
-table → is_primary_mobile_no=1`) OR change the
-`customer_primary_contact` field to a Contact that already has
-those values populated.
+If push complains about missing email or mobile, see the
+**Troubleshooting** section.
 
-### 2. Internal Supplier
+### Step 2. The Internal Supplier
 
-Required for the PO branch (the EE call carries the Internal
-Supplier's `ee_vendor_id`).
+This Supplier represents *your own company* as a vendor. When you
+move stock INTO EasyEcom (Case 3), EasyEcom needs a "vendor" to
+attribute the inbound PO to — that's the Internal Supplier.
+
+**How to create**:
 
 1. Same form (**EasyEcom Company Settings**).
 2. Top-right menu → **§10 STN → Bootstrap Internal Supplier**.
-3. Dialog pre-fills source/target Company. Click **Bootstrap**.
-4. A Supplier is created representing your Company.
+3. Click **Bootstrap**.
+4. A Supplier named `Internal Supplier - <YourCompany>` is created.
 
-#### Push the Internal Supplier to EE
+**Push it to EasyEcom**:
 
-On the new Supplier form: **EasyEcom → Push to EasyEcom**. Verify
-Supplier Map status flips to `Mapped` and `ee_vendor_id` is set.
+1. Open the new Supplier → top-right → **EasyEcom → Push to EasyEcom**.
+2. The Supplier Map should change to status `Mapped` with a real
+   `ee_vendor_id`.
 
-**Important — `payment_terms` is mandatory** on most ERPNext
-deployments. The bootstrap helper does not currently set it; if
-the insert refuses with `Default Payment Terms Template`
-mandatory, manually set `payment_terms` on the Supplier (e.g.,
-`Cash` for an Internal Supplier — no real debt) before pushing.
+### Step 3. The Goods-In-Transit (GIT) warehouse
 
-### 3. Goods In Transit Warehouse
+For same-Company moves, ERPNext routes stock through a "Goods In
+Transit" warehouse — like a virtual holding bay between the source
+and the target.
 
-§10's same-Company transfers route stock through a Goods-In-Transit
-warehouse. The substrate refuses the DN submit with a clear error if
-this is missing. One of:
+One of two ways:
+- Open **Company / <YourCompany>** → set
+  **Default In Transit Warehouse** → save. (Recommended.)
+- OR create a Warehouse literally named **"Goods In Transit"**
+  under your Company.
 
-- Set `Company.default_in_transit_warehouse` on the Company form, OR
-- Create a Warehouse literally named **"Goods In Transit"** under
-  that Company.
+If you skip this, the DN submit will fail with a clear message.
 
-### 4. Company GSTIN + gst_category
+### Step 4. Your Company's GSTIN
 
-The §10 push reads `Company.gstin` and `Company.gst_category` for
-tax-template selection. Both must be set on the Company form:
+§10 needs to know your GST number to compute the right tax split.
 
-- `gstin`: 15-char string (the Company's GST registration).
-- `gst_category`: `Registered Regular` for most cases.
+Open **Company / <YourCompany>** → set:
+- **GSTIN**: your 15-character GST number
+- **GST Category**: usually `Registered Regular`
 
-A missing `gstin` shows up in the Transfer Map's `flag_reason` as
-*"Source Company X has no GSTIN configured. Set Company.gstin"*.
+### Step 5. EasyEcom Locations are Live
 
-### 5. EE-mapped Warehouses
+Each warehouse you'll use as Case 1/2/3 (anything involving EE)
+needs an EasyEcom Location pointing at it. Verify this from the
+EasyEcom Location list:
 
-Each Warehouse you'll use as a source or target on an EE-touching
-branch needs an `EasyEcom Location` pointing at it via
-`mapped_warehouse`, with workflow_state=Live and enabled=1.
+- Open `/app/easyecom-location`.
+- Filter by **Workflow State = Live** + **Enabled = ✓**.
+- Each Live + Enabled Location should have a Warehouse in the
+  `mapped_warehouse` column.
 
-Verify with **`/api/method/.../warehouse_label_sync.backfill_all`**
-(System Manager URL — sweeps every Warehouse's
-`ecs_ee_location_label` from current Location state) when a known-
-mapped Warehouse shows an empty label.
+If a warehouse shows "Live" in EasyEcom but its **EE Location
+Label** field on the Warehouse form is empty, ask your admin to
+run the `backfill_all` URL (one click).
 
-### 6. EE Custom Field rescue (one-time per bench)
+### Step 6. Custom field rescue (one-time per bench)
 
-Some `create_custom_fields`-based patches silently no-op on fresh
-installs (gh#48 race). Symptom: a custom field's row exists in
-`tabCustom Field` but the column never materialized on the parent
-DocType. Recovery is a single URL:
+On fresh installations, some integration fields can silently
+fail to materialize. If you can't tick "Is Internal Transfer" or
+the "Transfer From Warehouse" field is missing, ask your admin to
+hit:
 
 ```
 GET /api/method/ecommerce_super.easyecom.install.custom_field_verify.run_audit
 ```
 
-The response lists every field in the audit registry and reports
-`before → after` per row. Re-run safely as needed.
+(Logged in as Administrator.) This is safe to re-run.
 
 ---
 
-## Address linkage — the most common gating issue
+## Raising a §10 Stock Transfer DN
 
-The §10 `section10_before_save` hook auto-overrides the DN's
-**Billing Address** (`customer_address`), **Shipping Address**
-(`shipping_address_name`), **Dispatch Address**
-(`dispatch_address_name`), and **Company Address**
-(`company_address`) based on the Transfer From / Transfer To
-Warehouses' linked Addresses.
+Once the prerequisites are done, every transfer follows the same
+six steps regardless of which case you're in.
 
-ERPNext's stock validation then refuses the submit with:
+### Step 1. Stock → Delivery Note → New
 
-- *"Billing Address does not belong to the Customer X"*
-- *"Dispatch Address Name does not belong to the Company X"*
+### Step 2. Set the Customer
 
-The fix is **additive Dynamic Link rows on the offending Address**.
-None of this changes the Address's data values:
+In the **Customer** field, type and pick your **Internal Customer**
+(e.g. `Internal - Modern Marwar Private Limited`). The
+**Is Internal Transfer** checkbox ticks automatically.
 
-| Address fields ERPNext requires linking to | What to add |
-|---|---|
-| **Buyer side** (Billing / Shipping) | Add `Customer: <Internal Customer>` link. Confirm the Address already has `Warehouse: <target>` link. |
-| **Seller side** (Dispatch / Company Address) | Add `Company: <Company>` link. Confirm the Address already has `Warehouse: <source>` link. |
+### Step 3. Pick Transfer From Warehouse
 
-Three quick UI paths to add a Dynamic Link to an Address:
+This is the **source** — the warehouse stock is *leaving from*.
 
-1. Open the Address record → scroll to the **Reference** child
-   table → add a row with `Link Document Type = Customer/Company`,
-   `Link Name = <name>` → save.
-2. Open the Customer/Company → if it has an **Addresses** dashboard
-   widget, use "Link Existing Address".
-3. Via API (Administrator):
-   ```
-   PUT /api/resource/Address/<address-name>
-       { ... existing fields ..., "links": [ ... existing rows ..., {"link_doctype":"Customer","link_name":"R251844"} ] }
-   ```
+When you click the field, the autocomplete shows EE-mapped
+warehouses first with an `EE: <Location>` label. Plain warehouses
+have no label.
 
----
+### Step 4. Pick Transfer To Warehouse
 
-## The DN flow itself
+This is the **target** — the warehouse stock is *going to*.
 
-Same form for all four branches. The branch chip on the form shows
-which branch will fire as soon as both warehouses are picked.
+> **As soon as both warehouses are picked, a routing chip appears**
+> at the top of the form showing **STN / B2B / PO / Inert**. That's
+> your confirmation of which case you're in. Verify it matches
+> your intention before continuing.
 
-1. **Stock → Delivery Note → New** (or Sales Order → Make → Delivery
-   Note).
-2. **Customer** field → pick your Internal Customer.
-   - The **Is Internal Transfer** checkbox auto-ticks via
-     `fetch_from = customer.is_internal_customer`.
-3. **Transfer From Warehouse**
-   (`ecs_section10_transfer_from_warehouse`) → pick source.
-   - Autocomplete shows `EE: <Location>` label on EE-mapped
-     warehouses; non-mapped show no label.
-4. **Transfer To Warehouse**
-   (`ecs_section10_transfer_to_warehouse`) → pick target.
-   - As soon as both are set, a routing **branch chip** appears at
-     the top of the form indicating **STN / B2B / PO / Inert**.
-5. **Add items** in the items table. For non-Inert branches, items
-   need an `EasyEcom Item Map` row (status `Mapped` or
-   `Created-Flagged`) — otherwise the push flags with
-   *"references Items without an EasyEcom Item Map"*.
-6. **Save** → **Submit**.
+### Step 5. Add items
 
-### What our code does on submit
+Add the items, quantities, and rates as usual.
 
-1. `validate_pre_submit` enforces both warehouses set + different,
-   GIT warehouse resolvable.
-2. `section10_before_save` auto-sets the four addresses + per-line
-   warehouse routing + tax template selection (out-of-state
-   IGST template if the two warehouses' GSTINs differ).
-3. `enqueue_on_dn_submit` writes an `EasyEcom Transfer Map` row and
-   enqueues an `EasyEcom Queue Job` of type **Transfer Push**.
-4. Worker fires the branch-appropriate EE call:
-   - **PO**: `/WMS/Cart/CreatePurchaseOrder` → response captures
-     `ee_po_id`.
-   - **B2B/STN**: `/webhook/v2/createOrder` → response captures
-     `ee_order_id`, `ee_suborder_id`, `ee_invoice_id`.
-   - **Inert**: no EE call; no Transfer Map row created.
+For Cases 1, 2, 3 (anything that hits EasyEcom): each item must
+already exist in EasyEcom (its EE Item Map status should be
+`Mapped` or `Created-Flagged`). If you pick an unmapped item, the
+submit will succeed but the §10 push will land in Drift with a
+message about "Items without an EasyEcom Item Map".
 
-### Manual recovery — re-push a Drift Transfer Map
+For Case 4 (Inert): any ERPNext item works.
 
-If a Transfer Map row is in **status=Drift** with a flag_reason
-populated, fix the cause (typically a precondition: missing
-ee_customer_id / ee_vendor_id / GSTIN), then trigger:
+### Step 6. Save → Submit
 
-```
-POST /api/method/ecommerce_super.easyecom.flows.transfer_push.push_all_pending_transfers
-     ?inline=1
-```
-
-The response lists every Drift / pending Transfer Map and its
-re-push outcome (`b2b_pushed`, `po_pushed`, `stn_pushed`,
-`drift`, `skipped`).
-
-There's also a **Retry Push** button on the DN form for the same
-flow.
+That's it. On submit:
+- The integration auto-fills the four address fields (Billing,
+  Shipping, Dispatch, Company Address) from the warehouse-linked
+  addresses.
+- It records a row in the **EasyEcom Transfer Map** list.
+- It queues the EasyEcom call (if applicable for your case).
+- The worker fires the call within ~10 seconds.
 
 ---
 
-## Verification per branch
+## What to expect after submit
 
-Once submitted, confirm via:
+### Cases 1, 2, 3 (EE-touching)
 
-### `EasyEcom Transfer Map` (for non-Inert branches)
+Within ~10 seconds of submit:
 
-| Field | Expected after success |
-|---|---|
-| `status` | `EE-Pushed` (or `SI-Pending` for same-GSTIN STN with an auto-drafted SI) |
-| `ee_doctype` | `PO` / `B2B` / `STN` |
-| `ee_po_id` | non-zero for PO branch |
-| `ee_order_id` | populated for B2B/STN |
-| `ee_invoice_id` | populated for STN if EE side returned it |
-| `flag_reason` | null |
+1. **A row appears in EasyEcom Transfer Map** with `delivery_note`
+   matching your DN.
+2. **Its `status` flips to `EE-Pushed`** (you may briefly see
+   `Pending` or `Drift`).
+3. **The `EasyEcom API Call` list** has a new entry with status
+   `Success` and a 200 response code.
+4. **The Transfer Map records the EE-side identifiers** (`ee_po_id`
+   for Case 3, `ee_order_id` for Cases 1 and 2).
 
-### `EasyEcom API Call` list
+### Case 4 (Inert)
 
-A 200 OK row with the branch's endpoint:
-- PO: `/WMS/Cart/CreatePurchaseOrder`
-- B2B: `/webhook/v2/createOrder`
-- STN: `/webhook/v2/createOrder` (payload differs — `is_market_shipped` vs B2B's `orderType="businessorder"`)
-- Inert: no row generated.
+- **No row in EasyEcom Transfer Map** (correct — there's nothing
+  for EasyEcom to know about).
+- **No new EasyEcom API Call** entry.
+- The DN itself behaves as a normal ERPNext internal transfer.
 
-### `Trace Outbound Push (§10)` button on the DN
+### Inbound side for Cases 1 and 3
 
-For submitted DNs with `is_internal_customer=1`, the EasyEcom menu
-on the DN form has a **Trace Outbound Push (§10)** button. Read-only.
-Walks every §10 gate and shows pass/fail per stage with the names
-of every downstream artifact (Transfer Map, Sync Records, Queue Jobs,
-API Calls). The fastest way to diagnose a stuck push.
+When EasyEcom processes the goods on its side and confirms
+receipt, the integration polls and automatically creates a
+**Purchase Receipt** on your ERPNext at the target Company under
+the Internal Supplier. You don't have to do anything manually.
 
 ---
 
-## Common errors and recovery
+## Verifying your transfer worked
+
+Three places to look:
+
+### On the DN form
+- The **Dashboard** section shows a link to the Transfer Map row.
+- The top-right menu has a **Trace Outbound Push (§10)** button.
+  Click it for a read-only "pass/fail per gate" report — the
+  fastest way to find what (if anything) went wrong.
+
+### EasyEcom Transfer Map list
+- Open `/app/easyecom-transfer-map`.
+- Find the row for your DN.
+- Healthy: `status = EE-Pushed`, `flag_reason` empty, EE IDs populated.
+
+### EasyEcom API Call list
+- Open `/app/easyecom-api-call?modified=<today>`.
+- The newest row (sorted by Modified DESC) should be your push.
+- The endpoint will be one of:
+  - `/WMS/Cart/CreatePurchaseOrder` (PO branch)
+  - `/webhook/v2/createOrder` (B2B or STN — both branches share
+    this endpoint but with different payload shapes)
+- Healthy: `response_status_code = 200`, `status = Success`.
+
+---
+
+## Troubleshooting common errors
 
 ### "Billing Address does not belong to the Customer X"
 
-Address auto-set by `section10_before_save` from the **target
-warehouse**'s linked Address isn't also linked to the Customer.
-Add `Customer: X` Dynamic Link row to that Address.
+**What's happening.** ERPNext is validating that the Billing
+Address belongs to the Customer. The §10 integration auto-fills
+the Billing Address from the **target warehouse**'s linked
+Address — but that Address isn't linked to your Internal Customer.
+
+**Fix in the UI**:
+1. Open the Address that triggered the error.
+2. Scroll to the **Reference** child table (it lists Link Document
+   Type + Link Name rows).
+3. Add a row: `Link Document Type = Customer`,
+   `Link Name = <your Internal Customer's docname>`. Save.
+
+This adds a permission link; no Address data changes. Re-submit
+the DN.
 
 ### "Dispatch Address Name does not belong to the Company X"
 
-Address auto-set from the **source warehouse**'s linked Address
-isn't linked to the Company. Add `Company: X` Dynamic Link row.
+**What's happening.** Same idea, seller side. The Dispatch Address
+came from the **source warehouse**'s linked Address but isn't
+linked to your Company.
 
-### "§10 Internal Supplier missing for source Company X → target Company Y"
+**Fix in the UI**:
+1. Open the Address that triggered the error.
+2. Add a Reference row:
+   `Link Document Type = Company`,
+   `Link Name = <your Company name>`. Save.
 
-The PO branch's `_find_internal_supplier` couldn't find a Supplier
-with `is_internal_supplier=1` AND `represents_company=<source>`.
-Run the Bootstrap Internal Supplier action (see prereq #2).
+### "Source/Target Company X has no GSTIN configured"
 
-### "Source Company X has no GSTIN configured"
+Set `Company.gstin` on the Company form (see Prerequisite Step 4).
 
-Set `Company.gstin` (see prereq #4).
+### "Internal Supplier missing for source Company X → target Y"
+
+You skipped Prerequisite Step 2, or the Supplier was created but
+never pushed to EE. Do both.
 
 ### "PO branch requires an EE-side vendor — V12345 has no Supplier Map ee_vendor_id captured"
 
-The Internal Supplier exists in ERPNext but was never pushed to
-EE. Hit the **Push to EasyEcom** button on the Supplier form.
+The Internal Supplier exists in ERPNext but isn't on the EasyEcom
+side yet. Open the Supplier → **EasyEcom → Push to EasyEcom**.
 
-If the push fails with EE's `Vendor code already exists!` (HTTP
-400 in `response_payload`) — that vendor code is already taken
-EE-side, possibly by a soft-deleted vendor that `/wms/V2/getVendors`
-doesn't surface. Recovery:
-- Disable the Supplier's `is_internal_supplier` flag,
-- Bootstrap a fresh Internal Supplier (gets a new auto-naming
-  series docname → new vendorCode → no collision),
-- Push the new one.
+If the push fails with EE's *"Vendor code already exists!"*: a
+vendor with that code is reserved on EasyEcom's side (often a
+soft-deleted vendor that EE's vendor list doesn't show). Two ways:
+- Ask EE support to clear the reservation, OR
+- Create a fresh Internal Supplier with a different name (gets
+  a new auto-generated code, no collision).
 
-### "DN line(s) reference Items without an EasyEcom Item Map: 'XXX'"
+### "DN line(s) reference Items without an EasyEcom Item Map"
 
-The item needs an `EasyEcom Item Map` row in `Mapped` or
-`Created-Flagged` status. Push the item to EE via the **Push to
-EasyEcom** button on the Item form (§8d Stage 6).
+The items on the DN aren't yet known to EasyEcom. Push each item
+to EE first via the **Push to EasyEcom** button on the Item form.
+Or for Case 4 (Inert), any item works — pick one that's mapped if
+in doubt.
 
-### Stock errors (negative stock, batch/serial mandatory)
+### "Negative stock" or "Serial No / Batch No are mandatory"
 
-These are pure ERPNext stock validation, not §10. Use an item
-that has positive stock at the source warehouse and is not
-batch/serial-tracked, or set up the appropriate Batch No / Serial
-No data.
+These are pure ERPNext stock-level errors, not §10. Make sure you
+have stock at the source warehouse and that your items don't
+require Batch/Serial tracking (or pick an item that doesn't).
 
-### TimestampMismatch on submit
+### "TimestampMismatchError" on submit
 
-Frappe's optimistic-concurrency check tripped because
-`section10_before_save` modified the doc between client load and
-server save. Refresh the form and re-submit.
+The form's data was modified by the integration between when you
+loaded it and when you clicked Submit. Just reload the form and
+click Submit again.
+
+### "Push failed, nothing happened" — Retry Push doesn't do anything
+
+The §10 push refused for a precondition (Internal Customer not
+mapped, Internal Supplier missing, GSTIN missing). The Transfer
+Map row's `flag_reason` field tells you exactly which. Open the
+Transfer Map row, read `flag_reason`, fix the cause, then either
+press the **Retry Push** button on the DN form or ask your admin
+to hit:
+
+```
+POST /api/method/ecommerce_super.easyecom.flows.transfer_push.push_all_pending_transfers?inline=1
+```
 
 ---
 
-## Operator URLs (reference)
-
-System Manager / Administrator only:
+## Quick visual reference
 
 ```
-GET  /api/method/ecommerce_super.easyecom.install.custom_field_verify.run_audit
-GET  /api/method/ecommerce_super.easyecom.flows.warehouse_label_sync.backfill_all
-POST /api/method/ecommerce_super.easyecom.flows.transfer_push.push_all_pending_transfers
-POST /api/method/ecommerce_super.easyecom.api.customer_push.push_one_customer_now
-POST /api/method/ecommerce_super.easyecom.api.supplier_push.push_one_supplier_now
+       (source warehouse)                (target warehouse)
+              │                                 │
+              ▼                                 ▼
+   ┌──────────────────┐               ┌──────────────────┐
+   │ EE-managed?      │               │ EE-managed?      │
+   └────┬─────────┬───┘               └────┬─────────┬───┘
+        │ Yes     │ No                     │ Yes     │ No
+        │         │                        │         │
+        └─────────┼────────────────────────┘         │
+                  │                                  │
+        ┌─────────┼────────┬─────────────────┬───────┘
+        │         │        │                 │
+       Yes/Yes  Yes/No   No/Yes            No/No
+        │         │        │                 │
+        ▼         ▼        ▼                 ▼
+      STN       B2B       PO              Inert
+   (transfer  (sell out  (PO into       (no EE call,
+    inside     of EE)     EE)             pure ERPNext)
+    EE)
 ```
-
-All five are idempotent. Hit any of them from a browser logged in
-as Administrator; the response is JSON.
 
 ---
 
-## Live verification example (mmpl16, 2026-06-19)
+## When in doubt
 
-| Branch | DN | Result |
-|---|---|---|
-| **PO** | DL-260552 | `EE-Pushed`, `ee_po_id=2018477`, `/WMS/Cart/CreatePurchaseOrder` 200 OK |
-| **B2B** | DL-260550, DL-260551 | `EE-Pushed`, `ee_doctype=B2B`, `/webhook/v2/createOrder` 200 OK each |
-| **STN** | DL-260559 | `EE-Pushed`, `ee_doctype=STN`, `/webhook/v2/createOrder` 200 OK |
-| **Inert** | DL-260558 | No Transfer Map row created (correct), no EE call. |
+- The Branch Chip on the DN form tells you which case you're in
+  before you submit. Trust it.
+- The **Trace Outbound Push** button on a submitted DN walks every
+  check and shows what passed and what failed.
+- The Transfer Map row's `flag_reason` is always the most precise
+  message about what's blocking the push.
+
+For deep diagnostics, share the DN number, the Transfer Map row
+name, and any visible flag_reason with your admin — that's enough
+to track the exact request that went to EasyEcom (or didn't).
