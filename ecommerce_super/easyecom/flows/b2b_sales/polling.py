@@ -267,13 +267,20 @@ def derive_local_status_from_ee_rows(
     if not b2b_rows:
         return ("orphan", None)
 
-    # Aggregate suborder-level quantities across ALL rows (handles
+    # Aggregate item-level quantities across ALL rows (handles
     # shipment splits — same reference_code, multiple invoice rows
     # per fulfillment chunk).
+    #
+    # GROUNDING CORRECTION (paste 7 live finding on Harmony): EE's
+    # getOrderDetails response returns the per-line array under the
+    # key `order_items`, NOT `suborders` as the Phase 1 packet
+    # assumed. The field rename preserves the same shape
+    # (item_quantity / cancelled_quantity per row) — only the parent
+    # key changed.
     total_item_qty = 0
     total_cancelled_qty = 0
     for r in b2b_rows:
-        for sub in (r.get("suborders") or []):
+        for sub in (r.get("order_items") or []):
             iq = sub.get("item_quantity") or 0
             cq = sub.get("cancelled_quantity") or 0
             total_item_qty += iq
@@ -282,7 +289,7 @@ def derive_local_status_from_ee_rows(
     # Phase 1 full cancellation: ALL rows show order_status_id=9 AND
     # all quantity cancelled. The qty gate guards against a half-
     # cancelled shipment-split case where the row-level status flips
-    # to 9 but a suborder still has uncancelled qty.
+    # to 9 but an order_item still has uncancelled qty.
     rows_all_cancelled = all(
         r.get("order_status_id") == CANCELLED_STATUS_ID
         for r in b2b_rows

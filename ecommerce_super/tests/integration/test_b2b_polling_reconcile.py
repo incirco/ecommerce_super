@@ -51,7 +51,7 @@ def _b2b_row(
     invoice_number=None,
     invoice_id=12345,
     last_update_date="2026-06-08 18:00:00",
-    suborders=None,
+    order_items=None,
 ):
     return {
         "order_type_key": "businessorder",
@@ -59,7 +59,7 @@ def _b2b_row(
         "invoice_number": invoice_number,
         "invoice_id": invoice_id,
         "last_update_date": last_update_date,
-        "suborders": suborders
+        "order_items": order_items
         or [{"item_quantity": 5, "cancelled_quantity": 0}],
     }
 
@@ -70,7 +70,7 @@ class TestReconcileOnePersistsCancelledTransition(unittest.TestCase):
         rows = [
             _b2b_row(
                 order_status_id=9,
-                suborders=[
+                order_items=[
                     {"item_quantity": 5, "cancelled_quantity": 5}
                 ],
             )
@@ -287,7 +287,7 @@ class TestReconcileOnePartialCancel(unittest.TestCase):
         rows = [
             _b2b_row(
                 order_status_id=2,
-                suborders=[
+                order_items=[
                     {"item_quantity": 5, "cancelled_quantity": 2}
                 ],
             )

@@ -148,7 +148,7 @@ def _check_derivation_contract() -> dict:
             "invoice_number": None,
             "invoice_id": None,
             "last_update_date": "2026-06-08 18:00:00",
-            "suborders": [
+            "order_items": [
                 {"item_quantity": 5, "cancelled_quantity": 0}
             ],
         }
@@ -166,7 +166,7 @@ def _check_derivation_contract() -> dict:
             [
                 _row(
                     order_status_id=9,
-                    suborders=[
+                    order_items=[
                         {"item_quantity": 5, "cancelled_quantity": 5}
                     ],
                 )
@@ -178,7 +178,7 @@ def _check_derivation_contract() -> dict:
             [
                 _row(
                     order_status_id=2,
-                    suborders=[
+                    order_items=[
                         {"item_quantity": 5, "cancelled_quantity": 2}
                     ],
                 )

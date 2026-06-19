@@ -37,7 +37,7 @@ def _row(
     invoice_id: int | None = None,
     last_update_date: str = "2026-06-08 18:00:00",
     order_type_key: str = "businessorder",
-    suborders: list | None = None,
+    order_items: list | None = None,
 ):
     """Make a single getOrderDetails row mock."""
     return {
@@ -46,7 +46,7 @@ def _row(
         "invoice_id": invoice_id,
         "last_update_date": last_update_date,
         "order_type_key": order_type_key,
-        "suborders": suborders or [],
+        "order_items": order_items or [],
     }
 
 
@@ -84,7 +84,7 @@ class TestFullCancellation(unittest.TestCase):
         rows = [
             _row(
                 order_status_id=9,
-                suborders=[_suborder(5, 5)],
+                order_items=[_suborder(5, 5)],
             )
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -101,12 +101,12 @@ class TestFullCancellation(unittest.TestCase):
             _row(
                 order_status_id=9,
                 last_update_date="2026-06-08 18:00:00",
-                suborders=[_suborder(5, 5)],
+                order_items=[_suborder(5, 5)],
             ),
             _row(
                 order_status_id=9,
                 last_update_date="2026-06-08 19:00:00",
-                suborders=[_suborder(5, 5)],
+                order_items=[_suborder(5, 5)],
             ),
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -124,7 +124,7 @@ class TestFullCancellation(unittest.TestCase):
         rows = [
             _row(
                 order_status_id=9,
-                suborders=[_suborder(5, 2)],
+                order_items=[_suborder(5, 2)],
             )
         ]
         decision, _ = derive_local_status_from_ee_rows(_local_map(), rows)
@@ -137,7 +137,7 @@ class TestPartialCancellation(unittest.TestCase):
         rows = [
             _row(
                 order_status_id=2,
-                suborders=[
+                order_items=[
                     _suborder(5, 2),
                     _suborder(3, 0),
                 ],
@@ -158,12 +158,12 @@ class TestPartialCancellation(unittest.TestCase):
             _row(
                 order_status_id=5,
                 invoice_id=i,
-                suborders=[_suborder(2, 0)],
+                order_items=[_suborder(2, 0)],
             )
             for i in range(1, 7)
         ]
         # Now mark one suborder in the 4th row as cancelled.
-        rows[3]["suborders"][0]["cancelled_quantity"] = 2
+        rows[3]["order_items"][0]["cancelled_quantity"] = 2
         decision, payload = derive_local_status_from_ee_rows(
             _local_map(), rows
         )
@@ -179,7 +179,7 @@ class TestInvoiceGeneration(unittest.TestCase):
             _row(
                 order_status_id=5,
                 invoice_number="INV-2026-0001",
-                suborders=[_suborder(5, 0)],
+                order_items=[_suborder(5, 0)],
             )
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -192,9 +192,9 @@ class TestInvoiceGeneration(unittest.TestCase):
         """Across shipment splits, an invoice_number on ANY row
         triggers Invoice Pending transition."""
         rows = [
-            _row(invoice_number=None, suborders=[_suborder(2, 0)]),
-            _row(invoice_number="INV-CHUNK-2", suborders=[_suborder(2, 0)]),
-            _row(invoice_number=None, suborders=[_suborder(2, 0)]),
+            _row(invoice_number=None, order_items=[_suborder(2, 0)]),
+            _row(invoice_number="INV-CHUNK-2", order_items=[_suborder(2, 0)]),
+            _row(invoice_number=None, order_items=[_suborder(2, 0)]),
         ]
         decision, payload = derive_local_status_from_ee_rows(
             _local_map(), rows
@@ -209,7 +209,7 @@ class TestNoChange(unittest.TestCase):
         rows = [
             _row(
                 order_status_id=2,
-                suborders=[_suborder(5, 0)],
+                order_items=[_suborder(5, 0)],
             )
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -225,7 +225,7 @@ class TestNoChange(unittest.TestCase):
                 rows = [
                     _row(
                         order_status_id=status_id,
-                        suborders=[_suborder(5, 0)],
+                        order_items=[_suborder(5, 0)],
                     )
                 ]
                 decision, _ = derive_local_status_from_ee_rows(
@@ -240,12 +240,12 @@ class TestNoChange(unittest.TestCase):
             _row(
                 order_status_id=2,
                 last_update_date="2026-06-08 10:00:00",
-                suborders=[_suborder(5, 0)],
+                order_items=[_suborder(5, 0)],
             ),
             _row(
                 order_status_id=6,
                 last_update_date="2026-06-08 18:00:00",
-                suborders=[_suborder(5, 0)],
+                order_items=[_suborder(5, 0)],
             ),
         ]
         decision, _ = derive_local_status_from_ee_rows(_local_map(), rows)
@@ -258,7 +258,7 @@ class TestUnknownStatus(unittest.TestCase):
             _row(
                 order_status_id=999,
                 invoice_id=12345,
-                suborders=[_suborder(5, 0)],
+                order_items=[_suborder(5, 0)],
             )
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -272,7 +272,7 @@ class TestUnknownStatus(unittest.TestCase):
         rows = [
             _row(
                 order_status_id=None,
-                suborders=[_suborder(5, 0)],
+                order_items=[_suborder(5, 0)],
             )
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -294,7 +294,7 @@ class TestPrecedence(unittest.TestCase):
             _row(
                 order_status_id=9,
                 invoice_number="INV-CANCELLED-001",
-                suborders=[_suborder(5, 5)],
+                order_items=[_suborder(5, 5)],
             )
         ]
         decision, payload = derive_local_status_from_ee_rows(
@@ -310,7 +310,7 @@ class TestPrecedence(unittest.TestCase):
             _row(
                 order_status_id=5,
                 invoice_number="INV-PARTIAL",
-                suborders=[_suborder(5, 2)],
+                order_items=[_suborder(5, 2)],
             )
         ]
         decision, _ = derive_local_status_from_ee_rows(_local_map(), rows)
