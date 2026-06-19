@@ -448,6 +448,94 @@ EXPECTED_FIELDS: list[tuple[str, str, dict[str, Any]]] = [
             "mandatory_depends_on": "eval:doc.ecs_is_section10_transfer",
         },
     ),
+    # §9 Stage 3 GRN-pull back-refs. Shipped by
+    # `add_ecs_grn_pull_fields` via `create_custom_fields` — same
+    # gh#48 silent-no-op race. Live failure 2026-06-19 on
+    # mmpl16.frappe.cloud: GRN pull from EE Company Settings refused
+    # with `OperationalError: Unknown column 'ecs_easyecom_grn_id' in
+    # 'WHERE'`. The §9 idempotency hinge query filters on this column;
+    # without it the entire pull aborts before any GRN row processes.
+    (
+        "Purchase Receipt", "ecs_easyecom_grn_id",
+        {
+            "label": "EasyEcom GRN ID",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "in_standard_filter": 1,
+            "search_index": 1,
+        },
+    ),
+    (
+        "Purchase Receipt", "ecs_supplier_invoice_date",
+        {
+            "label": "Supplier Invoice Date (from EE)",
+            "fieldtype": "Date",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Purchase Receipt Item", "ecs_easyecom_grn_detail_id",
+        {
+            "label": "EasyEcom GRN Detail ID",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "search_index": 1,
+        },
+    ),
+    (
+        "Purchase Receipt Item", "ecs_easyecom_po_detail_id",
+        {
+            "label": "EasyEcom PO Detail ID",
+            "fieldtype": "Data",
+            "read_only": 1,
+            "search_index": 1,
+            "description": (
+                "EasyEcom-side `purchase_order_detail_id` — the PO "
+                "line this PR line satisfies."
+            ),
+        },
+    ),
+    # §10 back-ref Link fields. Shipped by
+    # `add_ecs_section10_back_refs` via `create_custom_fields` — also
+    # at risk of the same silent-no-op race even though the field
+    # hasn't been seen failing in production yet. Pre-register so the
+    # next bench that loses one of these self-heals via run_audit.
+    (
+        "Delivery Note", "ecs_section10_transfer_map",
+        {
+            "label": "EasyEcom §10 Transfer Map",
+            "fieldtype": "Link",
+            "options": "EasyEcom Transfer Map",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Sales Invoice", "ecs_section10_transfer_map",
+        {
+            "label": "EasyEcom §10 Transfer Map",
+            "fieldtype": "Link",
+            "options": "EasyEcom Transfer Map",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Purchase Receipt", "ecs_section10_transfer_map",
+        {
+            "label": "EasyEcom §10 Transfer Map",
+            "fieldtype": "Link",
+            "options": "EasyEcom Transfer Map",
+            "read_only": 1,
+        },
+    ),
+    (
+        "Purchase Invoice", "ecs_section10_transfer_map",
+        {
+            "label": "EasyEcom §10 Transfer Map",
+            "fieldtype": "Link",
+            "options": "EasyEcom Transfer Map",
+            "read_only": 1,
+        },
+    ),
 ]
 # Additional entries are appended by individual flow packets as their
 # Custom Field patches are written. Keep this list sorted by gh#-issue
