@@ -43,7 +43,9 @@ The frontier. One row per buildable section, one column per stage of the loop (s
 | (Lookups — UOM, Brand, Item Group, Category Map — folded into whichever master first needs them, not a standalone packet) | — | — | — | — | — | — | — | — |
 | 9. Buying & Inwarding | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 10. Stock Transfers | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
-| 11. B2B Sales | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
+| 11. B2B Sales — **Phase 1** (push + cancel + polling + worklist) | ✅ | ✅ | ✅ 14-Jun | ✅ 23-Jun | ✅ 23-Jun | 🔄 | ☐ | 🔶 partial |
+| ↳ Phase 1 = SPEC §11.1-§11.3.1 + §11.2 preconditions + cancel + polling reconciliation. Substrate (`EasyEcom B2B Order Map` + Old/New B2B payload builders), Stage 2 (`SO Push` queue handler + on_submit hook + Shipped-state cancel refusal), Stage 3 (polling tick cron */5 + Account-level cadence + `derive_local_status_from_ee_rows` locked rule table + FDE Worklist cards + SO form branch chip). 19+5 polling tests + earlier substrate/hook tests. Live-verified pastes 1/2/3/6/7 against Harmony (`SAL-ORD-2026-00005` Cancelled path round-tripped via `getOrderDetails`); fixture `tests/fixtures/b2b_polling_real_response.json` committed. Paste-7 grounding corrections folded back as `SPEC_11_patch_notes.md` (7 items: `suborders→order_items`, `easyecom_order_history` in-row array, `getOrderDetails` reference_code requirement, `getAllOrders` 7-day cap, `marketplaceId=65` for B2B discriminator, Old/New B2B endpoint enumeration, shared `/webhook/v2/createOrder` with §10). Closeout artifacts: `SECTION_11_COMPLETION_CHECKLIST.md`, `FDE_PRIMER_section_11_b2b_sales.md`, `process/test_scripts/section_11_b2b_sales.md`. PR #78. | — | — | — | — | — | — | — | — |
+| 11. B2B Sales — **Phase 2** (SRE mirror + invoice flow Branch A/B + dispatch→Delivered + multi-warehouse split + sync push mode) | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 12. B2C / Marketplace Sales | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 | 13. Returns & Cancellations | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ |
 
