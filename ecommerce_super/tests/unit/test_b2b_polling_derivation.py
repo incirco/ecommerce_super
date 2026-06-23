@@ -317,5 +317,54 @@ class TestPrecedence(unittest.TestCase):
         self.assertEqual(decision, "partial_cancel")
 
 
+class TestRealHarmonyResponseShape(unittest.TestCase):
+    """Verify the derivation works against a real Harmony
+    /orders/V2/getOrderDetails response captured 2026-06-23. GSTINs
+    in the fixture are placeholder-redacted; everything else is the
+    actual EE response shape (order_items, easyecom_order_history
+    in-row array, top-level order_status_id, etc.)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json, pathlib
+        fixture = (
+            pathlib.Path(__file__).resolve().parent.parent
+            / "fixtures" / "b2b_polling_real_response.json"
+        )
+        with open(fixture) as f:
+            cls.response = json.load(f)
+
+    def test_cancelled_order_derives_cancelled_transition(self) -> None:
+        """Fixture is for a Cancelled order — top-level
+        order_status_id=9 + every order_item fully cancelled. Verifies
+        the derivation reads the right top-level + per-item fields
+        against the real shape."""
+        rows = self.response["data"]
+        decision, payload = derive_local_status_from_ee_rows(
+            _local_map(), rows
+        )
+        self.assertEqual(decision, "transition_to")
+        self.assertEqual(payload, "Cancelled")
+
+    def test_in_row_easyecom_order_history_present(self) -> None:
+        """The state-change history is an in-row array on the order
+        object. Phase 1 doesn't walk it (top-level order_status_id
+        is sufficient), but its presence is the load-bearing fact
+        that motivated the paste-7 grounding correction. A future
+        Phase 2 history-aware derivation would walk this list."""
+        order = self.response["data"][0]
+        history = order.get("easyecom_order_history")
+        self.assertIsInstance(history, list)
+        self.assertGreater(len(history), 0)
+        self.assertIn("status_id", history[-1])
+
+    def test_order_items_is_the_per_line_array(self) -> None:
+        """Confirms the field rename suborders → order_items was
+        correct. The real response carries order_items, NOT suborders."""
+        order = self.response["data"][0]
+        self.assertIn("order_items", order)
+        self.assertNotIn("suborders", order)
+
+
 if __name__ == "__main__":
     unittest.main()
