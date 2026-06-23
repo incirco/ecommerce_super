@@ -132,6 +132,17 @@ GRN_DETAILS_GET: str = "/Wms/Inventory/getGRNDetails"  # GET (stale; replaced by
 
 ORDERS_GET_ALL: str = "/orders/V2/getAllOrders"  # GET (bulk; Next-Page URL)
 ORDER_DETAILS_GET: str = "/orders/V2/getOrderDetails"  # GET
+
+# §11 Phase 1 — ERPNext-initiated B2B cancellation.
+# Grounded per design-lead's 2026-06-14 EE-doc reference:
+#   POST /orders/cancelOrder
+#   Headers: x-api-key (mandatory) + Authorization: Bearer <Jwt>
+#   Payload: {"reference_code": "<SO name>"}
+#   Response: {"code": 200, "message": "Successfully Cancelled the
+#             Order with reference_code <SO name>", "data": []}
+# Identifier choice: reference_code = SO.name = orderNumber sent at
+# createOrder. Works uniformly for Old and New B2B.
+CANCEL_ORDER: str = "/orders/cancelOrder"  # POST (§11 Phase 1)
 B2B_SO_CREATE: str = "/b2b/createSalesOrder"  # POST
 B2B_SO_GET: str = "/b2b/getSalesOrder"  # GET
 B2B_INVOICE_UPLOAD: str = "/b2b/uploadInvoice"  # POST (multipart with PDF)

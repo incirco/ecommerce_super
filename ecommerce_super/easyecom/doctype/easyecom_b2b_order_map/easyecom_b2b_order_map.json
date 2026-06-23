@@ -1,0 +1,218 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-B2B-{sales_order}",
+ "creation": "2026-06-14 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sales_order",
+  "easyecom_account",
+  "company",
+  "module",
+  "status",
+  "ee_references_section",
+  "ee_order_id",
+  "ee_suborder_id",
+  "ee_invoice_id",
+  "lifecycle_section",
+  "pushed_at",
+  "cancelled_at",
+  "last_polled_at",
+  "audit_section",
+  "payload_hash",
+  "request_payload",
+  "response_payload",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "sales_order",
+   "fieldtype": "Link",
+   "label": "Sales Order",
+   "options": "Sales Order",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "search_index": 1,
+   "description": "ERPNext-side anchor. The Map autoname keys on this — exactly one Map per SO. orderNumber on the EE createOrder payload is also this value."
+  },
+  {
+   "fieldname": "easyecom_account",
+   "fieldtype": "Link",
+   "label": "EasyEcom Account",
+   "options": "EasyEcom Account",
+   "reqd": 1,
+   "in_list_view": 0,
+   "description": "Which EE Account this push went to. Captured at push time; immutable thereafter (re-routes require manual cancel + re-push)."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "fetch_from": "sales_order.company",
+   "read_only": 1,
+   "in_list_view": 0,
+   "description": "Fetched from sales_order for company_scope_doc permission filtering (§31.8.3 pattern)."
+  },
+  {
+   "fieldname": "module",
+   "fieldtype": "Select",
+   "label": "Module",
+   "options": "Old B2B\nNew B2B",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "EE B2B module captured from EasyEcom Account.ecs_b2b_module at push time. Immutable after push — re-routing modules requires manual cancel + re-push."
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pushed\nQueued\nInvoice Pending\nInvoice Generated\nCancelled",
+   "default": "Pushed",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Status lifecycle: Pushed (Old B2B sync OK) | Queued (New B2B queued OK) | Invoice Pending (Phase 1 marker — polling detected EE invoice; Phase 2 SI mirror NYI) | Invoice Generated (Phase 2 — defined for forward compat) | Cancelled."
+  },
+  {
+   "fieldname": "ee_references_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom References"
+  },
+  {
+   "fieldname": "ee_order_id",
+   "fieldtype": "Data",
+   "label": "EE Order ID",
+   "search_index": 1,
+   "read_only": 1,
+   "description": "EE-returned OrderID. Populated synchronously on Old B2B; populated via Stage 3 polling on New B2B."
+  },
+  {
+   "fieldname": "ee_suborder_id",
+   "fieldtype": "Data",
+   "label": "EE Suborder ID",
+   "read_only": 1,
+   "description": "EE-returned SuborderID. Same population semantics as ee_order_id."
+  },
+  {
+   "fieldname": "ee_invoice_id",
+   "fieldtype": "Data",
+   "label": "EE Invoice ID",
+   "read_only": 1,
+   "description": "EE's invoice identifier returned at order creation (Old B2B). This is EE's internal ID, NOT the ERPNext Sales Invoice docname — that mirror lands in Phase 2."
+  },
+  {
+   "fieldname": "lifecycle_section",
+   "fieldtype": "Section Break",
+   "label": "Lifecycle"
+  },
+  {
+   "fieldname": "pushed_at",
+   "fieldtype": "Datetime",
+   "label": "Pushed At",
+   "reqd": 1,
+   "read_only": 1,
+   "description": "When createOrder returned 200 — fixed at insert, never overwritten."
+  },
+  {
+   "fieldname": "cancelled_at",
+   "fieldtype": "Datetime",
+   "label": "Cancelled At",
+   "read_only": 1,
+   "description": "When EE acknowledged the cancellation (ERPNext-initiated in Phase 1; EE-initiated via Stage 3 polling fallback or Phase 2 webhook)."
+  },
+  {
+   "fieldname": "last_polled_at",
+   "fieldtype": "Datetime",
+   "label": "Last Polled At",
+   "read_only": 1,
+   "description": "Most recent Get All Orders sweep that touched this row. Stage 3 wires."
+  },
+  {
+   "fieldname": "audit_section",
+   "fieldtype": "Section Break",
+   "label": "Audit",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "payload_hash",
+   "fieldtype": "Data",
+   "label": "Payload Hash",
+   "length": 64,
+   "read_only": 1,
+   "description": "SHA-256 hex of the canonical-JSON request payload. Used for re-push idempotency detection (identical payload skips the EE call)."
+  },
+  {
+   "fieldname": "request_payload",
+   "fieldtype": "Long Text",
+   "label": "Request Payload",
+   "read_only": 1,
+   "description": "Full JSON sent to /webhook/v2/createOrder. Stored readable (not gzipped) for audit / replay diagnostics."
+  },
+  {
+   "fieldname": "response_payload",
+   "fieldtype": "Long Text",
+   "label": "Response Payload",
+   "read_only": 1,
+   "description": "Full JSON returned from EE — captures the response shape that drove the status transition."
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Long Text",
+   "label": "Last Error",
+   "read_only": 1,
+   "description": "Last failure message from a push or cancel attempt. Empty when the most recent attempt succeeded."
+  }
+ ],
+ "links": [],
+ "modified": "2026-06-14 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom B2B Order Map",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

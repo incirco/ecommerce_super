@@ -462,24 +462,44 @@ def _create_customer(
     default — the docname is NOT the customer_name. Caller captures
     customer.name.
 
-    **Dup-name resilience** (defensive, mirrors §8f supplier_pull):
-    ERPNext's default Customer Naming By is "Naming Series" so dup
-    customer_names DON'T collide on docname. BUT clients can change
-    Selling Settings.cust_master_name to "Customer Name" — at which
-    point Customer.name = customer_name and a second EE customer with
-    the same companyname raises DuplicateEntryError. The smoke run
-    against Harmony didn't trip this (Harmony's 26 customers all have
-    unique companynames), but a real client with EE-side test data or
-    a Customer-Name autoname config would hit it on the first pull.
-    Catch + retry-with-suffix mirrors the §8f Supplier fix.
+    **Dup-name resilience** (mirrors §8f supplier_pull):
+    Two EE customers with the same `companyname` would otherwise land
+    in ERPNext as `"DupName"` and `"DupName - 1"` because ERPNext's
+    autonaming silently disambiguates docnames with ` - N` suffixes
+    when collision is detected. The second customer loses its EE-side
+    identifier at a glance, and §10 Internal Customer / §11
+    B2B-buyer lookups that join on `customer_name` break silently.
+
+    **gh#50** — the original implementation caught
+    `frappe.DuplicateEntryError` reactively. That's dead code under
+    current ERPNext: autoname appends ` - N` BEFORE the duplicate
+    exception fires, so the catch never triggered. Fix is a
+    **pre-check** against existing `customer_name` rows; when a
+    collision is detected we proactively append the `(c_id)` suffix
+    BEFORE attempting the insert. The EE c_id is guaranteed unique
+    by definition, so a suffixed name can't collide a second time.
+
+    Race window between the pre-check and the insert is theoretical
+    only (FDEs don't run concurrent pulls; the substrate's savepoint
+    isolation also bounds the blast radius). We leave the
+    `DuplicateEntryError` catch in place as a belt-and-braces tertiary
+    fallback for any concurrent scenario that slips through.
 
     Caller is responsible for catching frappe.ValidationError from
     India Compliance — we don't swallow here so the caller can decide
     between FNC (validate failure) vs raise (infra failure)."""
-    customer_name = (
+    base_customer_name = (
         (erpnext_fields.get("customer_name") or "").strip()
         or f"EE Customer {ee_c_id}"
     )
+
+    # gh#50 pre-check — disambiguate proactively when another Customer
+    # already carries this customer_name. We check `customer_name` (not
+    # docname) because that's the field §10 / §11 join on, and the
+    # field we want to keep unique-per-EE-customer.
+    customer_name = base_customer_name
+    if frappe.db.exists("Customer", {"customer_name": base_customer_name}):
+        customer_name = f"{base_customer_name} ({ee_c_id})"
 
     def _build(name_for_customer: str) -> Any:
         c = frappe.new_doc("Customer")
@@ -507,22 +527,20 @@ def _create_customer(
         customer.insert(ignore_permissions=True)
         return customer
     except frappe.DuplicateEntryError:
-        # Customer Naming By="Customer Name" config + another customer
-        # already has this docname. Disambiguate with the EE c_id
-        # (unique by definition) so both rows land. customer_name on
-        # the doc shows both pieces so the FDE can identify the row.
-        disambiguated = f"{customer_name} ({ee_c_id})"
+        # Belt-and-braces — pre-check above should have caught this
+        # already. Reached only via a race (two concurrent pulls).
+        disambiguated = f"{base_customer_name} ({ee_c_id})"
         customer = _build(disambiguated)
         customer.insert(ignore_permissions=True)
         frappe.log_error(
-            title=f"customer_pull: dup-name disambiguation for c_id={ee_c_id}",
+            title=f"customer_pull: dup-name race for c_id={ee_c_id}",
             message=(
-                f"EE companyname={customer_name!r} collided with an "
-                f"existing Customer docname (Selling Settings."
-                "cust_master_name='Customer Name'); created as "
-                f"{disambiguated!r} (docname={customer.name!r}). c_id "
-                "remains the join key on the Customer Map; downstream "
-                "lookups via the Map are unaffected."
+                f"EE companyname={base_customer_name!r} collided with an "
+                f"existing Customer between pre-check and insert "
+                f"(concurrent pull?); created as {disambiguated!r} "
+                f"(docname={customer.name!r}). c_id remains the join key "
+                "on the Customer Map; downstream lookups via the Map are "
+                "unaffected."
             ),
         )
         return customer
