@@ -345,6 +345,14 @@ doc_events: dict[str, dict[str, str]] = {
     "Sales Order": {
         "validate": "ecommerce_super.easyecom.flows.b2b_sales.push.validate_pre_push",
         "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.push.on_submit_push",
+        # §11 Phase 1 (this packet): synchronous block-on-refusal
+        # cancel propagation. before_cancel runs BEFORE Frappe flips
+        # docstatus to 2 so a throw here leaves the SO submitted —
+        # exactly the semantics needed for refusal / infra-failure
+        # paths to avoid an EE-cancelled / SO-submitted divergence.
+        # Scope-guard inside the wrapper ensures non-EE SOs are
+        # untouched (vanilla cancel still works).
+        "before_cancel": "ecommerce_super.easyecom.flows.b2b_sales.cancel.on_before_cancel_dispatch",
     },
     # §9 Stage 2: PO push hooks.
     #   - validate: mixed-warehouse refusal + warehouse-flip refusal on
