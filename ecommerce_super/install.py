@@ -85,10 +85,39 @@ def after_install() -> None:
     a fresh install that race-condition'd its way to missing fields
     self-heals before the FDE first touches the desk. Audit results
     land in the bench console + Error Log when anything needed rescue.
+
+    gh#3 (re-open): planted-once content like the §17.2.1 Top Strip
+    Custom HTML Block has a rescue patch in patches.txt, but `bench
+    install-app` stamps every registered patch as already-applied
+    without running its body — so upgrade-rescues silently no-op on
+    fresh installs. Invoke the same rescue from after_install so a
+    fresh install gets the row planted via the embedded payload.
     """
     _add_composite_indexes()
     _run_custom_field_audit()
+    _ensure_easyecom_top_strip()
     frappe.db.commit()
+
+
+def _ensure_easyecom_top_strip() -> None:
+    """gh#3 — invoke the embedded-content top-strip rescue patch so
+    fresh installs get the Custom HTML Block planted. The patch's
+    own execute() is idempotent: it inserts when missing, heals when
+    empty, no-ops when populated. Upgrade-only patches in patches.txt
+    don't run on fresh-install Patch Log stamping, so we call it
+    explicitly here."""
+    from ecommerce_super.patches.v0_1.insert_easyecom_top_strip_from_inline import (
+        execute as _insert_top_strip,
+    )
+
+    try:
+        _insert_top_strip()
+    except Exception as exc:
+        # Don't block install on a non-critical content rescue.
+        frappe.log_error(
+            title="gh#3 after_install: Top Strip plant failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def _run_custom_field_audit() -> None:
