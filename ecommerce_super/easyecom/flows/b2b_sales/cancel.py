@@ -29,12 +29,30 @@ from ecommerce_super.easyecom.client.client import EasyEcomClient
 from ecommerce_super.easyecom.client.endpoints import CANCEL_ORDER
 from ecommerce_super.easyecom.exceptions import (
     EasyEcomAPIError,
+    EasyEcomAuthError,
     EasyEcomError,
+    EasyEcomRateLimitError,
+    EasyEcomServerError,
+    EasyEcomTimeoutError,
 )
 from ecommerce_super.easyecom.helpers.warehouse_mapping import (
     get_ee_location_for_warehouse,
 )
 from ecommerce_super.easyecom.utils.correlation import new_correlation_id
+
+
+# Infrastructure-failure exception types (per packet's
+# accept/business-refuse/infra-fail trichotomy). These are network /
+# auth / server-side conditions — NOT a business cancellation refusal.
+# They must produce a Failed Sync Record (not a Discrepancy) and a
+# distinct "EasyEcom unreachable" throw so the FDE knows to retry
+# rather than escalate to §13.3 RTO flow.
+_INFRA_FAILURE_TYPES: tuple[type[Exception], ...] = (
+    EasyEcomTimeoutError,
+    EasyEcomServerError,
+    EasyEcomAuthError,
+    EasyEcomRateLimitError,
+)
 
 
 CANCELLABLE_STATUSES: frozenset[str] = frozenset({"Pushed", "Queued"})
@@ -157,6 +175,31 @@ def cancel_b2b_order_from_erpnext(sales_order: str) -> dict:
             payload={"reference_code": so.name},
             correlation_id=correlation_id,
         )
+    except _INFRA_FAILURE_TYPES as exc:
+        # Infrastructure failure (timeout / 5xx / auth-expired /
+        # rate-limit). Per §7.3 + packet: infra failure → Failed Sync
+        # Record (NOT a Discrepancy) + distinct "unreachable" throw.
+        # The local Map row is not transitioned; the SO must NOT be
+        # allowed to cancel locally (no divergence window).
+        _write_cancel_sync_record(
+            so=so, ee_account=ee_account,
+            location_key=location_key,
+            correlation_id=correlation_id,
+            status="Failed",
+            last_error=f"{type(exc).__name__}: {str(exc)[:500]}",
+        )
+        frappe.throw(
+            _(
+                "EasyEcom unreachable — cancellation not propagated; "
+                "retry. {0}. Correlation ID: {1}. Local Map row "
+                "remains in {2}."
+            ).format(
+                f"{type(exc).__name__}: {str(exc)[:200]}",
+                correlation_id,
+                map_doc.status,
+            ),
+            title=_("EasyEcom Unreachable"),
+        )
     except (EasyEcomAPIError, EasyEcomError) as exc:
         # Capture the EE error body if present — the client wraps
         # HTTP-200-with-body-code>=400 responses as ValidationError
@@ -228,3 +271,124 @@ def cancel_b2b_order_from_erpnext(sales_order: str) -> dict:
         "map_name": map_doc.name,
         "ee_message": response.get("message", ""),
     }
+
+
+def _write_cancel_sync_record(
+    *,
+    so: Any,
+    ee_account: Any,
+    location_key: str,
+    correlation_id: str,
+    status: str,
+    last_error: str | None = None,
+) -> str | None:
+    """§7 Sync Record for the cancel attempt. Mirrors push.py's
+    `_write_sync_record` shape — direction is "Cancel", status is one
+    of {"Pending", "Success", "Failed", "Discrepancy"}. Used by the
+    infra-failure path so the FDE Worklist surfaces unreachable
+    EasyEcom errors as Failed (not Discrepancy, which would route to
+    the §13.3 RTO flow incorrectly)."""
+    try:
+        from ecommerce_super.easyecom.doctype.easyecom_sync_record import (
+            easyecom_sync_record as sync_record_mod,
+        )
+        from ecommerce_super.easyecom.utils.idempotency import (
+            sha256_idempotency,
+        )
+        idem = sha256_idempotency(
+            "so-cancel", so.company, so.name, location_key or "",
+        )
+        sr = sync_record_mod.upsert(
+            company=so.company,
+            entity_doctype="Sales Order",
+            entity_name=so.name,
+            entity_type="Sales Order",
+            direction="Cancel",
+            correlation_id=correlation_id,
+            idempotency_key=idem,
+            ee_location_key=location_key or None,
+            status=status,
+        )
+        if status != "Pending":
+            sr_name = sr.name if hasattr(sr, "name") else sr
+            updates: dict = {"status": status}
+            if last_error is not None:
+                updates["last_error"] = last_error[:5000]
+            frappe.db.set_value(
+                "EasyEcom Sync Record", sr_name, updates,
+                update_modified=False,
+            )
+        return sr.name if hasattr(sr, "name") else sr
+    except Exception as exc:
+        frappe.log_error(
+            title=f"§11 cancel failed to write Sync Record for {so.name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+
+
+# ============================================================
+# Document cancel hook (Sales Order before_cancel)
+# ============================================================
+#
+# Wired in hooks.py doc_events["Sales Order"]["before_cancel"]. The
+# hook runs BEFORE Frappe transitions docstatus to 2, so a throw here
+# leaves the SO untouched (docstatus=1) — which is exactly what we
+# want on a business-refusal or infra-failure: no divergence between
+# ERPNext and EasyEcom.
+#
+# Scope guard: any SO that is not §11-pushed (no Map row, or no
+# `ecs_b2b_order_map` back-ref) is untouched — vanilla ERPNext
+# cancellation proceeds with zero EE traffic and zero Sync Records.
+# Required by the §11 Phase 1 live-smoke packet HARD RULE 5.
+#
+# Sync semantics (synchronous block-on-refusal):
+#   - EE accepts  → cancel_b2b_order_from_erpnext returns clean →
+#                   hook returns → Frappe proceeds to docstatus 2.
+#   - EE refuses  → cancel_b2b_order_from_erpnext throws (with the
+#                   existing Discrepancy already raised) → hook
+#                   re-raises → docstatus stays 1.
+#   - Infra fail  → cancel_b2b_order_from_erpnext throws with the
+#                   distinct "unreachable" message (Failed Sync
+#                   Record already raised) → hook re-raises →
+#                   docstatus stays 1.
+#
+# Known edge (per packet — note, do NOT solve in Phase 1): on the
+# accept path the EE side commits before the local transaction. If a
+# later step in the cancel chain rolls back, EE is cancelled but the
+# SO stays submitted. The §5 polling tick's orphan / unexpected-
+# state detection is the safety net for this.
+
+
+def on_before_cancel_dispatch(doc: Any, method: str | None = None) -> None:
+    """Sales Order.before_cancel hook entry. Thin wrapper:
+      1. Scope-guard: bail out if this SO is not §11-pushed.
+      2. Else: call cancel_b2b_order_from_erpnext synchronously.
+         Its existing throws on refusal / infra-failure propagate
+         through this hook and block the local cancel.
+    Does NOT swallow exceptions — the throw is the load-bearing
+    refusal mechanism.
+    """
+    if doc.doctype != "Sales Order":
+        return
+    # Scope guard: only B2B-pushed SOs touch EE.
+    map_name = doc.get("ecs_b2b_order_map")
+    if not map_name:
+        return
+    # Defensive: confirm Map row exists (a stale back-ref shouldn't
+    # block cancel entirely).
+    if not frappe.db.exists("EasyEcom B2B Order Map", map_name):
+        return
+    map_status = frappe.db.get_value(
+        "EasyEcom B2B Order Map", map_name, "status"
+    )
+    if map_status not in CANCELLABLE_STATUSES:
+        # Already Cancelled / Invoice Pending / etc — let the local
+        # cancel proceed without an EE call. Cancellation on
+        # already-cancelled is benign; on Invoice Pending the §13.3
+        # post-dispatch flow is the right path (FDE will use that
+        # surface, not the local cancel button).
+        return
+    # Hand off — the existing function carries all the EE-side logic
+    # and the right exception semantics.
+    cancel_b2b_order_from_erpnext(sales_order=doc.name)
