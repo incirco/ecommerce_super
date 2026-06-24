@@ -186,7 +186,20 @@ def _gather_customer_payload_dict(customer: Any) -> dict[str, Any]:
     }
 
     billing = _find_address(customer.name, address_type="Billing")
-    shipping = _find_address(customer.name, address_type="Shipping")
+    # gh#60 — fall back to the Billing address when no Shipping-typed
+    # address is linked. EE's CreateCustomer requires dispatchState +
+    # dispatchPostalCode as mandatory; customers that ship to the
+    # same address they bill to (the common SME / B2B-large case)
+    # only carry a Billing-typed Address. Pre-fix that flagged with
+    # "missing dispatchState name for CreateCustomer" despite the
+    # billing address having all the required fields. The §10 Internal
+    # Customer bootstrap (PR #68) sidesteps this by minting BOTH
+    # address rows; this fallback makes the gate forgive customers
+    # the FDE didn't create via that bootstrap.
+    shipping = (
+        _find_address(customer.name, address_type="Shipping")
+        or billing
+    )
 
     out.update(
         {
