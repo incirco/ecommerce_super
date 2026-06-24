@@ -308,16 +308,35 @@ def _do_create(
     country_name = payload.get("country") or supplier.country or "India"
     classified = _classify_country(country_name)
 
+    # Whether the Indian tax-identifier path is taking the URP
+    # substitution (Unregistered supplier with no GSTIN). When True,
+    # we cannot derive a PAN from a GSTIN and the supplier likely
+    # doesn't have one on file — PAN drops out of the required gate.
+    # Same pattern §8e Customer Push uses (customer_push.py:248-253):
+    # URP substitution implies no GSTIN, no PAN gate, EE accepts the
+    # vendor record on the URP identifier alone.
+    on_urp_path = False
+
     if not is_overseas and classified != "foreign":
-        # Indian path: GSTIN + PAN required. URP substitution for
-        # Unregistered.
+        # Indian path: GSTIN required (URP substitution for Unregistered).
+        # PAN required only when GSTIN is real (URP path has no PAN to
+        # derive and Unregistered Indian vendors aren't legally required
+        # to hold one). gh#66 — earlier gate required PAN even on URP
+        # path; that rejected legitimate Unregistered vendors.
         if (supplier.gst_category or "").lower() == "unregistered" and not payload.get(
             "taxIdentificationNum"
         ):
             payload["taxIdentificationNum"] = "URP"
         # If GSTIN present but PAN missing — auto-extract.
         gstin = (payload.get("taxIdentificationNum") or "").strip()
-        if gstin and gstin != "URP" and not payload.get("PAN"):
+        if gstin == "URP":
+            on_urp_path = True
+            # Drop empty PAN so we don't send "" — EE rejects blank
+            # tax fields on the URP path (rather than treating "" as
+            # "not provided").
+            if not (payload.get("PAN") or "").strip():
+                payload.pop("PAN", None)
+        elif gstin and not payload.get("PAN"):
             extracted = gstin[2:12].upper()
             payload["PAN"] = extracted
     else:
@@ -329,7 +348,8 @@ def _do_create(
             payload.pop("PAN", None)
 
     # Required-presence checks BEFORE sending. Indian path requires
-    # all 7 mandatories; foreign drops the tax pair.
+    # GSTIN (or URP); PAN is required only when GSTIN is a real
+    # registration. Foreign / overseas: drops the tax pair entirely.
     required_keys: list[tuple[str, str]]
     if is_overseas or classified == "foreign":
         required_keys = [
@@ -349,8 +369,12 @@ def _do_create(
             ("currency", "default_currency"),
             ("zip", "billing zip"),
             ("taxIdentificationNum", "GSTIN"),
-            ("PAN", "PAN"),
         ]
+        # PAN only required when we have a real registration to derive
+        # it from (i.e., GSTIN is not URP). Mirrors §8e's Unregistered
+        # handling — see commit message for gh#66.
+        if not on_urp_path:
+            required_keys.append(("PAN", "PAN"))
 
     for ee_field, label in required_keys:
         if not str(payload.get(ee_field) or "").strip():
