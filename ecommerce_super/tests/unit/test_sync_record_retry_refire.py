@@ -87,9 +87,10 @@ class TestRetryNowDispatchesRefire(unittest.TestCase):
 
     def test_unregistered_doctype_returns_no_handler_reason(self) -> None:
         """A doctype without a registered re-fire handler still gets
-        the status flip (backwards-compat) but the response makes it
-        explicit that no re-fire was dispatched. Prevents the FDE from
-        thinking they queued something they didn't."""
+        the status flip (backwards-compat path — the flow's own sweep
+        picks up the Pending record). The response makes it explicit
+        that no re-fire was dispatched. Prevents the FDE from thinking
+        they queued something they didn't."""
         sr = _fake_failed_sr(
             entity_doctype="EasyEcom Location",
             entity_name="ECS-LOC-TEST",
@@ -99,16 +100,21 @@ class TestRetryNowDispatchesRefire(unittest.TestCase):
             result = sr_mod.retry_now(sr.name)
 
         sr.db_set.assert_called_once()
+        self.assertEqual(result["status"], "Pending")
         self.assertFalse(result["refire"]["enqueued"])
         self.assertIn("No retry-refire handler", result["refire"]["reason"])
         self.assertIn("EasyEcom Location", result["refire"]["reason"])
 
-    def test_refire_handler_exception_is_caught_and_logged(self) -> None:
-        """If the refire handler raises (e.g. enqueue_easyecom_job
-        hits a DB error), the status flip still landed — we don't
-        unflip it — and the error surfaces via the response + Error
-        Log. The Sync Record being in Pending is no worse than the
-        pre-fix behaviour, so leaving it there is safe."""
+    def test_refire_handler_exception_leaves_status_failed(self) -> None:
+        """gh#86-reopen regression guard: if the refire handler raises
+        (e.g. the Queue Job DocType rejects the job_type, or
+        enqueue_easyecom_job hits a DB error), the Sync Record must
+        STAY Failed with last_error preserved — flipping to Pending
+        leaves the record stranded (the exact symptom the original
+        gh#86 fix was meant to address). The pre-gh#86-reopen code
+        flipped status FIRST then enqueued; this caused the same
+        Pending-but-no-Queue-Job stranding the reporter hit on
+        live16version.frappe.cloud."""
         sr = _fake_failed_sr()
 
         with (
@@ -125,10 +131,36 @@ class TestRetryNowDispatchesRefire(unittest.TestCase):
         ):
             result = sr_mod.retry_now(sr.name)
 
-        sr.db_set.assert_called_once()
+        # Status flip MUST NOT happen — record stays Failed.
+        sr.db_set.assert_not_called()
+        self.assertEqual(result["status"], "Failed")
         self.assertFalse(result["refire"]["enqueued"])
         self.assertIn("RuntimeError", result["refire"]["reason"])
         log_error.assert_called_once()
+
+    def test_refire_returning_enqueued_false_leaves_status_failed(self) -> None:
+        """gh#86-reopen — same guard as above but for the
+        no-enabled-Account skip path. A handler that runs cleanly but
+        returns `enqueued: False` (e.g. Item/Customer/Supplier refire
+        with no enabled EE Account) MUST also leave status Failed —
+        we can't satisfy §6.5.1's 'next attempt enqueued' rule, so we
+        shouldn't pretend by flipping status."""
+        sr = _fake_failed_sr(entity_doctype="Item", entity_name="SKU-A")
+
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            # _first_enabled_ee_account returns None → handler skips
+            patch("frappe.db.get_value", return_value=None),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+            ) as enq,
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        sr.db_set.assert_not_called()
+        self.assertEqual(result["status"], "Failed")
+        self.assertFalse(result["refire"]["enqueued"])
+        enq.assert_not_called()
 
     def test_pending_status_still_rejected(self) -> None:
         """Pre-existing guard: only Failed/Cancelled can retry. A
@@ -238,7 +270,10 @@ class TestRefireHandlersForOtherEntities(unittest.TestCase):
         """Item / Customer / Supplier handlers need an EE Account to
         push against. When none is enabled, the handler must report a
         clear reason — not crash, not enqueue with a bogus None
-        account."""
+        account. gh#86-reopen: status must also stay Failed (the
+        enqueue didn't happen, so we can't honour §6.5.1's
+        'next attempt enqueued' rule — flipping anyway would strand
+        the record)."""
         sr = self._fake(entity_doctype="Item", entity_name="SKU-A")
         with (
             patch("frappe.get_doc", return_value=sr),
@@ -252,6 +287,9 @@ class TestRefireHandlersForOtherEntities(unittest.TestCase):
         self.assertFalse(result["refire"]["enqueued"])
         self.assertIn("No enabled EasyEcom Account", result["refire"]["reason"])
         enq.assert_not_called()
+        # gh#86-reopen: status stays Failed when enqueue didn't happen.
+        sr.db_set.assert_not_called()
+        self.assertEqual(result["status"], "Failed")
 
     def test_po_refire_enqueues_po_push_job_with_location_key(self) -> None:
         sr = self._fake(

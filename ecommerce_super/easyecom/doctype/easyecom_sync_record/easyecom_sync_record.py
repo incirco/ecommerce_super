@@ -188,18 +188,23 @@ def retry_now(sync_record_name: str) -> dict:
       - The original idempotency_key is REUSED (the row's existing
         `idempotency_key` field is untouched). Per §6.1, retries never
         recompute the key.
+      - **Next attempt enqueued** (gh#86 / gh#90 / gh#86-reopen).
 
-    Re-enqueue (the actual job dispatch) is dispatched per
-    `entity_doctype` via `_REFIRE_HANDLERS` below. Doctypes not in the
-    registry fall back to the original "flip flag, let the next
-    polling tick pick it up" behaviour — preserved for backwards
-    compatibility with flows that have their own re-fire path.
+    Ordering (gh#86-reopen): the enqueue runs BEFORE the status flip.
+    If the enqueue fails (handler raises, or no enabled EE Account,
+    or any other reason), the Sync Record stays Failed with its
+    original last_error preserved — re-stranding in Pending is the
+    exact symptom we're trying to prevent. The status flip only
+    commits when the next attempt is actually queued.
 
-    gh#86: §10 Delivery Note Sync Records used to be stranded in
-    Pending after Retry because there's no §10 polling tick — the
-    push only fires on `DN.on_submit`, and an already-submitted DN
-    can't re-fire that hook. The Delivery Note handler below enqueues
-    a Transfer Push job so the retry actually re-runs the push.
+    Two exceptions to the enqueue-first ordering:
+      - **No handler registered** for the entity_doctype → flip status
+        anyway (preserves the pre-gh#86 backwards-compat path: rely
+        on the flow's own polling sweep to pick up Pending records).
+        These doctypes don't fully satisfy §6.5.1 today; tracked as
+        a follow-up registration task.
+      - The pre-existing AlreadySynced→Pending force-resync edge
+        isn't exercised here (out of scope for §6.5.1).
     """
     doc = frappe.get_doc("EasyEcom Sync Record", sync_record_name)
     if doc.status not in {"Failed", "Cancelled"}:
@@ -209,21 +214,34 @@ def retry_now(sync_record_name: str) -> dict:
             ).format(doc.status)
         )
 
-    doc.db_set(
-        {
-            "status": "Pending",
-            "last_error": None,
-            "last_error_translation_key": None,
-        },
-        update_modified=False,
-        commit=True,
-    )
-
     refire_result = _refire_pending_sync_record(doc)
+    handler_registered = doc.entity_doctype in _REFIRE_HANDLERS
+
+    # Decide whether to flip the status:
+    #   - handler ran and enqueued        → flip (the spec-faithful path)
+    #   - handler ran but didn't enqueue  → DON'T flip (gh#86-reopen
+    #                                       regression guard); leave
+    #                                       Failed + last_error intact
+    #                                       so the FDE can re-act on
+    #                                       the real failure context
+    #   - no handler registered           → flip (backwards-compat;
+    #                                       rely on sweep)
+    should_flip = bool(refire_result.get("enqueued")) or not handler_registered
+
+    if should_flip:
+        doc.db_set(
+            {
+                "status": "Pending",
+                "last_error": None,
+                "last_error_translation_key": None,
+            },
+            update_modified=False,
+            commit=True,
+        )
 
     return {
         "name": sync_record_name,
-        "status": "Pending",
+        "status": "Pending" if should_flip else doc.status,
         "attempts_preserved": doc.attempts,
         "idempotency_key_preserved": doc.idempotency_key,
         "refire": refire_result,
