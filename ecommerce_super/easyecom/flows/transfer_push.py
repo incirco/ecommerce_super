@@ -404,6 +404,27 @@ def _warehouse_gstin(warehouse: str) -> str:
 # ============================================================
 
 
+def _unmapped_items_for_dn(dn: Any) -> list[str]:
+    """Return the list of DN line `item_code`s that have no
+    EasyEcom Item Map row. Empty list when every line is synced.
+
+    gh#93: shared between the post-submit `_run_preconditions` check
+    (accumulates to Drift / Failed Sync Record) and the pre-submit
+    `validate_pre_submit` guard (throws to block the save). Keeps the
+    two surfaces consistent — the FDE always sees the same set of
+    unsynced items whether they hit the early guard or the late
+    precondition.
+    """
+    unmapped: list[str] = []
+    for line in dn.items or []:
+        if not frappe.db.exists(
+            "EasyEcom Item Map",
+            {"erpnext_doctype": "Item", "erpnext_name": line.item_code},
+        ):
+            unmapped.append(line.item_code)
+    return unmapped
+
+
 def _run_preconditions(
     dn: Any, source_wh: str, target_wh: str, branch: str
 ) -> list[str]:
@@ -475,13 +496,7 @@ def _run_preconditions(
             )
 
     # (3) Item Map for every DN line.
-    unmapped: list[str] = []
-    for line in dn.items or []:
-        if not frappe.db.exists(
-            "EasyEcom Item Map",
-            {"erpnext_doctype": "Item", "erpnext_name": line.item_code},
-        ):
-            unmapped.append(line.item_code)
+    unmapped = _unmapped_items_for_dn(dn)
     if unmapped:
         errs.append(
             "DN line(s) reference Items without an EasyEcom Item Map: "
@@ -1942,6 +1957,28 @@ def validate_pre_submit(doc: Any, method: str | None = None) -> None:
                 "destination Company, or create a Warehouse named "
                 "'Goods In Transit' under it."
             ).format(destination_company)
+        )
+
+    # gh#93: block the save when any line Item is not synced to
+    # EasyEcom. Pre-fix, the same check existed only post-submit in
+    # `_run_preconditions` — soft, lands on Drift / Failed Sync Record
+    # *after* the DN submits. Per the reporter, the FDE wants the
+    # save itself blocked with an actionable message.
+    #
+    # Scoped to internal-customer §10 DNs (the `is_section10` gate
+    # above already ensured this). Normal external-customer
+    # Delivery Notes return unaffected.
+    unmapped = _unmapped_items_for_dn(doc)
+    if unmapped:
+        item_list = ", ".join(repr(s) for s in unmapped)
+        frappe.throw(
+            frappe._(
+                "DN line(s) reference Item(s) not yet synced to "
+                "EasyEcom: {0}. Run §8d Item Push (open each Item and "
+                "click Push to EasyEcom, or use Push All Pending Items "
+                "from the EasyEcom Account form) before saving this "
+                "internal-transfer Delivery Note."
+            ).format(item_list)
         )
 
 
