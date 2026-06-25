@@ -299,11 +299,210 @@ def _refire_delivery_note(doc: Document) -> dict:
     }
 
 
+def _first_enabled_ee_account() -> str | None:
+    """Return the docname of the first enabled EasyEcom Account.
+
+    Single-Company benches always have exactly one enabled account
+    (the methodology expects this). The refire handlers below use the
+    first enabled account when the per-flow auto-push flag isn't
+    relevant — the FDE clicking Retry implicitly authorises a push
+    against the (sole) enabled account, regardless of whether
+    auto-push-on-save is on.
+    """
+    return frappe.db.get_value("EasyEcom Account", {"enabled": 1}, "name")
+
+
+def _refire_item(doc: Document) -> dict:
+    """§8d Item Push re-fire. Mirrors `enqueue_item_push`
+    (item_push.py:1219)."""
+    from ecommerce_super.easyecom.flows.item_push import (
+        _item_push_idempotency_key,
+    )
+    from ecommerce_super.easyecom.queue import enqueue_easyecom_job
+
+    account_name = _first_enabled_ee_account()
+    if not account_name:
+        return {
+            "enqueued": False,
+            "reason": (
+                "No enabled EasyEcom Account found — cannot re-fire "
+                "Item Push. Enable an Account first."
+            ),
+        }
+    job = enqueue_easyecom_job(
+        job_type="Item Push",
+        company=doc.company,
+        target_doctype="Item",
+        target_name=doc.entity_name,
+        payload={"item_code": doc.entity_name, "account_name": account_name},
+        idempotency_key=_item_push_idempotency_key(
+            item_code=doc.entity_name,
+            account_name=account_name,
+            company=doc.company,
+        ),
+    )
+    return {
+        "enqueued": True,
+        "job_type": "Item Push",
+        "queue_job_name": getattr(job, "name", None) if job else None,
+    }
+
+
+def _refire_customer(doc: Document) -> dict:
+    """§8e Customer Push re-fire. Mirrors the enqueue shape at
+    customer_push.py:836."""
+    from ecommerce_super.easyecom.flows.customer_push import (
+        _customer_push_queue_idempotency_key,
+    )
+    from ecommerce_super.easyecom.queue import enqueue_easyecom_job
+
+    account_name = _first_enabled_ee_account()
+    if not account_name:
+        return {
+            "enqueued": False,
+            "reason": (
+                "No enabled EasyEcom Account found — cannot re-fire "
+                "Customer Push. Enable an Account first."
+            ),
+        }
+    job = enqueue_easyecom_job(
+        job_type="Customer Push",
+        company=doc.company,
+        target_doctype="Customer",
+        target_name=doc.entity_name,
+        payload={
+            "customer_docname": doc.entity_name,
+            "account_name": account_name,
+        },
+        idempotency_key=_customer_push_queue_idempotency_key(
+            customer_docname=doc.entity_name,
+            account_name=account_name,
+            company=doc.company,
+        ),
+    )
+    return {
+        "enqueued": True,
+        "job_type": "Customer Push",
+        "queue_job_name": getattr(job, "name", None) if job else None,
+    }
+
+
+def _refire_supplier(doc: Document) -> dict:
+    """§8f Supplier Push re-fire. Mirrors the enqueue shape at
+    supplier_push.py:934."""
+    from ecommerce_super.easyecom.flows.supplier_push import (
+        _supplier_push_queue_idempotency_key,
+    )
+    from ecommerce_super.easyecom.queue import enqueue_easyecom_job
+
+    account_name = _first_enabled_ee_account()
+    if not account_name:
+        return {
+            "enqueued": False,
+            "reason": (
+                "No enabled EasyEcom Account found — cannot re-fire "
+                "Supplier Push. Enable an Account first."
+            ),
+        }
+    job = enqueue_easyecom_job(
+        job_type="Supplier Push",
+        company=doc.company,
+        target_doctype="Supplier",
+        target_name=doc.entity_name,
+        payload={
+            "supplier_docname": doc.entity_name,
+            "account_name": account_name,
+        },
+        idempotency_key=_supplier_push_queue_idempotency_key(
+            supplier_docname=doc.entity_name,
+            account_name=account_name,
+            company=doc.company,
+        ),
+    )
+    return {
+        "enqueued": True,
+        "job_type": "Supplier Push",
+        "queue_job_name": getattr(job, "name", None) if job else None,
+    }
+
+
+def _refire_purchase_order(doc: Document) -> dict:
+    """§9 PO Push re-fire. Mirrors the enqueue shape at
+    po_push.py:1254. The Sync Record's `ee_location_key` column is the
+    source of truth for the location component of the idempotency key
+    (set by the original push); fall back to empty string if missing
+    (pre-existing rows from before the field was populated)."""
+    from ecommerce_super.easyecom.queue import enqueue_easyecom_job
+    from ecommerce_super.easyecom.utils.idempotency import po_push_key
+
+    location_key = doc.get("ee_location_key") or ""
+    # Retry re-asserts content only; the original push's
+    # `push_status_after_content` is the status-push side-effect, which
+    # the FDE can trigger separately via the PO Status Push surface if
+    # needed. Default to False here to keep retry semantics minimal.
+    job = enqueue_easyecom_job(
+        job_type="PO Push",
+        company=doc.company,
+        target_doctype="Purchase Order",
+        target_name=doc.entity_name,
+        payload={
+            "po_docname": doc.entity_name,
+            "push_status_after_content": 0,
+        },
+        idempotency_key=po_push_key(
+            company=doc.company,
+            po_name=doc.entity_name,
+            ee_location_key=location_key,
+        ),
+    )
+    return {
+        "enqueued": True,
+        "job_type": "PO Push",
+        "queue_job_name": getattr(job, "name", None) if job else None,
+    }
+
+
+def _refire_sales_order(doc: Document) -> dict:
+    """§11 SO Push re-fire. Mirrors the enqueue shape at
+    b2b_sales/push.py:112. The Sync Record's `ee_location_key` column
+    is the source of truth for the location component of the
+    idempotency key."""
+    from ecommerce_super.easyecom.queue import enqueue_easyecom_job
+    from ecommerce_super.easyecom.utils.correlation import new_correlation_id
+    from ecommerce_super.easyecom.utils.idempotency import so_push_key
+
+    location_key = doc.get("ee_location_key") or ""
+    job = enqueue_easyecom_job(
+        job_type="SO Push",
+        company=doc.company,
+        target_doctype="Sales Order",
+        target_name=doc.entity_name,
+        idempotency_key=so_push_key(
+            company=doc.company,
+            so_name=doc.entity_name,
+            ee_location_key=location_key,
+        ),
+        correlation_id=new_correlation_id(),
+    )
+    return {
+        "enqueued": True,
+        "job_type": "SO Push",
+        "queue_job_name": getattr(job, "name", None) if job else None,
+    }
+
+
 # Registry of per-doctype retry re-fire handlers. Each handler takes
 # the now-Pending Sync Record doc and returns a `{enqueued, ...}` dict.
-# gh#86: §10 Delivery Note was the originally-reported entity; add
-# other entity_doctypes here as their flows ship if Retry needs to
-# re-fire something more than a status flip.
+# gh#86 / gh#90: handlers shipped for every entity doctype that uses
+# Sync Records, so §6.5.1's "next attempt enqueued" rule is satisfied
+# immediately on Retry click (rather than waiting for the next sweep
+# tick). Add new entries here when new flows ship with their own
+# Sync Records.
 _REFIRE_HANDLERS: dict[str, Callable[[Document], dict]] = {
-    "Delivery Note": _refire_delivery_note,
+    "Delivery Note": _refire_delivery_note,        # §10 transfer push
+    "Item": _refire_item,                          # §8d item push
+    "Customer": _refire_customer,                  # §8e customer push
+    "Supplier": _refire_supplier,                  # §8f supplier push
+    "Purchase Order": _refire_purchase_order,      # §9 PO push
+    "Sales Order": _refire_sales_order,            # §11 B2B SO push
 }

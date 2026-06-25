@@ -146,5 +146,171 @@ class TestRetryNowDispatchesRefire(unittest.TestCase):
         sr.db_set.assert_not_called()
 
 
+class TestRefireHandlersForOtherEntities(unittest.TestCase):
+    """gh#90 — re-fire handlers registered for every entity_doctype
+    that uses Sync Records. Without these, the Retry button just
+    flipped status and waited for the next sweep tick to actually
+    re-fire — a §6.5.1 violation in spirit (handlers picked it up
+    eventually, but "next attempt enqueued" wasn't true at the
+    moment of the click)."""
+
+    def _fake(self, *, entity_doctype, entity_name, ee_location_key=""):
+        doc = MagicMock()
+        doc.name = f"ECS-SR-TEST-{entity_doctype.replace(' ', '_')}"
+        doc.status = "Failed"
+        doc.entity_doctype = entity_doctype
+        doc.entity_name = entity_name
+        doc.company = "_Test Company"
+        doc.attempts = 1
+        doc.idempotency_key = "test-key"
+        # Mock the .get() call used by the PO/SO refire handlers.
+        doc.get = lambda field, default=None: (
+            ee_location_key if field == "ee_location_key" else default
+        )
+        return doc
+
+    def test_item_refire_enqueues_item_push_job(self) -> None:
+        sr = self._fake(entity_doctype="Item", entity_name="SKU-A")
+        fake_qj = MagicMock()
+        fake_qj.name = "ECS-QJ-ITEM-001"
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            patch("frappe.db.get_value", return_value="EE-ACCT-MAIN"),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+                return_value=fake_qj,
+            ) as enq,
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        self.assertTrue(result["refire"]["enqueued"])
+        self.assertEqual(result["refire"]["job_type"], "Item Push")
+        kw = enq.call_args.kwargs
+        self.assertEqual(kw["job_type"], "Item Push")
+        self.assertEqual(kw["target_doctype"], "Item")
+        self.assertEqual(kw["target_name"], "SKU-A")
+        self.assertEqual(kw["payload"]["item_code"], "SKU-A")
+        self.assertEqual(kw["payload"]["account_name"], "EE-ACCT-MAIN")
+
+    def test_customer_refire_enqueues_customer_push_job(self) -> None:
+        sr = self._fake(entity_doctype="Customer", entity_name="CUST-001")
+        fake_qj = MagicMock()
+        fake_qj.name = "ECS-QJ-CUST-001"
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            patch("frappe.db.get_value", return_value="EE-ACCT-MAIN"),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+                return_value=fake_qj,
+            ) as enq,
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        self.assertTrue(result["refire"]["enqueued"])
+        self.assertEqual(result["refire"]["job_type"], "Customer Push")
+        kw = enq.call_args.kwargs
+        self.assertEqual(kw["job_type"], "Customer Push")
+        self.assertEqual(kw["target_doctype"], "Customer")
+        self.assertEqual(kw["payload"]["customer_docname"], "CUST-001")
+
+    def test_supplier_refire_enqueues_supplier_push_job(self) -> None:
+        sr = self._fake(entity_doctype="Supplier", entity_name="SUPP-001")
+        fake_qj = MagicMock()
+        fake_qj.name = "ECS-QJ-SUPP-001"
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            patch("frappe.db.get_value", return_value="EE-ACCT-MAIN"),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+                return_value=fake_qj,
+            ) as enq,
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        self.assertTrue(result["refire"]["enqueued"])
+        self.assertEqual(result["refire"]["job_type"], "Supplier Push")
+        kw = enq.call_args.kwargs
+        self.assertEqual(kw["job_type"], "Supplier Push")
+        self.assertEqual(kw["target_doctype"], "Supplier")
+        self.assertEqual(kw["payload"]["supplier_docname"], "SUPP-001")
+
+    def test_account_aware_handlers_skip_when_no_enabled_account(self) -> None:
+        """Item / Customer / Supplier handlers need an EE Account to
+        push against. When none is enabled, the handler must report a
+        clear reason — not crash, not enqueue with a bogus None
+        account."""
+        sr = self._fake(entity_doctype="Item", entity_name="SKU-A")
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            patch("frappe.db.get_value", return_value=None),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+            ) as enq,
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        self.assertFalse(result["refire"]["enqueued"])
+        self.assertIn("No enabled EasyEcom Account", result["refire"]["reason"])
+        enq.assert_not_called()
+
+    def test_po_refire_enqueues_po_push_job_with_location_key(self) -> None:
+        sr = self._fake(
+            entity_doctype="Purchase Order",
+            entity_name="PO-2026-001",
+            ee_location_key="ee69396945489",
+        )
+        fake_qj = MagicMock()
+        fake_qj.name = "ECS-QJ-PO-001"
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+                return_value=fake_qj,
+            ) as enq,
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        self.assertTrue(result["refire"]["enqueued"])
+        self.assertEqual(result["refire"]["job_type"], "PO Push")
+        kw = enq.call_args.kwargs
+        self.assertEqual(kw["job_type"], "PO Push")
+        self.assertEqual(kw["target_doctype"], "Purchase Order")
+        self.assertEqual(kw["target_name"], "PO-2026-001")
+        # Retry doesn't trigger the status-push side-effect; FDE can
+        # invoke that separately if they need it.
+        self.assertEqual(kw["payload"]["push_status_after_content"], 0)
+
+    def test_so_refire_enqueues_so_push_job_with_correlation_id(self) -> None:
+        sr = self._fake(
+            entity_doctype="Sales Order",
+            entity_name="SO-2026-001",
+            ee_location_key="ee69396945489",
+        )
+        fake_qj = MagicMock()
+        fake_qj.name = "ECS-QJ-SO-001"
+        with (
+            patch("frappe.get_doc", return_value=sr),
+            patch(
+                "ecommerce_super.easyecom.queue.enqueue_easyecom_job",
+                return_value=fake_qj,
+            ) as enq,
+            patch(
+                "ecommerce_super.easyecom.utils.correlation.new_correlation_id",
+                return_value="corr-test-001",
+            ),
+        ):
+            result = sr_mod.retry_now(sr.name)
+
+        self.assertTrue(result["refire"]["enqueued"])
+        self.assertEqual(result["refire"]["job_type"], "SO Push")
+        kw = enq.call_args.kwargs
+        self.assertEqual(kw["job_type"], "SO Push")
+        self.assertEqual(kw["target_doctype"], "Sales Order")
+        self.assertEqual(kw["target_name"], "SO-2026-001")
+        # SO Push carries a fresh correlation_id per attempt
+        # (matches the on_submit hook's behaviour at push.py:118).
+        self.assertEqual(kw["correlation_id"], "corr-test-001")
+
+
 if __name__ == "__main__":
     unittest.main()
