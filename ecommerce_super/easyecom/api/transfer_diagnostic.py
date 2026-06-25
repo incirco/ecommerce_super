@@ -113,20 +113,38 @@ def trace_dn(dn_name: str) -> dict[str, Any]:
         )
 
         # Gate 0d — at least one of source/target must be EE-mapped.
+        # gh#86: the per-side rows below (`source_warehouse_ee_mapped`,
+        # `target_warehouse_ee_mapped`) are INFORMATIONAL — they help
+        # the FDE see which branch the DN routes into (PO ⇒ target-only,
+        # B2B ⇒ source-only, STN ⇒ both). They are NOT push-deciding;
+        # `push_one_transfer` (transfer_push.py:139-156) only requires
+        # `source OR target` mapped. The deciding gate is
+        # `at_least_one_warehouse_ee_mapped`. We tag the per-side rows
+        # as `informational=True` and exclude them from the verdict.
         src_mapped = _is_ee_mapped_warehouse(source_wh)
         tgt_mapped = _is_ee_mapped_warehouse(target_wh)
         trace["gates"].append(
             {
                 "gate": "source_warehouse_ee_mapped",
                 "passed": bool(src_mapped),
-                "detail": f"warehouse={source_wh}",
+                "informational": True,
+                "detail": (
+                    f"warehouse={source_wh} "
+                    "(informational — only required for STN branch; "
+                    "PO branch expects source NOT mapped)"
+                ),
             }
         )
         trace["gates"].append(
             {
                 "gate": "target_warehouse_ee_mapped",
                 "passed": bool(tgt_mapped),
-                "detail": f"warehouse={target_wh}",
+                "informational": True,
+                "detail": (
+                    f"warehouse={target_wh} "
+                    "(informational — only required for STN branch; "
+                    "B2B branch expects target NOT mapped)"
+                ),
             }
         )
         trace["gates"].append(
@@ -136,6 +154,17 @@ def trace_dn(dn_name: str) -> dict[str, Any]:
                 "detail": "Gate-0: silently inert if neither warehouse is EE-mapped",
             }
         )
+        # Derived branch hint — purely diagnostic, helps the FDE confirm
+        # the routing matches their intent (gh#86).
+        if src_mapped and tgt_mapped:
+            branch = "STN (both warehouses EE-mapped)"
+        elif src_mapped and not tgt_mapped:
+            branch = "B2B (source EE-mapped, target not)"
+        elif tgt_mapped and not src_mapped:
+            branch = "PO (target EE-mapped, source not)"
+        else:
+            branch = "Inert (neither EE-mapped — push will short-circuit)"
+        trace["branch"] = branch
 
     # Downstream — what artifacts has the push (attempted or
     # successful) left in the DB?
@@ -195,7 +224,15 @@ def trace_dn(dn_name: str) -> dict[str, Any]:
     trace["downstream"]["api_calls"] = api_calls
 
     # Verdict — the most actionable line for the FDE.
-    failed_gates = [g for g in trace["gates"] if not g["passed"]]
+    # gh#86: only DECIDING gates determine the verdict. Informational
+    # gates (per-side EE-mapping flags) are kept in `trace["gates"]` so
+    # the FDE can see the branch routing context, but they never block
+    # the verdict — `push_one_transfer` only requires
+    # `at_least_one_warehouse_ee_mapped`.
+    failed_gates = [
+        g for g in trace["gates"]
+        if not g["passed"] and not g.get("informational")
+    ]
     if failed_gates:
         trace["verdict"] = (
             "Push did NOT fire — the following gate(s) failed: "

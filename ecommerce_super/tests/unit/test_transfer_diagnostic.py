@@ -232,5 +232,142 @@ class TestTraceDnShape(unittest.TestCase):
         self.assertIn("API Call", result["verdict"])
 
 
+class TestPoBranchVerdictNotMisleading(unittest.TestCase):
+    """gh#86 — the per-side EE-mapping rows
+    (`source_warehouse_ee_mapped` / `target_warehouse_ee_mapped`) are
+    INFORMATIONAL. They help the FDE see which branch the DN routes
+    into (PO ⇒ target-only, B2B ⇒ source-only, STN ⇒ both) but they
+    are NOT push-deciding — `push_one_transfer` only requires
+    `at_least_one_warehouse_ee_mapped`. The verdict must not call the
+    push out as blocked just because one side is unmapped."""
+
+    def _patch_permissions(self):
+        return patch(
+            "frappe.get_roles",
+            return_value=["System Manager", "EasyEcom System Manager"],
+        )
+
+    def _fake_dn(self, name="MAT-DN-2026-PO001"):
+        fake = type("FakeDN", (), {})()
+        fake.docstatus = 1
+        fake.is_internal_customer = 1
+        fake.name = name
+        fake.company = "_Test Company"
+        return fake
+
+    def test_po_branch_verdict_does_not_blame_source_warehouse_ee_mapped(self):
+        """The reporter's scenario: source ✗ EE, target ✓ EE (PO
+        branch). Pre-fix, the verdict named `source_warehouse_ee_mapped`
+        as a failing blocking gate. Post-fix, the per-side row is
+        marked `informational` and the verdict either succeeds or
+        names a different (genuinely-deciding) gate."""
+        from ecommerce_super.easyecom.api import transfer_diagnostic
+
+        def map_per_warehouse(wh):
+            # Source unmapped, target mapped — PO branch.
+            return wh == "Factory Main B2B - MMPL"
+
+        with (
+            self._patch_permissions(),
+            patch("frappe.db.exists", return_value=True),
+            patch("frappe.get_doc", return_value=self._fake_dn()),
+            patch(
+                "ecommerce_super.easyecom.api.transfer_diagnostic._resolve_source_target_pair",
+                return_value=(
+                    "Main Back Factory - MMPL",
+                    "Factory Main B2B - MMPL",
+                ),
+            ),
+            patch(
+                "ecommerce_super.easyecom.api.transfer_diagnostic._is_ee_mapped_warehouse",
+                side_effect=map_per_warehouse,
+            ),
+            patch("frappe.db.get_value", return_value=None),
+            patch("frappe.db.get_all", return_value=[]),
+        ):
+            result = transfer_diagnostic.trace_dn(
+                dn_name="MAT-DN-2026-PO001",
+            )
+
+        # The verdict must NOT mention source_warehouse_ee_mapped as a
+        # blocker — that's the regression we're guarding against.
+        self.assertNotIn("source_warehouse_ee_mapped", result["verdict"])
+        # The per-side row is still present but tagged informational.
+        src_row = next(
+            g for g in result["gates"]
+            if g["gate"] == "source_warehouse_ee_mapped"
+        )
+        self.assertTrue(src_row.get("informational"))
+        self.assertFalse(src_row["passed"])
+        # Branch hint surfaces the PO routing.
+        self.assertIn("PO", result["branch"])
+
+    def test_b2b_branch_verdict_does_not_blame_target_warehouse_ee_mapped(self):
+        """Mirror case — B2B branch: source ✓ EE, target ✗ EE. The
+        target-side row must not appear in the verdict either."""
+        from ecommerce_super.easyecom.api import transfer_diagnostic
+
+        def map_per_warehouse(wh):
+            # Source mapped, target unmapped — B2B branch.
+            return wh == "Factory Main B2B - MMPL"
+
+        with (
+            self._patch_permissions(),
+            patch("frappe.db.exists", return_value=True),
+            patch("frappe.get_doc", return_value=self._fake_dn("MAT-DN-2026-B2B001")),
+            patch(
+                "ecommerce_super.easyecom.api.transfer_diagnostic._resolve_source_target_pair",
+                return_value=(
+                    "Factory Main B2B - MMPL",
+                    "Paota Old Showroom - MMPL",
+                ),
+            ),
+            patch(
+                "ecommerce_super.easyecom.api.transfer_diagnostic._is_ee_mapped_warehouse",
+                side_effect=map_per_warehouse,
+            ),
+            patch("frappe.db.get_value", return_value=None),
+            patch("frappe.db.get_all", return_value=[]),
+        ):
+            result = transfer_diagnostic.trace_dn(
+                dn_name="MAT-DN-2026-B2B001",
+            )
+
+        self.assertNotIn("target_warehouse_ee_mapped", result["verdict"])
+        self.assertIn("B2B", result["branch"])
+
+    def test_inert_branch_does_blame_at_least_one_warehouse_ee_mapped(self):
+        """The genuinely-deciding Gate-0 IS reported as blocking when
+        it fails (neither side EE-mapped). The fix doesn't suppress
+        real failures, only informational-row mislabeling."""
+        from ecommerce_super.easyecom.api import transfer_diagnostic
+
+        with (
+            self._patch_permissions(),
+            patch("frappe.db.exists", return_value=True),
+            patch("frappe.get_doc", return_value=self._fake_dn("MAT-DN-2026-INERT001")),
+            patch(
+                "ecommerce_super.easyecom.api.transfer_diagnostic._resolve_source_target_pair",
+                return_value=(
+                    "Paota Old Showroom - MMPL",
+                    "Paota New Showroom - MMPL",
+                ),
+            ),
+            patch(
+                "ecommerce_super.easyecom.api.transfer_diagnostic._is_ee_mapped_warehouse",
+                return_value=False,  # neither mapped
+            ),
+            patch("frappe.db.get_value", return_value=None),
+            patch("frappe.db.get_all", return_value=[]),
+        ):
+            result = transfer_diagnostic.trace_dn(
+                dn_name="MAT-DN-2026-INERT001",
+            )
+
+        # The DECIDING gate fails and the verdict names it.
+        self.assertIn("at_least_one_warehouse_ee_mapped", result["verdict"])
+        self.assertIn("Inert", result["branch"])
+
+
 if __name__ == "__main__":
     unittest.main()
