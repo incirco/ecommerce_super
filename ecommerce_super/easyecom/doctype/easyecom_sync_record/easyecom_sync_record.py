@@ -11,7 +11,7 @@ upsert path so callers never construct duplicates by accident.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import frappe
 from frappe import _
@@ -189,13 +189,17 @@ def retry_now(sync_record_name: str) -> dict:
         `idempotency_key` field is untouched). Per §6.1, retries never
         recompute the key.
 
-    Re-enqueue (the actual job dispatch) is the flow handler's
-    responsibility per §6.7 — flow handlers detect Pending Sync Records
-    on their next polling tick or on doc-event fire. Until those
-    handlers ship (§8+), this method correctly marks the record
-    available for retry; an FDE who needs the immediate-dispatch flavour
-    of retry should use Queue Job's Retry button instead (which re-uses
-    enqueue_easyecom_job directly).
+    Re-enqueue (the actual job dispatch) is dispatched per
+    `entity_doctype` via `_REFIRE_HANDLERS` below. Doctypes not in the
+    registry fall back to the original "flip flag, let the next
+    polling tick pick it up" behaviour — preserved for backwards
+    compatibility with flows that have their own re-fire path.
+
+    gh#86: §10 Delivery Note Sync Records used to be stranded in
+    Pending after Retry because there's no §10 polling tick — the
+    push only fires on `DN.on_submit`, and an already-submitted DN
+    can't re-fire that hook. The Delivery Note handler below enqueues
+    a Transfer Push job so the retry actually re-runs the push.
     """
     doc = frappe.get_doc("EasyEcom Sync Record", sync_record_name)
     if doc.status not in {"Failed", "Cancelled"}:
@@ -214,9 +218,92 @@ def retry_now(sync_record_name: str) -> dict:
         update_modified=False,
         commit=True,
     )
+
+    refire_result = _refire_pending_sync_record(doc)
+
     return {
         "name": sync_record_name,
         "status": "Pending",
         "attempts_preserved": doc.attempts,
         "idempotency_key_preserved": doc.idempotency_key,
+        "refire": refire_result,
     }
+
+
+def _refire_pending_sync_record(doc: Document) -> dict:
+    """Dispatch a re-fire for the now-Pending Sync Record based on its
+    `entity_doctype`. Returns a small dict the caller surfaces to the
+    FDE so they know whether the retry actually fired or just flipped
+    the flag.
+
+    Doctypes without a registered handler return
+    `{"enqueued": False, "reason": "no handler"}` — preserved
+    backwards-compat for flows that own their own re-fire path.
+    """
+    handler = _REFIRE_HANDLERS.get(doc.entity_doctype)
+    if handler is None:
+        return {
+            "enqueued": False,
+            "reason": (
+                f"No retry-refire handler registered for entity_doctype "
+                f"{doc.entity_doctype!r} — the Sync Record is now in "
+                "Pending and will be picked up by the flow's next "
+                "polling tick (if any)."
+            ),
+        }
+    try:
+        return handler(doc)
+    except Exception as exc:
+        # Don't unflip the status — leaving it in Pending is no worse
+        # than the pre-fix behaviour, and the FDE gets a clear error.
+        frappe.log_error(
+            title=(
+                f"gh#86: retry re-fire handler raised for {doc.name} "
+                f"({doc.entity_doctype})"
+            ),
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {
+            "enqueued": False,
+            "reason": (
+                f"Retry re-fire handler raised: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        }
+
+
+def _refire_delivery_note(doc: Document) -> dict:
+    """§10 Transfer Push re-fire. Enqueues a Transfer Push job for the
+    DN named by `entity_name`. Mirrors the enqueue shape used by the
+    batch sweep in `transfer_push.push_all_pending_transfers`."""
+    from ecommerce_super.easyecom.queue import enqueue_easyecom_job
+    from ecommerce_super.easyecom.utils.idempotency import internal_job_key
+
+    job = enqueue_easyecom_job(
+        job_type="Transfer Push",
+        company=doc.company,
+        target_doctype="Delivery Note",
+        target_name=doc.entity_name,
+        payload={"dn_name": doc.entity_name},
+        idempotency_key=internal_job_key(
+            job_type="transfer_push",
+            company=doc.company,
+            target_doctype="Delivery Note",
+            target_name=doc.entity_name,
+        ),
+    )
+    return {
+        "enqueued": True,
+        "job_type": "Transfer Push",
+        "queue_job_name": getattr(job, "name", None) if job else None,
+    }
+
+
+# Registry of per-doctype retry re-fire handlers. Each handler takes
+# the now-Pending Sync Record doc and returns a `{enqueued, ...}` dict.
+# gh#86: §10 Delivery Note was the originally-reported entity; add
+# other entity_doctypes here as their flows ship if Retry needs to
+# re-fire something more than a status flip.
+_REFIRE_HANDLERS: dict[str, Callable[[Document], dict]] = {
+    "Delivery Note": _refire_delivery_note,
+}
