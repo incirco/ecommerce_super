@@ -30,6 +30,15 @@ function _ensureSaved(frm, message) {
     return true;
 }
 
+// gh#85 — `frappe.msgprint` fired synchronously inside a `freeze:true`
+// callback can mount under the dismissing freeze backdrop on cold
+// invocations, painting a blank dialog body. Defer to the next tick so
+// the dialog mounts after the freeze overlay is torn down. Used by all
+// Discover / Pull frozen callbacks below.
+function _deferredMsgprint(opts) {
+    setTimeout(() => frappe.msgprint(opts), 0);
+}
+
 function _runLocationDiscovery(frm) {
     if (!_ensureSaved(frm, "Save the Account before running discovery — the EasyEcom client reads credentials and the default location from the persisted record.")) {
         return;
@@ -54,7 +63,7 @@ function _runLocationDiscovery(frm) {
         callback(r) {
             const result = r.message || {};
             if (!result.ok) {
-                frappe.msgprint({
+                _deferredMsgprint({
                     title: __("Discovery Failed"),
                     message: result.message || __("Unknown error."),
                     indicator: "red",
@@ -86,14 +95,14 @@ function _runLocationDiscovery(frm) {
                             .join("<br>")
                 );
             }
-            frappe.msgprint({
+            _deferredMsgprint({
                 title: __("Discovery Complete"),
                 message: lines.join(""),
                 indicator: result.failed_count > 0 ? "orange" : "green",
             });
         },
         error() {
-            frappe.msgprint({
+            _deferredMsgprint({
                 title: __("Discovery Failed"),
                 message: __("The Discover Locations call itself failed (network, server, or permission)."),
                 indicator: "red",
@@ -130,7 +139,7 @@ function _runChannelDiscovery(frm) {
             callback(r) {
                 const result = r.message || {};
                 if (!result.ok) {
-                    frappe.msgprint({
+                    _deferredMsgprint({
                         title: __("Channel Discovery Failed"),
                         message: result.message || __("Unknown error."),
                         indicator: "red",
@@ -166,14 +175,14 @@ function _runChannelDiscovery(frm) {
                                 .join("<br>")
                     );
                 }
-                frappe.msgprint({
+                _deferredMsgprint({
                     title: __("Channel Discovery Complete"),
                     message: lines.join(""),
                     indicator: result.locations_failed > 0 ? "orange" : "green",
                 });
             },
             error() {
-                frappe.msgprint({
+                _deferredMsgprint({
                     title: __("Channel Discovery Failed"),
                     message: __(
                         "The Discover Channels call itself failed (network, server, or permission)."
@@ -287,7 +296,7 @@ function _runPullAllPendingGrns(frm) {
         callback(r) {
             const result = r.message || {};
             if (!result.ok) {
-                frappe.msgprint({
+                _deferredMsgprint({
                     title: __("Pull Failed"),
                     message: result.message || __("Unknown error."),
                     indicator: "red",
@@ -315,14 +324,14 @@ function _runPullAllPendingGrns(frm) {
                     );
                 }
             });
-            frappe.msgprint({
+            _deferredMsgprint({
                 title: __("GRN Pull Complete"),
                 message: lines.join(""),
                 indicator: total_grns > 0 ? "green" : "grey",
             });
         },
         error() {
-            frappe.msgprint({
+            _deferredMsgprint({
                 title: __("GRN Pull Failed"),
                 message: __("The scheduled_grn_pull call itself failed."),
                 indicator: "red",
