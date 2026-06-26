@@ -250,10 +250,12 @@ Add the items, quantities, and rates as usual.
 For Cases 1, 2, 3 (anything that hits EasyEcom): each item must
 already exist in EasyEcom (its EE Item Map status should be
 `Mapped` or `Created-Flagged`). If you pick an unmapped item, the
-submit will succeed but the §10 push will land in Drift with a
-message about "Items without an EasyEcom Item Map".
+**save itself will be blocked** (gh#93) with a popup naming the
+unsynced item(s) and pointing you at §8d Item Push. Sync the item
+first, then save.
 
-For Case 4 (Inert): any ERPNext item works.
+For Case 4 (Inert): any ERPNext item works (the §10 guard doesn't
+fire on Inert because `is_internal_customer = 0`).
 
 ### Step 6. Save → Submit
 
@@ -376,12 +378,19 @@ soft-deleted vendor that EE's vendor list doesn't show). Two ways:
 - Create a fresh Internal Supplier with a different name (gets
   a new auto-generated code, no collision).
 
-### "DN line(s) reference Items without an EasyEcom Item Map"
+### "DN line(s) reference Item(s) not yet synced to EasyEcom"
 
 The items on the DN aren't yet known to EasyEcom. Push each item
-to EE first via the **Push to EasyEcom** button on the Item form.
-Or for Case 4 (Inert), any item works — pick one that's mapped if
-in doubt.
+to EE first via the **Push to EasyEcom** button on the Item form,
+or batch via **Push All Pending Items** on the EasyEcom Account
+form. Then re-save the DN.
+
+gh#93: as of `a23e0d9`, this is a **pre-submit block** — the save
+is refused outright with the unsynced item_code(s) named in the
+popup. The older Drift-on-Failed-Sync-Record behavior only fires
+for pre-`a23e0d9` DNs that already submitted (and for the
+Internal-pair / GST / GIT-warehouse preconditions which still
+land on Drift if they miss after the Item Map check passes).
 
 ### "Negative stock" or "Serial No / Batch No are mandatory"
 
