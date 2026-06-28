@@ -1,21 +1,45 @@
 """Date formatters for the §11 createOrder payload.
 
-EE expects two distinct datetime strings on a B2B order:
-  - `orderDate`         — UTC, "YYYY-MM-DD HH:MM:SS"
-  - `expDeliveryDate`   — IST, "YYYY-MM-DD HH:MM:SS"
+**EE timezone behaviour (verified against Harmony 2026-06-28)**:
+
+EE's `orderDate` parser is timezone-aware:
+
+  - Without offset (`"2026-06-28 00:00:00"`), EE treats input as UTC
+    and adds +5:30 when displaying in IST UI → `"2026-06-28 05:30:00"`.
+    Wire and display don't match.
+  - With explicit IST offset (`"2026-06-28 00:00:00+05:30"`), EE
+    honors the timezone and stores the moment correctly. Display
+    strips the offset and shows `"2026-06-28 00:00:00"`. The date
+    and time portions on wire match the display verbatim.
+
+We send **`"YYYY-MM-DD HH:MM:SS+05:30"`** (IST with explicit offset)
+so the wire and display match. The trailing `+05:30` is a wire-only
+protocol marker (EE strips it on display) — it's the cost of getting
+EE to honor IST instead of defaulting to UTC interpretation.
+
+  - `format_ist_datetime(date, time=None)` → orderDate (IST with `+05:30`)
+  - `format_ist_date(date)`               → expDeliveryDate (IST midnight, no offset)
+
+Why no offset on `expDeliveryDate`? Verified: that field doesn't
+get the +5:30 shift even without an offset — EE treats `expDeliveryDate`
+as IST by default and `orderDate` as UTC by default. Per-field
+asymmetry on EE side; we mirror it field-by-field.
+
+`format_utc_datetime` is retained as a deprecated alias pointing at
+`format_ist_datetime`. The old name was a misnomer (it produced UTC
+strings under the prior convention); the alias preserves any
+external callers during cutover.
 
 ERPNext SO has `transaction_date` (Date, no time-of-day) and
 `delivery_date` (Date). The standard SO doesn't store a
 `transaction_time`; the §11 packet referenced one that doesn't
 exist, and the design-lead's pre-Stage-1 ruling was to drop the
-time component entirely: midnight IST → UTC is deterministic,
-idempotent under retries, and matches ERPNext's accounting
-semantic of `transaction_date` as the order's official date.
+time component entirely.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,19 +47,21 @@ from frappe.utils import get_datetime, getdate
 
 
 IST = ZoneInfo("Asia/Kolkata")
-UTC = timezone.utc
 
 
-def format_utc_datetime(date_part: Any, time_part: Any = None) -> str:
-    """Format ERPNext date (+ optional time) as a UTC string for orderDate.
+def format_ist_datetime(date_part: Any, time_part: Any = None) -> str:
+    """Format ERPNext date (+ optional time) as an IST datetime string
+    with explicit `+05:30` timezone offset for `orderDate`.
 
-    EE expects `YYYY-MM-DD HH:MM:SS` in UTC. If `time_part` is None,
-    default to 00:00:00 IST, then convert to UTC — produces the
-    previous day's 18:30:00 in UTC for an Indian midnight.
+    Returns `"YYYY-MM-DD HH:MM:SS+05:30"`. The trailing offset is
+    required because EE's `orderDate` parser defaults to UTC
+    interpretation without it (verified live 2026-06-28). With the
+    offset, EE honors IST and strips the marker on display — wire
+    date AND time match the EE UI display verbatim.
 
-    `time_part` is accepted for forward compatibility (Custom-Field
-    transaction_time, if/when added) but §11 Phase 1 callers pass
-    only the date.
+    If `time_part` is None, default to 00:00:00 IST. `time_part` is
+    accepted for forward compatibility (Custom-Field transaction_time,
+    if/when added) but §11 callers pass only the date.
     """
     d = getdate(date_part)
     if time_part is None:
@@ -43,8 +69,10 @@ def format_utc_datetime(date_part: Any, time_part: Any = None) -> str:
     else:
         t = get_datetime(time_part).time()
     dt_ist = datetime.combine(d, t, tzinfo=IST)
-    dt_utc = dt_ist.astimezone(UTC)
-    return dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+    # Hardcode `+05:30` suffix — IST is fixed (no daylight saving).
+    # Python's %z produces `+0530` without the colon; EE accepts the
+    # colon-separated form per the live probe (2026-06-28).
+    return dt_ist.strftime("%Y-%m-%d %H:%M:%S") + "+05:30"
 
 
 def format_ist_date(date_part: Any) -> str:
@@ -58,3 +86,9 @@ def format_ist_date(date_part: Any) -> str:
     d = getdate(date_part)
     dt_ist = datetime.combine(d, time(0, 0, 0), tzinfo=IST)
     return dt_ist.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# Backwards-compat alias for any external caller. The old name was a
+# misnomer (it produced UTC strings); the new name is accurate. Delete
+# this alias in a future cleanup once we confirm no external callers.
+format_utc_datetime = format_ist_datetime  # DEPRECATED: use format_ist_datetime

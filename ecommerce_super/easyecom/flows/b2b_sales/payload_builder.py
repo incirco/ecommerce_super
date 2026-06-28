@@ -41,7 +41,7 @@ from ecommerce_super.easyecom.flows.b2b_sales.customer_block import (
 )
 from ecommerce_super.easyecom.flows.b2b_sales.date_format import (
     format_ist_date,
-    format_utc_datetime,
+    format_ist_datetime,
 )
 from ecommerce_super.easyecom.flows.b2b_sales.payment import (
     derive_payment_fields,
@@ -132,7 +132,7 @@ def build_old_b2b_payload(so: Any, ee_account: Any) -> dict:
     return {
         "orderType": "businessorder",
         "orderNumber": so.name,
-        "orderDate": format_utc_datetime(so.transaction_date),
+        "orderDate": format_ist_datetime(so.transaction_date),
         "expDeliveryDate": format_ist_date(so.delivery_date),
         "is_market_shipped": IS_MARKET_SHIPPED,
         "remarks1": so.terms or "",
@@ -171,7 +171,7 @@ def build_new_b2b_payload(so: Any, ee_account: Any) -> dict:
     return {
         "orderType": "businessorder",
         "orderNumber": so.name,
-        "orderDate": format_utc_datetime(so.transaction_date),
+        "orderDate": format_ist_datetime(so.transaction_date),
         "is_market_shipped": IS_MARKET_SHIPPED,
         "remarks1": so.terms or "",
         "is_pricing_master": IS_PRICING_MASTER,
