@@ -500,6 +500,11 @@ scheduler_events = {
         "*/5 * * * *": [
             "ecommerce_super.easyecom.operational.connection_health.update_account_connection_status",
             "ecommerce_super.easyecom.flows.b2b_sales.polling.reconcile_all_pending_b2b_orders",
+            # §12 B2C — per-Marketplace-Account walker over
+            # /orders/V2/getAllOrders?status=Manifested. Per-Account
+            # polling_cadence_minutes (default 5) gates which Accounts
+            # qualify per tick. Cursor on Marketplace Account.last_pull_orders.
+            "ecommerce_super.easyecom.flows.b2c_sales.polling.reconcile_all_marketplace_accounts",
         ],
         # Reclaim Queue Job rows in state=Running with no live RQ job (§6.3.9).
         "0 */1 * * *": [
