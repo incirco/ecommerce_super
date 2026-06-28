@@ -54,6 +54,33 @@ On the ERPNext side:
 The secret is encrypted at rest via Frappe's Password fieldtype. Once saved
 you can't read it back (only re-set). Keep a copy in a password manager.
 
+### Step 2b — Decide what Custom GSP actually mints (toggles)
+
+Below the secret field there are two Check fields, both **ON by default**:
+
+| Field | Default | When you'd turn it OFF |
+|---|---|---|
+| `gsp_mint_einvoice` (Mint E-Invoice via India Compliance) | ON | Client is below the e-invoicing turnover threshold; OR e-invoicing is handled externally (marketplace, separate IRP integration); OR the client just wants Custom GSP for ERPNext-side invoice PDFs without minting IRN |
+| `gsp_mint_ewaybill` (Mint E-Way Bill via India Compliance) | ON | Client handles e-way bills physically (forwarder paperwork); OR via another system; OR shipments don't cross the value threshold for EWB |
+
+When **either toggle is OFF**, the flow still:
+- Creates / finds the ERPNext Sales Invoice (idempotent on EE's `invoice_id`)
+- Submits the SI (GL impact happens regardless)
+- Returns the EE-shape response with `invoice_pdf` URL populated
+
+What it **skips**:
+- `gsp_mint_einvoice` OFF → no `generate_e_invoice` call. Response has empty `irn` / `ack_number` / `ack_date` / `irn_qr` fields.
+- `gsp_mint_ewaybill` OFF → no `generate_e_waybill` call. Response has empty `eway_bill_number` / `eway_bill_date` / `eway_bill_pdf`. Transport fields (vehicle, transporter) are echoed back so EE has a paper trail.
+
+**Common combinations:**
+- Both ON (default) → Full Mode 1: EE invoices land in ERPNext + NIC IRP + NIC EWB. Right for most clients above the e-invoicing threshold.
+- E-invoice ON, EWB OFF → IRN minted, but client uses physical paperwork / forwarder for EWB. Common for textile / FMCG with intra-state shipments.
+- Both OFF → ERPNext is the SI authority, EE consumes the PDF, but no compliance minting on either side. Right when client handles compliance entirely externally OR is below thresholds.
+
+Note: NIC EWB requires an IRN as input — so `gsp_mint_ewaybill` ON + `gsp_mint_einvoice` OFF will fail at EWB time. The IC error will surface as HTTP 422 to EE.
+
+Idempotency is unaffected by toggles: once an IRN/EWB is minted, future calls return the cached value regardless of toggle state. Flipping a toggle after minting only affects future fresh invoices, not historical ones.
+
 ### Step 3 — Configure EE-side Custom GSP
 
 ```

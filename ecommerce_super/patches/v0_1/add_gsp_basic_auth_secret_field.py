@@ -48,6 +48,40 @@ def execute() -> None:
                         "Leave blank to disable Custom GSP for this Account."
                     ),
                 },
+                {
+                    "fieldname": "gsp_mint_einvoice",
+                    "label": "Mint E-Invoice (IRN) via India Compliance",
+                    "fieldtype": "Check",
+                    "default": "1",
+                    "insert_after": "gsp_basic_auth_secret",
+                    "description": (
+                        "When ON (default), /einvoice/update mints IRN on "
+                        "NIC IRP via India Compliance and returns the IRN/QR "
+                        "in the response. When OFF, the SI is still created "
+                        "and submitted (GL impact happens), but NO NIC IRP "
+                        "call is made — response carries empty irn/ack "
+                        "fields and only the PDF URL. Turn OFF for clients "
+                        "below the e-invoicing turnover threshold OR who "
+                        "handle IRN externally."
+                    ),
+                },
+                {
+                    "fieldname": "gsp_mint_ewaybill",
+                    "label": "Mint E-Way Bill via India Compliance",
+                    "fieldtype": "Check",
+                    "default": "1",
+                    "insert_after": "gsp_mint_einvoice",
+                    "description": (
+                        "When ON (default), /ewaybill/update mints e-way "
+                        "bill on NIC EWB via India Compliance. When OFF, no "
+                        "NIC EWB call — response carries empty "
+                        "eway_bill_number / eway_bill_date / eway_bill_pdf. "
+                        "Turn OFF for clients who handle e-way bills "
+                        "physically (forwarder paperwork) or via another "
+                        "system. Note: NIC EWB usually requires an IRN, so "
+                        "this is typically ON when E-Invoice is ON."
+                    ),
+                },
             ],
         },
         ignore_validate=True,

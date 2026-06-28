@@ -201,12 +201,20 @@ def find_si_by_invoice_id(ee_invoice_id: str) -> str:
 # ============================================================
 
 
-def mint_irn_for_si(si_name: str) -> dict[str, Any]:
-    """Submit SI if Draft, then call IC's generate_e_invoice.
+def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str, Any]:
+    """Submit SI if Draft, then call IC's generate_e_invoice
+    (gated on the EE Account's gsp_mint_einvoice toggle).
 
     Returns the response shape EE expects:
       {invoice_id, erp_invoice_num, irn, ack_number, ack_date,
        invoice_pdf, irn_qr, invoice_base64}
+
+    Behaviour:
+      - gsp_mint_einvoice ON (default): mint IRN on NIC IRP via IC.
+        Response carries populated IRN/QR/ack fields.
+      - gsp_mint_einvoice OFF: SI is created + submitted (GL impact
+        happens), but NO NIC IRP call. Response carries empty
+        irn/ack_number/ack_date/irn_qr fields and only the PDF URL.
 
     Idempotent — if SI already has IRN, returns cached without
     calling NIC IRP again (critical: re-minting creates duplicate
@@ -217,20 +225,28 @@ def mint_irn_for_si(si_name: str) -> dict[str, Any]:
     """
     si = frappe.get_doc("Sales Invoice", si_name)
 
-    # Idempotency — IRN already minted
+    # Idempotency — IRN already minted (regardless of toggle, return
+    # cached if present; never re-mint).
     if si.get("irn"):
         return _assemble_irn_response(si)
 
-    # IC requires submitted SI. Submit if Draft.
+    # IC requires submitted SI. Submit if Draft (whether or not we
+    # then mint IRN — the GL impact happens either way).
     if si.docstatus == 0:
         try:
             si.flags.ignore_permissions = True
             si.submit()
         except Exception as exc:
             raise GSPHandlerError(
-                f"SI {si_name} could not be submitted before IRN mint: "
+                f"SI {si_name} could not be submitted: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
+
+    # Toggle gate — skip IC mint if the EE Account has it off.
+    if not _should_mint_einvoice(ee_account):
+        si.reload()
+        # Return response with empty IRN fields but populated PDF URL.
+        return _assemble_irn_response(si)
 
     # Call India Compliance.
     from india_compliance.gst_india.utils.e_invoice import (
@@ -271,26 +287,41 @@ def mint_eway_for_si(
     si_name: str,
     *,
     transport_values: dict[str, Any],
+    ee_account: str | None = None,
 ) -> dict[str, Any]:
-    """Call IC's generate_e_waybill with transport values from EE.
+    """Call IC's generate_e_waybill with transport values from EE
+    (gated on the EE Account's gsp_mint_ewaybill toggle).
 
     Returns the response shape EE expects:
       {invoice_id, erp_invoice_num, eway_bill_number, eway_bill_date,
        eway_bill_pdf, transport_mode, vehicle_number, vehicle_type,
        transporter_gst, transporter_name, eway_bill_base64}
 
+    Behaviour:
+      - gsp_mint_ewaybill ON (default): mint e-way bill on NIC EWB via IC.
+        Response carries populated eway_bill_number/date.
+      - gsp_mint_ewaybill OFF: NO NIC EWB call. Response carries
+        empty eway_bill_number/date/pdf — but transport fields echo
+        back so EE has a record.
+
     Idempotent — if SI.ewaybill already populated, returns cached.
     """
     si = frappe.get_doc("Sales Invoice", si_name)
 
     if si.get("ewaybill"):
-        return _assemble_eway_response(si)
+        return _assemble_eway_response(si, transport_values=transport_values)
 
     if si.docstatus != 1:
         raise GSPHandlerError(
             f"SI {si_name} must be submitted before e-way bill mint. "
-            f"Call /einvoice/update first to submit + mint IRN."
+            f"Call /einvoice/update first to submit (+ optionally mint IRN)."
         )
+
+    # Toggle gate — skip IC mint if the EE Account has it off.
+    if not _should_mint_ewaybill(ee_account):
+        # Return response with empty eway fields but echo transport
+        # values so EE has a paper trail of what was attempted.
+        return _assemble_eway_response(si, transport_values=transport_values)
 
     import json as _json
     from india_compliance.gst_india.utils.e_waybill import (
@@ -306,7 +337,7 @@ def mint_eway_for_si(
     except Exception as exc:
         si.reload()
         if si.get("ewaybill"):
-            return _assemble_eway_response(si)
+            return _assemble_eway_response(si, transport_values=transport_values)
         raise GSPHandlerError(
             f"India Compliance e-way bill mint failed for {si_name}: "
             f"{type(exc).__name__}: {exc}"
@@ -346,8 +377,19 @@ def _assemble_irn_response(si: Any) -> dict[str, Any]:
     }
 
 
-def _assemble_eway_response(si: Any) -> dict[str, Any]:
-    """Build the data.invoice_details payload per EE's /ewaybill contract."""
+def _assemble_eway_response(
+    si: Any,
+    *,
+    transport_values: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the data.invoice_details payload per EE's /ewaybill contract.
+
+    When `transport_values` is provided (the request payload from EE), we
+    echo back the transport fields so the EE record reflects what was
+    requested even when the IC mint was skipped (toggle off) or when the
+    SI hasn't yet had those fields set by the IC flow.
+    """
+    tv = transport_values or {}
     return {
         "invoice_id": str(si.get("ecs_easyecom_invoice_id") or ""),
         "erp_invoice_num": si.name,
@@ -356,14 +398,74 @@ def _assemble_eway_response(si: Any) -> dict[str, Any]:
             si.get("e_waybill_validity").isoformat()
             if si.get("e_waybill_validity") else ""
         ),
-        "eway_bill_pdf": _resolve_eway_pdf_url(si),
-        "transport_mode": si.get("mode_of_transport") or "",
-        "vehicle_number": si.get("vehicle_no") or "",
-        "vehicle_type": si.get("vehicle_type") or "",
-        "transporter_gst": si.get("transporter_gst_no") or "",
-        "transporter_name": si.get("transporter_name") or "",
+        "eway_bill_pdf": _resolve_eway_pdf_url(si) if si.get("ewaybill") else "",
+        "transport_mode": (
+            si.get("mode_of_transport")
+            or tv.get("mode_of_transport")
+            or ""
+        ),
+        "vehicle_number": (
+            si.get("vehicle_no") or tv.get("vehicle_no") or ""
+        ),
+        "vehicle_type": (
+            si.get("vehicle_type") or tv.get("vehicle_type") or ""
+        ),
+        "transporter_gst": (
+            si.get("transporter_gst_no")
+            or tv.get("transporter_gst_no")
+            or ""
+        ),
+        "transporter_name": (
+            si.get("transporter_name") or tv.get("transporter_name") or ""
+        ),
         "eway_bill_base64": "",
     }
+
+
+# ============================================================
+# Toggle helpers
+# ============================================================
+
+
+def _should_mint_einvoice(ee_account: str | None) -> bool:
+    """Read gsp_mint_einvoice toggle on the EE Account.
+
+    Defaults to True (mint) when:
+      - ee_account is None (no scoping context — pre-toggle behaviour)
+      - the field doesn't exist (patch not yet applied)
+      - the account row can't be found
+
+    The toggle field is added by patches/v0_1/add_gsp_basic_auth_secret_field.py
+    with default=1, so existing accounts inherit the mint-on behaviour
+    after patch rerun.
+    """
+    if not ee_account:
+        return True
+    try:
+        value = frappe.db.get_value(
+            "EasyEcom Account", ee_account, "gsp_mint_einvoice"
+        )
+    except Exception:
+        return True
+    if value is None:
+        return True
+    return bool(int(value))
+
+
+def _should_mint_ewaybill(ee_account: str | None) -> bool:
+    """Read gsp_mint_ewaybill toggle on the EE Account. Same defaulting
+    semantics as `_should_mint_einvoice`."""
+    if not ee_account:
+        return True
+    try:
+        value = frappe.db.get_value(
+            "EasyEcom Account", ee_account, "gsp_mint_ewaybill"
+        )
+    except Exception:
+        return True
+    if value is None:
+        return True
+    return bool(int(value))
 
 
 def _resolve_invoice_pdf_url(si: Any) -> str:

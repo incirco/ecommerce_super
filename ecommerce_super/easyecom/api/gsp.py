@@ -237,7 +237,7 @@ def _einvoice_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
         return {"status": 422, "message": str(exc)}
 
     try:
-        irn_data = mint_irn_for_si(si_name)
+        irn_data = mint_irn_for_si(si_name, ee_account=ee_account)
     except GSPHandlerError as exc:
         frappe.response.http_status_code = 422
         return {
@@ -295,7 +295,11 @@ def _ewaybill_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
     }
 
     try:
-        eway_data = mint_eway_for_si(si_name, transport_values=transport_values)
+        eway_data = mint_eway_for_si(
+            si_name,
+            transport_values=transport_values,
+            ee_account=ee_account,
+        )
     except GSPHandlerError as exc:
         frappe.response.http_status_code = 422
         return {"status": 422, "message": str(exc)}
