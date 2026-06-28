@@ -170,8 +170,8 @@ def build_si_from_ee_order(
         correlation_id=correlation_id,
     )
 
-    # ---- 8. Variance check (Path 2 alert mechanism) ----
-    variance_outcome = _check_variance(
+    # ---- 8. Variance checks (Path 2 alert mechanism) ----
+    tax_variance = _check_variance(
         si=si,
         marketplace_account=marketplace_account,
         ee_invoice_id=ee_invoice_id,
@@ -180,12 +180,31 @@ def build_si_from_ee_order(
         correlation_id=correlation_id,
     )
 
+    # §12.9 line 2821: 1-paisa total variance check.
+    # EE order amount vs ERPNext SI.grand_total — must match within
+    # 1 paisa or raises a Discrepancy. Independent of the tax check
+    # (catches discount mishandling, missing line items, rounding bugs).
+    total_variance = _check_total_variance(
+        si=si,
+        marketplace_account=marketplace_account,
+        ee_invoice_id=ee_invoice_id,
+        ee_grand_total=ee_grand_total,
+        correlation_id=correlation_id,
+    )
+
     return {
         "sales_invoice": si.name,
         "sync_record": sync_record_name,
         "customer_pool_used": pool_choice["kind"],
-        "tax_variance_pct": variance_outcome["tax_variance_pct"],
-        "discrepancy_raised": variance_outcome["discrepancy_raised"],
+        "tax_variance_pct": tax_variance["tax_variance_pct"],
+        "tax_discrepancy_raised": tax_variance["discrepancy_raised"],
+        "total_variance_paise": total_variance["total_variance_paise"],
+        "total_discrepancy_raised": total_variance["discrepancy_raised"],
+        # Back-compat: any variance => discrepancy_raised True
+        "discrepancy_raised": (
+            tax_variance["discrepancy_raised"]
+            or total_variance["discrepancy_raised"]
+        ),
     }
 
 
@@ -607,6 +626,72 @@ def _check_variance(
             message=f"{type(exc).__name__}: {exc}",
         )
         return {"tax_variance_pct": round(variance_pct, 2), "discrepancy_raised": False}
+
+
+def _check_total_variance(
+    *,
+    si: Any,
+    marketplace_account: Any,
+    ee_invoice_id: str,
+    ee_grand_total: float,
+    correlation_id: str,
+) -> dict:
+    """§12.9 line 2821 — EE order total vs ERPNext SI.grand_total must
+    match within 1 paisa (₹0.01). Mismatch raises an Integration
+    Discrepancy as an upstream alert.
+
+    Independent of the tax variance check (Path 2): catches discount
+    mishandling, missing line items, rounding bugs that the tax
+    check would miss because EE-supplied tax is applied directly.
+
+    Skipped when ee_grand_total is 0 (zero-amount orders are edge
+    cases — refunds-only, promotional, etc.; no alert).
+
+    Returns:
+        {"total_variance_paise": <int>, "discrepancy_raised": <bool>}
+    """
+    if not ee_grand_total:
+        return {"total_variance_paise": 0, "discrepancy_raised": False}
+
+    si_grand_total = float(si.get("grand_total") or 0)
+    delta = abs(ee_grand_total - si_grand_total)
+    variance_paise = round(delta * 100)  # 1 paisa = ₹0.01
+
+    if variance_paise <= 1:
+        return {"total_variance_paise": variance_paise, "discrepancy_raised": False}
+
+    try:
+        from ecommerce_super.easyecom.flows.grn_pull import _raise_discrepancy
+
+        _raise_discrepancy(
+            kind="B2C total variance — EE vs SI > 1 paisa (§12.9)",
+            reference_doctype="Sales Invoice",
+            reference_name=si.name,
+            company=si.company,
+            reason=(
+                f"§12 B2C SI build: EE order total ₹{ee_grand_total:.2f} "
+                f"vs ERPNext SI.grand_total ₹{si_grand_total:.2f} "
+                f"(delta {variance_paise} paise). EE invoice_id="
+                f"{ee_invoice_id}, Marketplace Account "
+                f"{marketplace_account.name}, correlation_id="
+                f"{correlation_id}. "
+                f"\n\nThis is an UPSTREAM-ISSUE alert per Path 2. "
+                f"SI carries EE-supplied tax + rates derived from EE "
+                f"breakup_types; a > 1 paisa delta from EE's reported "
+                f"total typically means: (a) line.discount handling "
+                f"differs between EE and ERPNext; (b) a line item was "
+                f"missing in the payload; (c) rounding mode mismatch "
+                f"(per-line vs per-invoice). SI data is immutable; "
+                f"FDE investigates the EE-side payload structure."
+            ),
+        )
+        return {"total_variance_paise": variance_paise, "discrepancy_raised": True}
+    except Exception as exc:
+        frappe.log_error(
+            title=f"§12 total-variance Discrepancy raise failed for {si.name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {"total_variance_paise": variance_paise, "discrepancy_raised": False}
 
 
 # ============================================================
