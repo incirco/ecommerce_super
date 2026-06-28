@@ -206,6 +206,20 @@ def reconcile_one_map(map_name: str) -> dict:
         }
 
     rows = _extract_rows(response)
+
+    # Backfill OrderID/SuborderID/InvoiceID onto the Map row when
+    # they're missing locally but EE has them. Surfaced 2026-06-28
+    # via Thuraya New B2B end-to-end smoke (SAL-ORD-2026-00022): a
+    # New B2B push returns "Successfully Queued" with no IDs in the
+    # response body, so the Map row sits with null ee_order_id /
+    # ee_suborder_id / ee_invoice_id until polling fills them in.
+    # The §17 worklist card "New B2B orders missing IDs (2h+)" was
+    # specifically designed for this gap. Phase 1 polling derivation
+    # focused on status transitions (Cancelled / Invoice Pending /
+    # partial-cancel) and silently skipped ID backfill — surfaces
+    # only on New B2B accounts (Old B2B captures IDs at push time).
+    backfilled = _backfill_ee_ids_if_missing(map_doc, rows)
+
     decision, payload = derive_local_status_from_ee_rows(map_doc, rows)
     outcome = _apply_decision(
         map_doc=map_doc,
@@ -215,8 +229,66 @@ def reconcile_one_map(map_name: str) -> dict:
         ee_account_name=ee_account_name,
         correlation_id=correlation_id,
     )
+    if backfilled:
+        outcome["ids_backfilled"] = backfilled
     _stamp_last_polled(map_name)
     return outcome
+
+
+def _backfill_ee_ids_if_missing(
+    map_doc: Any, rows: list[dict]
+) -> dict | None:
+    """If the Map row is missing OrderID / SuborderID / InvoiceID but
+    the EE response carries them, write them back. Returns a small
+    dict naming which fields were backfilled (or None when nothing
+    changed) — useful for the FDE trace in the outcome.
+
+    Only acts on businessorder rows. Picks the row with the latest
+    `last_update_date` so multi-shipment splits resolve to the most
+    recent invoice — but for fresh New B2B pushes there's only one
+    row, so this degenerate case is the common path.
+
+    Doesn't transition status — that's the derivation function's job.
+    This function only fills empty identifier columns.
+    """
+    b2b_rows = [
+        r for r in rows if r.get("order_type_key") == "businessorder"
+    ]
+    if not b2b_rows:
+        return None
+
+    latest = max(b2b_rows, key=lambda r: r.get("last_update_date") or "")
+
+    updates: dict[str, Any] = {}
+    if not map_doc.ee_order_id and latest.get("order_id"):
+        updates["ee_order_id"] = str(latest["order_id"])
+
+    # SuborderID lives one level down in order_items[].suborder_id;
+    # pick the first suborder's id as the Map's anchor (multi-suborder
+    # tracking is shipment-split territory, Phase 2).
+    if not map_doc.ee_suborder_id:
+        items = latest.get("order_items") or []
+        if items:
+            sub_id = items[0].get("suborder_id")
+            if sub_id:
+                updates["ee_suborder_id"] = str(sub_id)
+
+    if not map_doc.ee_invoice_id and latest.get("invoice_id"):
+        updates["ee_invoice_id"] = str(latest["invoice_id"])
+
+    if not updates:
+        return None
+
+    frappe.db.set_value(
+        "EasyEcom B2B Order Map", map_doc.name, updates,
+        update_modified=False,
+    )
+    frappe.db.commit()
+    # Refresh the in-memory map_doc so downstream derivation sees the
+    # new IDs.
+    for field, value in updates.items():
+        setattr(map_doc, field, value)
+    return updates
 
 
 def _extract_rows(response: Any) -> list[dict]:
