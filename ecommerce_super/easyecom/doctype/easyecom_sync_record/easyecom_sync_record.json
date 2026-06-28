@@ -77,9 +77,10 @@
    "fieldname": "direction",
    "fieldtype": "Select",
    "label": "Direction",
-   "options": "Push\nPull",
+   "options": "Push\nPull\nInbound API\nCancel",
    "reqd": 1,
-   "in_list_view": 1
+   "in_list_view": 1,
+   "description": "Push = our outbound call. Pull = our scheduled poll. Inbound API = EE-initiated request to us (§11.5.1 Custom GSP — the EE side calls our /einvoice/update or /ewaybill/update). Cancel = our outbound cancellation."
   },
   {
    "fieldname": "status",

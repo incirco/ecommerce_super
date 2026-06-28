@@ -1,0 +1,99 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:token_hash",
+ "creation": "2026-06-28 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "token_hash",
+  "easyecom_account",
+  "issued_at",
+  "expires_at",
+  "issued_to_ip",
+  "last_used_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "token_hash",
+   "fieldtype": "Data",
+   "label": "Token Hash (SHA-256)",
+   "length": 64,
+   "reqd": 1,
+   "unique": 1,
+   "search_index": 1,
+   "read_only": 1,
+   "description": "SHA-256 hex of the issued Bearer token. Plaintext token is returned ONCE at /gettoken response time and never persisted. Bearer middleware re-hashes incoming tokens and looks up by this column."
+  },
+  {
+   "fieldname": "easyecom_account",
+   "fieldtype": "Link",
+   "label": "EasyEcom Account",
+   "options": "EasyEcom Account",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "read_only": 1,
+   "description": "Which EE Account this token authorises. /gettoken matches incoming Basic auth against any enabled Account's gsp_basic_auth_secret and stamps the matched Account here."
+  },
+  {
+   "fieldname": "issued_at",
+   "fieldtype": "Datetime",
+   "label": "Issued At",
+   "reqd": 1,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "label": "Expires At",
+   "reqd": 1,
+   "search_index": 1,
+   "read_only": 1,
+   "in_list_view": 1,
+   "description": "issued_at + 1 hour per EE's contract. Bearer middleware rejects tokens past this."
+  },
+  {
+   "fieldname": "issued_to_ip",
+   "fieldtype": "Data",
+   "label": "Issued To IP",
+   "read_only": 1,
+   "description": "Source IP of the /gettoken request — audit only, not enforced (EE's server pool IPs may rotate)."
+  },
+  {
+   "fieldname": "last_used_at",
+   "fieldtype": "Datetime",
+   "label": "Last Used At",
+   "read_only": 1,
+   "description": "Bumped on every successful Bearer validation. Helps detect dormant tokens for the cleanup scheduler."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-06-28 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom GSP Token",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "delete": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "issued_at",
+ "sort_order": "DESC"
+}
