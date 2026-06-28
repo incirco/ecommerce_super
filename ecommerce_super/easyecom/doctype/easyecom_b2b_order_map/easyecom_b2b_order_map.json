@@ -16,6 +16,9 @@
   "ee_suborder_id",
   "ee_invoice_id",
   "ee_queue_id",
+  "ee_invoice_number",
+  "sales_invoice",
+  "sales_invoice_mirrored_at",
   "lifecycle_section",
   "pushed_at",
   "cancelled_at",
@@ -111,6 +114,28 @@
    "label": "EE Queue ID",
    "read_only": 1,
    "description": "§11.3.5 — EE's async queue identifier returned by New B2B push (data.queueId from /webhook/v2/createOrder when queue=1). Used by the fast-confirm loop to poll /getQueueStatus and backfill OrderID/SuborderID/InvoiceID within seconds rather than waiting for the */5 polling cron. Null on Old B2B Maps (Old B2B is synchronous — IDs captured at push time, no queue indirection)."
+  },
+  {
+   "fieldname": "ee_invoice_number",
+   "fieldtype": "Data",
+   "label": "EE Invoice Number",
+   "read_only": 1,
+   "description": "§11.5.2 Mode 2 — EE-side GST invoice number (e.g. 'BMH1-2526-8') populated when EE generates the invoice via its own GSP / marketplace. Distinct from ee_invoice_id (which is EE's internal row identifier, always populated). Empty for pre-invoice orders; populated by Mode 2 polling when EE invoices."
+  },
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Mirrored Sales Invoice",
+   "options": "Sales Invoice",
+   "read_only": 1,
+   "description": "§11.5.2 Mode 2 — link to the ERPNext Sales Invoice mirrored from EE when EE generated the invoice on its own side. Null in Mode 1 (Custom GSP — we mint the SI from the request, link via Custom Field on SI itself) and for pre-invoice orders."
+  },
+  {
+   "fieldname": "sales_invoice_mirrored_at",
+   "fieldtype": "Datetime",
+   "label": "SI Mirrored At",
+   "read_only": 1,
+   "description": "§11.5.2 — when the Mode 2 SI mirror was created. Used to detect orders where mirror was attempted but produced an incomplete SI (e.g. Discrepancy raised mid-mirror)."
   },
   {
    "fieldname": "lifecycle_section",
