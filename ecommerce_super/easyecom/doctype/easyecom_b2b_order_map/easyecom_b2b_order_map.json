@@ -15,6 +15,7 @@
   "ee_order_id",
   "ee_suborder_id",
   "ee_invoice_id",
+  "ee_queue_id",
   "lifecycle_section",
   "pushed_at",
   "cancelled_at",
@@ -70,7 +71,7 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
-   "options": "Pushed\nQueued\nInvoice Pending\nInvoice Generated\nCancelled",
+   "options": "Pushed\nQueued\nInvoice Pending\nInvoice Generated\nCancelled\nDrift",
    "default": "Pushed",
    "reqd": 1,
    "in_list_view": 1,
@@ -103,6 +104,13 @@
    "label": "EE Invoice ID",
    "read_only": 1,
    "description": "EE's invoice identifier returned at order creation (Old B2B). This is EE's internal ID, NOT the ERPNext Sales Invoice docname — that mirror lands in Phase 2."
+  },
+  {
+   "fieldname": "ee_queue_id",
+   "fieldtype": "Data",
+   "label": "EE Queue ID",
+   "read_only": 1,
+   "description": "§11.3.5 — EE's async queue identifier returned by New B2B push (data.queueId from /webhook/v2/createOrder when queue=1). Used by the fast-confirm loop to poll /getQueueStatus and backfill OrderID/SuborderID/InvoiceID within seconds rather than waiting for the */5 polling cron. Null on Old B2B Maps (Old B2B is synchronous — IDs captured at push time, no queue indirection)."
   },
   {
    "fieldname": "lifecycle_section",

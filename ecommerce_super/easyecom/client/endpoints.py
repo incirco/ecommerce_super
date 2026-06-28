@@ -133,6 +133,16 @@ GRN_DETAILS_GET: str = "/Wms/Inventory/getGRNDetails"  # GET (stale; replaced by
 ORDERS_GET_ALL: str = "/orders/V2/getAllOrders"  # GET (bulk; Next-Page URL)
 ORDER_DETAILS_GET: str = "/orders/V2/getOrderDetails"  # GET
 
+# §11.3.5 fast-confirm — EE's async queue status for New B2B pushes.
+# New B2B push returns {data:{queueId:<int>}} with NO OrderID/SuborderID/
+# InvoiceID in the body. EE processes the queue in seconds. This endpoint
+# tells us when the job finished and (via `notes` field) what OrderID it
+# produced — enabling sub-30s confirmation vs the */5 polling cron.
+# Grounded against Thuraya 2026-06-28: status_id values are 1=NEW,
+# 3=Finished, 4=Error; notes carries `{"order_id":<int>,"reference_code":
+# "<SO.name>"}` when status_id=3.
+QUEUE_STATUS_GET: str = "/getQueueStatus"  # GET ?queueId=<int>  (§11.3.5)
+
 # §11 Phase 1 — ERPNext-initiated B2B cancellation.
 # Grounded per design-lead's 2026-06-14 EE-doc reference:
 #   POST /orders/cancelOrder
