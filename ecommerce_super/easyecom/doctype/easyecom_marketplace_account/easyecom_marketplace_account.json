@@ -1,0 +1,175 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:ECS-MA-{company}-{marketplace}",
+ "creation": "2026-06-29 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "marketplace",
+  "company",
+  "seller_id",
+  "enabled",
+  "col_break_1",
+  "pseudo_customer",
+  "easyecom_account",
+  "polling_section",
+  "last_pull_orders",
+  "polling_cadence_minutes",
+  "polling_status_filter",
+  "audit_section",
+  "last_pull_error",
+  "last_pull_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "marketplace",
+   "fieldtype": "Link",
+   "label": "Marketplace",
+   "options": "Marketplace",
+   "reqd": 1,
+   "in_list_view": 1,
+   "search_index": 1,
+   "description": "Flat marketplace channel row this Account represents. The (company, marketplace) tuple is unique per the autoname pattern."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "in_list_view": 1,
+   "search_index": 1,
+   "description": "ERPNext Company this seller account belongs to. SI created via §12 polling carries this Company."
+  },
+  {
+   "fieldname": "seller_id",
+   "fieldtype": "Data",
+   "label": "Seller ID",
+   "in_list_view": 1,
+   "description": "Marketplace-side seller identifier (e.g., Amazon SellerCentral seller_id). Used as a sanity check on incoming orders — order's seller_id must match this Account or the order is flagged as a per-record failure."
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "in_list_view": 1,
+   "description": "When OFF, the §12 polling cron skips this Marketplace Account. Use to pause integration without deleting the row."
+  },
+  {
+   "fieldname": "col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "pseudo_customer",
+   "fieldtype": "Link",
+   "label": "B2C Pool Customer",
+   "options": "Customer",
+   "read_only": 1,
+   "description": "Per §12 — every SI created for this Marketplace Account uses this Customer as the buyer (B2C marketplace orders share a single pool Customer; the actual buyer's address goes on the SI's Shipping Address). Auto-created on first insert of this row via the after_insert hook; named '<Marketplace> B2C Pool - <Company>'. Read-only — to override, change the Customer record itself; FDE should not re-point this field."
+  },
+  {
+   "fieldname": "easyecom_account",
+   "fieldtype": "Link",
+   "label": "EasyEcom Account",
+   "options": "EasyEcom Account",
+   "description": "Optional — which EasyEcom Account this Marketplace Account routes through. Used to scope the polling client + auth. If null, defaults to the EE Account inferred from the Source-of-Truth Map for the seller's primary warehouse."
+  },
+  {
+   "fieldname": "polling_section",
+   "fieldtype": "Section Break",
+   "label": "Polling"
+  },
+  {
+   "fieldname": "last_pull_orders",
+   "fieldtype": "Datetime",
+   "label": "Last Pull (Orders)",
+   "read_only": 1,
+   "description": "Cursor — the timestamp of the most recent successful /orders/V2/getAllOrders pull. Advances on each successful cycle. Initialised to NOW at first insert (forward-only cutover; historical orders are §102 backfill territory)."
+  },
+  {
+   "fieldname": "polling_cadence_minutes",
+   "fieldtype": "Int",
+   "label": "Polling Cadence (minutes)",
+   "default": "5",
+   "description": "How often the §12 scheduler ticks for this Marketplace Account. Per-tick eligibility: last_pull_orders IS NULL OR last_pull_orders <= NOW() - cadence."
+  },
+  {
+   "fieldname": "polling_status_filter",
+   "fieldtype": "Data",
+   "label": "Polling Status Filter",
+   "default": "Manifested",
+   "description": "Status filter passed to /orders/V2/getAllOrders. Default 'Manifested' per §12.3.1 — manifest is the operationally-meaningful moment for SI creation."
+  },
+  {
+   "fieldname": "audit_section",
+   "fieldtype": "Section Break",
+   "label": "Audit",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "last_pull_error",
+   "fieldtype": "Long Text",
+   "label": "Last Pull Error",
+   "read_only": 1,
+   "description": "Last failure message from the polling cron. Empty when the most recent pull succeeded."
+  },
+  {
+   "fieldname": "last_pull_at",
+   "fieldtype": "Datetime",
+   "label": "Last Pull Attempted At",
+   "read_only": 1,
+   "description": "Touched on every tick (success or failure) — distinct from last_pull_orders which only advances on success."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-06-29 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Marketplace Account",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
