@@ -359,6 +359,17 @@ def _handle_new_b2b_response(
             "ee_order_id": None,
         }
 
+    # §11.3.5 — extract queueId from response so the fast-confirm
+    # loop can poll /getQueueStatus. New B2B returns
+    # {code:200, message:"Successfully Queued", data:{queueId:<int>}}
+    # — grounded against Thuraya 2026-06-28.
+    response_data = response.get("data") or {}
+    queue_id = (
+        str(response_data.get("queueId"))
+        if isinstance(response_data, dict) and response_data.get("queueId")
+        else None
+    )
+
     map_doc = frappe.new_doc("EasyEcom B2B Order Map")
     map_doc.update(
         {
@@ -368,6 +379,7 @@ def _handle_new_b2b_response(
             "ee_order_id": None,
             "ee_suborder_id": None,
             "ee_invoice_id": None,
+            "ee_queue_id": queue_id,
             "status": "Queued",
             "pushed_at": frappe.utils.now(),
             "payload_hash": payload_hash,
@@ -398,6 +410,49 @@ def _handle_new_b2b_response(
     )
     frappe.db.commit()
 
+    # §11.3.5 — fast-confirm loop. Runs synchronously inside the
+    # push worker (RQ job already async). If EE finishes the queue
+    # within 30s (typical: 2-5s), the Map row gets backfilled with
+    # OrderID/SuborderID/InvoiceID immediately. If queue exceeds
+    # 30s, we fall through silently and the */5 polling cron
+    # (+ PR #101 backfill) catches up later. No error path —
+    # fast-confirm is purely additive.
+    fast_confirm_result = None
+    if queue_id:
+        from ecommerce_super.easyecom.flows.b2b_sales.fast_confirm import (
+            fast_confirm_new_b2b,
+        )
+        try:
+            fast_confirm_result = fast_confirm_new_b2b(
+                map_name=map_doc.name,
+                queue_id=queue_id,
+                location_key=location_key,
+            )
+        except Exception as exc:
+            # Never break the push outcome on fast-confirm failure;
+            # log + fall through to polling.
+            frappe.log_error(
+                title=(
+                    f"§11.3.5 fast-confirm failed for {map_doc.name}; "
+                    "polling cron will backfill"
+                ),
+                message=f"{type(exc).__name__}: {exc}",
+            )
+
+    # Re-read Map to pick up any backfill from fast_confirm
+    if fast_confirm_result and fast_confirm_result.get("backfilled"):
+        backfilled = fast_confirm_result["backfilled"]
+        return {
+            "operation": "queued",
+            "status": "Queued",
+            "map_name": map_doc.name,
+            "ee_order_id": backfilled.get("ee_order_id"),
+            "ee_suborder_id": backfilled.get("ee_suborder_id"),
+            "ee_invoice_id": backfilled.get("ee_invoice_id"),
+            "ee_queue_id": queue_id,
+            "fast_confirm": fast_confirm_result,
+        }
+
     return {
         "operation": "queued",
         "status": "Queued",
@@ -405,6 +460,8 @@ def _handle_new_b2b_response(
         "ee_order_id": None,
         "ee_suborder_id": None,
         "ee_invoice_id": None,
+        "ee_queue_id": queue_id,
+        "fast_confirm": fast_confirm_result,
     }
 
 
