@@ -5,11 +5,13 @@ B2C polling substrate; settlement/reconciliation fields (rate cards,
 GSTIN, settlement template) deferred to recon-engine build per
 SPEC §8.6.2 line 1860.
 
-Lifecycle hook: after_insert auto-creates a per-account pseudo
-Customer named "<Marketplace> B2C Pool - <Company>" so every B2C
-SI minted via this Marketplace Account points at the same Customer
-master row (the actual buyer address goes on the SI's Shipping
-Address, not the Customer record).
+Lifecycle hook: after_insert auto-creates TWO per-account pseudo
+Customers — one for in-state buyers (drives CGST+SGST via tax_category)
+and one for out-of-state buyers (drives IGST). Every B2C SI minted
+via this Marketplace Account points at one of these two pool
+Customers depending on the buyer's shipping address state vs the
+Company's state. The actual buyer's address goes on the SI's Shipping
+Address; the pool Customer is a tax-category carrier only.
 """
 from __future__ import annotations
 
@@ -18,25 +20,37 @@ from frappe.model.document import Document
 from frappe.utils import now_datetime
 
 
+# Tax category names India Compliance ships by default. If a client
+# renames their tax categories, the FDE re-points the pseudo customers
+# to use the local names — the bootstrap defaults to these conventional
+# values; resolver falls back to no tax_category if neither exists.
+DEFAULT_TAX_CATEGORY_IN_STATE: str = "In-State"
+DEFAULT_TAX_CATEGORY_OUT_OF_STATE: str = "Out-of-State"
+
+
 class EasyEcomMarketplaceAccount(Document):
 
     def after_insert(self) -> None:
-        """Bootstrap the pseudo Customer + cursor on first insert.
+        """Bootstrap the two pseudo Customers + cursor on first insert.
 
         Idempotent — if a Customer with the conventional name already
         exists, we link it. Never raises (a failed bootstrap must not
         prevent the Marketplace Account from being created; the FDE can
-        re-trigger via a manual save or the Setup wizard).
+        re-trigger via a manual save).
         """
         try:
-            customer_name = _bootstrap_pseudo_customer(
+            in_state_name, out_of_state_name = _bootstrap_pseudo_customers(
                 marketplace=self.marketplace,
                 company=self.company,
             )
-            if customer_name:
-                self.db_set(
-                    "pseudo_customer", customer_name, update_modified=False,
-                )
+            updates: dict = {}
+            if in_state_name:
+                updates["pseudo_customer_in_state"] = in_state_name
+            if out_of_state_name:
+                updates["pseudo_customer_out_of_state"] = out_of_state_name
+            if updates:
+                for k, v in updates.items():
+                    self.db_set(k, v, update_modified=False)
         except Exception as exc:
             frappe.log_error(
                 title=f"§12 Marketplace Account bootstrap: {self.name}",
@@ -51,23 +65,25 @@ class EasyEcomMarketplaceAccount(Document):
             )
 
 
-def _bootstrap_pseudo_customer(*, marketplace: str, company: str) -> str | None:
-    """Idempotently create the per-(Company, Marketplace) pool Customer.
+def _bootstrap_pseudo_customers(
+    *, marketplace: str, company: str,
+) -> tuple[str | None, str | None]:
+    """Idempotently create both pool Customers (in-state + out-of-state)
+    for one (Company, Marketplace).
 
-    Naming: "<Marketplace display_name or name> B2C Pool - <Company>"
+    Naming:
+      - "<Marketplace label> B2C In-State - <Company>"
+      - "<Marketplace label> B2C Out-of-State - <Company>"
 
-    Defaults applied:
-      - customer_group = "Commercial" (Frappe default group; FDE can
-        re-classify if a "B2C Marketplace" group is created later)
-      - customer_type = "Individual" (B2C buyers are not companies)
-      - territory = "India" (B2C orders are predominantly domestic;
-        per-order Shipping Address carries the actual state)
+    Tax categories applied:
+      - In-State pool → DEFAULT_TAX_CATEGORY_IN_STATE if exists
+      - Out-of-State pool → DEFAULT_TAX_CATEGORY_OUT_OF_STATE if exists
 
-    Returns the Customer docname (existing or newly created), or None
-    if the marketplace / company couldn't be resolved.
+    Returns (in_state_customer_name, out_of_state_customer_name) —
+    either can be None if creation fails.
     """
     if not marketplace or not company:
-        return None
+        return (None, None)
 
     mp_display = (
         frappe.db.get_value(
@@ -81,8 +97,22 @@ def _bootstrap_pseudo_customer(*, marketplace: str, company: str) -> str | None:
         or mp_display.get("marketplace_name")
         or marketplace
     )
-    customer_name = f"{label} B2C Pool - {company}"
 
+    in_state_name = _bootstrap_one_customer(
+        customer_name=f"{label} B2C In-State - {company}",
+        tax_category=_resolve_tax_category(DEFAULT_TAX_CATEGORY_IN_STATE),
+    )
+    out_of_state_name = _bootstrap_one_customer(
+        customer_name=f"{label} B2C Out-of-State - {company}",
+        tax_category=_resolve_tax_category(DEFAULT_TAX_CATEGORY_OUT_OF_STATE),
+    )
+    return (in_state_name, out_of_state_name)
+
+
+def _bootstrap_one_customer(
+    *, customer_name: str, tax_category: str | None,
+) -> str | None:
+    """Idempotently insert one pool Customer with sensible defaults."""
     existing = frappe.db.exists("Customer", customer_name)
     if existing:
         return customer_name
@@ -93,10 +123,24 @@ def _bootstrap_pseudo_customer(*, marketplace: str, company: str) -> str | None:
         "customer_type": "Individual",
         "customer_group": _resolve_default_group(),
         "territory": _resolve_default_territory(),
+        "tax_category": tax_category,
     })
     customer.flags.ignore_permissions = True
     customer.insert(ignore_if_duplicate=True)
     return customer.name
+
+
+def _resolve_tax_category(preferred: str) -> str | None:
+    """Return the preferred Tax Category if it exists; otherwise None
+    so ERPNext applies whatever default the Company / SI implies. If
+    a client renames their tax categories, they re-point the pseudo
+    Customers manually."""
+    try:
+        if frappe.db.exists("Tax Category", preferred):
+            return preferred
+    except Exception:
+        return None
+    return None
 
 
 def _resolve_default_group() -> str:

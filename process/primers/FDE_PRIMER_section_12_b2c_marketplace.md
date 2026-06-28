@@ -22,16 +22,26 @@ Settlement Lines for recon.
 
 - **`EasyEcom Marketplace Account`** (new §12) — per-(Company, Marketplace)
   seller configuration. Carries the polling cursor (`last_pull_orders`),
-  the pseudo-customer link, and routing (`easyecom_account`).
-- **`EasyEcom Marketplace Order Map`** (new §12) — one row per
-  EE shipment (Invoice ID). The recon engine's primary join target
-  for future Settlement Lines.
-- **Sales Invoice with `ecs_marketplace*` Custom Fields** — the actual
-  financial record. EE values stored separately for variance / recon.
-- **Per-(marketplace × Company) Customer** — bootstrapped automatically
-  when an FDE creates the Marketplace Account. Every B2C SI for that
-  marketplace points at this pooled Customer. The actual buyer's
-  address goes on the SI's Shipping Address, not the Customer record.
+  TWO pseudo-customer links (in-state + out-of-state), and routing
+  (`easyecom_account`).
+- **Sales Invoice with `ecs_*` Custom Fields** — the recon-engine
+  source of truth. All per-order data (marketplace, marketplace_order_id,
+  EE invoice IDs, payment mode, AWB, courier, EE invoice/tax totals,
+  ERPNext tax cross-check, settlement lifecycle) lives on the SI
+  directly. No separate per-order DocType.
+- **`EasyEcom Sync Record`** (existing §6/§7 substrate) — written per
+  polled order with `direction = "Pull"`, `entity = SI`, carrying the
+  full EE payload for audit / replay.
+- **TWO per-(marketplace × Company) pool Customers** — bootstrapped
+  automatically when an FDE creates the Marketplace Account:
+  - `<Marketplace> B2C In-State - <Company>` with `tax_category =
+    "In-State"` → drives CGST + SGST when shipping address state
+    matches the Company's state
+  - `<Marketplace> B2C Out-of-State - <Company>` with `tax_category =
+    "Out-of-State"` → drives IGST when shipping address state differs
+    The SI builder picks one per order based on the shipping state.
+  The actual buyer's address goes on the SI's Shipping Address;
+  the pool Customer is a tax-category carrier only.
 
 ## Part C — Setup (per Company, per marketplace, ~10 min each)
 
@@ -48,9 +58,10 @@ On the ERPNext side:
        - Seller ID: <marketplace's seller_id>
        - EasyEcom Account: <pick the EE Account>
        - Save
-  4. Verify: a Customer named "<Marketplace> B2C Pool - <Company>"
-     was auto-created (after_insert hook). The Marketplace Account's
-     "B2C Pool Customer" field is auto-populated.
+  4. Verify: TWO Customers were auto-created (after_insert hook):
+       - "<Marketplace> B2C In-State - <Company>"   (tax_category=In-State)
+       - "<Marketplace> B2C Out-of-State - <Company>" (tax_category=Out-of-State)
+     Both fields on the Marketplace Account are auto-populated.
   5. Repeat per marketplace this Company sells on.
 ```
 
@@ -63,7 +74,8 @@ cutover. Historical orders are §102 backfill territory.
 | Surface | Where | When you use it |
 |---|---|---|
 | **EasyEcom Marketplace Account list** | `/app/easyecom-marketplace-account` | Configure new marketplaces; flip `enabled` to pause polling for one |
-| **EasyEcom Marketplace Order Map list** | `/app/easyecom-marketplace-order-map` | See every B2C SI's recon-bridge row + settlement status |
+| **Sales Invoice list filtered by `ecs_settlement_status`** | `/app/sales-invoice?ecs_settlement_status=Forecast` | See unsettled B2C SIs; columns surface settlement state directly |
+| **EasyEcom Sync Record list filtered by `direction = Pull, entity_type = Sales Invoice`** | `/app/easyecom-sync-record?direction=Pull&entity_type=Sales+Invoice` | Audit trail — EE payload per polled order, dedup hashes, correlation IDs |
 | **Sales Invoice list filtered by `ecs_marketplace`** | `/app/sales-invoice?ecs_marketplace=2` | Channel-specific SI views |
 | **EasyEcom Integration Discrepancy list** | Standard Discrepancy list with `kind = "B2C tax variance — EE vs ERPNext > 1%"` | Variance alerts for upstream investigation |
 
@@ -101,7 +113,8 @@ than flood the FDE with false positives on fresh installs.
 | Marketplace Account never polls | `enabled = 0` OR `easyecom_account` is null OR cadence not elapsed | Set those fields; wait one tick |
 | All orders skip with "Stage 3 builder not yet implemented" | (Now resolved — Stage 3 shipped) | n/a |
 | Per-record failure: "EE SKU(s) ... have no EasyEcom Item Map" | Item not synced yet | Run §8d Item Push for the SKU |
-| Per-record failure: "Marketplace Account has no pseudo_customer" | Bootstrap hook failed at insert | Resave the Marketplace Account |
+| Per-record failure: "Marketplace Account has no pool customers" | Bootstrap hook failed at insert | Resave the Marketplace Account |
+| Per-record failure: "Order ships in/out-of-state but no pseudo_customer_*" | One of the two pool Customers got deleted | Re-bootstrap by resaving the Marketplace Account, OR manually create + link |
 | Per-record failure: "Company has no default tax account" | CoA missing 'Output Tax' / 'Sales Taxes' | Configure in CoA |
 | Discrepancy: "B2C tax variance > 1%" | EE vs ERPNext tax mismatch (upstream issue) | See Part E |
 | Cursor stuck (polling fails repeatedly) | EE auth / connectivity / 5xx | `last_pull_error` carries the message; FDE fixes upstream |
@@ -134,12 +147,17 @@ than flood the FDE with false positives on fresh installs.
 
 ## Origin
 
-- §12 build: 2026-06-29, PR #107 (this PR — once merged)
-- Path 2 decision: 2026-06-29 design call with rishinikhil. SI carries
-  EE-supplied tax (marketplace = source of truth); ERPNext-computed
-  tax becomes a variance check signal. No per-marketplace election.
+- §12 build: 2026-06-29, PR #107
+- Path 2 decision: 2026-06-29 design call. SI carries EE-supplied tax
+  (marketplace = source of truth); ERPNext-computed tax becomes a
+  variance check signal. No per-marketplace election.
 - Pseudo-customer bootstrap: auto-trigger on Marketplace Account
   insert (vs. FDE manual or wizard) — locked 2026-06-29.
+- **Two pseudo-customers per Marketplace Account** (in-state +
+  out-of-state) for correct GST split: locked 2026-06-29 refactor.
+- **Marketplace Order Map DocType dropped**: locked 2026-06-29
+  refactor. Per-order data lives on SI Custom Fields (recon source-
+  of-truth) + Sync Record (audit trail). Single source of truth.
 - Forward-only cutover: locked 2026-06-29. §102 backfill is a
   separate flow scheduled after §12.
-- Spec deltas captured: SPEC_12_patch_notes (created with this PR).
+- Spec deltas captured: SPEC_12_patch_notes (follow-up docs PR).

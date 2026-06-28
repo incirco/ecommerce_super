@@ -11,7 +11,8 @@
   "seller_id",
   "enabled",
   "col_break_1",
-  "pseudo_customer",
+  "pseudo_customer_in_state",
+  "pseudo_customer_out_of_state",
   "easyecom_account",
   "polling_section",
   "last_pull_orders",
@@ -62,12 +63,20 @@
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "pseudo_customer",
+   "fieldname": "pseudo_customer_in_state",
    "fieldtype": "Link",
-   "label": "B2C Pool Customer",
+   "label": "B2C Pool Customer (In-State)",
    "options": "Customer",
    "read_only": 1,
-   "description": "Per §12 — every SI created for this Marketplace Account uses this Customer as the buyer (B2C marketplace orders share a single pool Customer; the actual buyer's address goes on the SI's Shipping Address). Auto-created on first insert of this row via the after_insert hook; named '<Marketplace> B2C Pool - <Company>'. Read-only — to override, change the Customer record itself; FDE should not re-point this field."
+   "description": "Pool Customer used when the buyer's shipping address state matches the Company's state — drives CGST+SGST tax application via the Customer's tax_category. Auto-created on first insert of this row via the after_insert hook; named '<Marketplace> B2C In-State - <Company>'. Read-only — to override, change the Customer record itself; FDE should not re-point this field."
+  },
+  {
+   "fieldname": "pseudo_customer_out_of_state",
+   "fieldtype": "Link",
+   "label": "B2C Pool Customer (Out-of-State)",
+   "options": "Customer",
+   "read_only": 1,
+   "description": "Pool Customer used when the buyer's shipping address state differs from the Company's state — drives IGST tax application via the Customer's tax_category. Auto-created on first insert of this row via the after_insert hook; named '<Marketplace> B2C Out-of-State - <Company>'. Read-only — to override, change the Customer record itself."
   },
   {
    "fieldname": "easyecom_account",

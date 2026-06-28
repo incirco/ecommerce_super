@@ -172,6 +172,68 @@ def execute() -> None:
                         "side adapter)."
                     ),
                 },
+                # ---- §12 Settlement lifecycle (recon-engine target) ----
+                # Replaces the original EasyEcom Marketplace Order Map
+                # DocType — folded onto SI per the 2026-06-29 design call:
+                # one row per SI in the existing Sales Invoice table, no
+                # separate per-order DocType. The recon engine joins
+                # Settlement Lines on ecs_marketplace_order_id (above) →
+                # SI directly, and reads / mutates the settlement_*
+                # fields here as marketplace payouts arrive.
+                {
+                    "fieldname": "ecs_settlement_section",
+                    "label": "EasyEcom Settlement",
+                    "fieldtype": "Section Break",
+                    "insert_after": "ecs_erpnext_tax_check_total",
+                    "collapsible": 1,
+                    "description": (
+                        "Settlement lifecycle state for B2C marketplace "
+                        "SIs. Mutated over weeks / months by the recon "
+                        "engine as marketplace payouts arrive; never "
+                        "touches the rest of the SI."
+                    ),
+                },
+                {
+                    "fieldname": "ecs_settlement_status",
+                    "label": "Settlement Status",
+                    "fieldtype": "Select",
+                    "options": "\nForecast\nPartial\nSettled\nDisputed",
+                    "insert_after": "ecs_settlement_section",
+                    "read_only": 1,
+                    "in_standard_filter": 1,
+                    "description": (
+                        "Forecast (SI created, awaiting settlement), "
+                        "Partial (some lines settled), Settled (fully "
+                        "reconciled), Disputed (recon engine flagged "
+                        "variance). Blank for B2B SIs and SIs not "
+                        "minted via §12. Mutated by recon engine; "
+                        "§12 writes 'Forecast' at SI creation."
+                    ),
+                },
+                {
+                    "fieldname": "ecs_expected_settlement_date",
+                    "label": "Expected Settlement Date",
+                    "fieldtype": "Date",
+                    "insert_after": "ecs_settlement_status",
+                    "read_only": 1,
+                    "description": (
+                        "Forecast settlement date per the marketplace's "
+                        "T+N payout cadence. Populated by recon engine "
+                        "when the Marketplace's settlement template is "
+                        "known; null for v1 until recon ships."
+                    ),
+                },
+                {
+                    "fieldname": "ecs_settlement_completed_at",
+                    "label": "Settlement Completed At",
+                    "fieldtype": "Datetime",
+                    "insert_after": "ecs_expected_settlement_date",
+                    "read_only": 1,
+                    "description": (
+                        "Stamped by recon engine when status flips to "
+                        "Settled. Null while Forecast / Partial / Disputed."
+                    ),
+                },
             ],
         },
         ignore_validate=True,

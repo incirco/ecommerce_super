@@ -4,12 +4,19 @@ Takes one EE order row (from the polling walker) and creates:
   1. A Sales Invoice in ERPNext (Draft) — per Path 2 (locked
      2026-06-29): EE-supplied tax in SI.taxes; ERPNext-computed tax
      stored separately as variance check
-  2. An EasyEcom Marketplace Order Map row — the recon-engine join
-     target for future Settlement Lines
+  2. An EasyEcom Sync Record (direction=Pull, entity=SI) — the audit
+     trail carrying the EE payload (replaces the original Marketplace
+     Order Map DocType; recon engine reads settlement state directly
+     from the SI's Custom Fields)
 
 If the ERPNext-computed tax check diverges from EE's tax by more
 than 1%, raises an Integration Discrepancy as an upstream-issue
 alert. SI data is NOT amended — the Discrepancy is informational.
+
+Customer resolution: the Marketplace Account holds TWO pool Customers
+(in-state + out-of-state). The builder resolves the buyer's shipping
+state vs the Company's state and picks the appropriate pool so the
+SI's tax_category drives the correct GST split (CGST+SGST vs IGST).
 
 Idempotency: caller (polling walker) already deduped on EE Invoice_id.
 This function will fail loudly if a duplicate slips through —
@@ -35,18 +42,19 @@ def build_si_from_ee_order(
     marketplace_account: Any,
     correlation_id: str,
 ) -> dict:
-    """Create SI + Marketplace Order Map from one EE order row.
+    """Create SI + Sync Record audit trail from one EE order row.
 
     Returns:
         {
           "sales_invoice": <docname>,
-          "marketplace_order_map": <docname>,
+          "sync_record": <docname>,
+          "customer_pool_used": "in_state" | "out_of_state",
           "tax_variance_pct": <float>,
           "discrepancy_raised": <bool>,
         }
 
     Raises B2CBuilderError on any unrecoverable failure (missing Item
-    Map, missing pseudo-customer, missing tax account, etc.). Caller
+    Map, missing pool customer, missing tax account, etc.). Caller
     catches per-record so the batch continues.
     """
     # ---- 0. Sanity checks ----
@@ -67,19 +75,19 @@ def build_si_from_ee_order(
             "— recon engine cannot join Settlement Lines without it."
         )
 
-    if not marketplace_account.pseudo_customer:
-        raise B2CBuilderError(
-            f"Marketplace Account {marketplace_account.name} has no "
-            "pseudo_customer. Resave the row to trigger bootstrap."
-        )
+    # ---- 1. Pool customer resolution (in-state vs out-of-state) ----
+    pool_choice = _resolve_pool_customer(
+        marketplace_account=marketplace_account,
+        order_row=order_row,
+    )
 
-    # ---- 1. Line items ----
+    # ---- 2. Line items ----
     line_items = _resolve_line_items(order_row)
 
-    # ---- 2. Warehouse ----
+    # ---- 3. Warehouse ----
     warehouse = _resolve_warehouse(order_row, marketplace_account.company)
 
-    # ---- 3. EE-supplied financials (the source of truth per Path 2) ----
+    # ---- 4. EE-supplied financials (the source of truth per Path 2) ----
     ee_grand_total = float(
         order_row.get("invoice_amount")
         or order_row.get("grand_total")
@@ -92,15 +100,15 @@ def build_si_from_ee_order(
         or 0
     )
 
-    # ---- 4. ERPNext cross-check (Path 2 variance signal) ----
+    # ---- 5. ERPNext cross-check (Path 2 variance signal) ----
     erpnext_tax_check = _compute_erpnext_tax_check(line_items)
 
-    # ---- 5. Build the SI ----
+    # ---- 6. Build the SI ----
     posting_date = _resolve_posting_date(order_row)
 
     si_dict: dict[str, Any] = {
         "doctype": "Sales Invoice",
-        "customer": marketplace_account.pseudo_customer,
+        "customer": pool_choice["customer"],
         "company": marketplace_account.company,
         "posting_date": posting_date,
         "update_stock": 1,
@@ -114,7 +122,7 @@ def build_si_from_ee_order(
             }
             for li in line_items
         ],
-        # Custom Fields
+        # Custom Fields (recon source-of-truth values)
         "ecs_marketplace": marketplace_account.marketplace,
         "ecs_marketplace_order_id": marketplace_order_id,
         "ecs_easyecom_order_id": ee_order_id,
@@ -125,6 +133,8 @@ def build_si_from_ee_order(
         "ecs_ee_invoice_total": ee_grand_total,
         "ecs_ee_invoice_tax_total": ee_tax_total,
         "ecs_erpnext_tax_check_total": erpnext_tax_check,
+        # Settlement lifecycle — recon engine mutates these post-insert
+        "ecs_settlement_status": "Forecast",
     }
 
     if warehouse:
@@ -151,24 +161,16 @@ def build_si_from_ee_order(
     si.insert()
     frappe.db.commit()
 
-    # ---- 6. Marketplace Order Map ----
-    mom = frappe.get_doc({
-        "doctype": "EasyEcom Marketplace Order Map",
-        "marketplace": marketplace_account.marketplace,
-        "marketplace_account": marketplace_account.name,
-        "sales_invoice": si.name,
-        "ecs_easyecom_order_id": ee_order_id,
-        "ecs_easyecom_invoice_id": ee_invoice_id,
-        "ecs_marketplace_order_id": marketplace_order_id,
-        "settlement_status": "Forecast",
-        "ee_payload_hash": _hash_payload(order_row),
-        "ee_payload": json.dumps(order_row, default=str)[:60000],
-    })
-    mom.flags.ignore_permissions = True
-    mom.insert()
-    frappe.db.commit()
+    # ---- 7. Sync Record — audit trail (replaces Marketplace Order Map) ----
+    sync_record_name = _write_sync_record(
+        si=si,
+        marketplace_account=marketplace_account,
+        order_row=order_row,
+        ee_invoice_id=ee_invoice_id,
+        correlation_id=correlation_id,
+    )
 
-    # ---- 7. Variance check (Path 2 alert mechanism) ----
+    # ---- 8. Variance check (Path 2 alert mechanism) ----
     variance_outcome = _check_variance(
         si=si,
         marketplace_account=marketplace_account,
@@ -180,10 +182,144 @@ def build_si_from_ee_order(
 
     return {
         "sales_invoice": si.name,
-        "marketplace_order_map": mom.name,
+        "sync_record": sync_record_name,
+        "customer_pool_used": pool_choice["kind"],
         "tax_variance_pct": variance_outcome["tax_variance_pct"],
         "discrepancy_raised": variance_outcome["discrepancy_raised"],
     }
+
+
+# ============================================================
+# Pool customer resolution (in-state vs out-of-state)
+# ============================================================
+
+
+def _resolve_pool_customer(
+    *,
+    marketplace_account: Any,
+    order_row: dict,
+) -> dict:
+    """Pick the right pool Customer based on shipping address state
+    vs Company's state.
+
+    Returns: {"customer": <docname>, "kind": "in_state" | "out_of_state"}
+
+    Raises B2CBuilderError if neither pool customer is configured on
+    the Marketplace Account (bootstrap failed at insert + FDE hasn't
+    fixed it manually).
+    """
+    in_state_customer = marketplace_account.get("pseudo_customer_in_state")
+    out_of_state_customer = marketplace_account.get("pseudo_customer_out_of_state")
+
+    if not in_state_customer and not out_of_state_customer:
+        raise B2CBuilderError(
+            f"Marketplace Account {marketplace_account.name} has no pool "
+            "customers configured. Resave the row to trigger bootstrap."
+        )
+
+    company_state = _resolve_company_state(marketplace_account.company)
+    shipping_state = _resolve_shipping_state(order_row)
+
+    # If we can't determine either side, default to in-state pool
+    # (safer GST-wise — over-charges CGST+SGST and the recon variance
+    # surfaces, vs under-charging IGST silently).
+    if not company_state or not shipping_state:
+        customer = in_state_customer or out_of_state_customer
+        kind = "in_state" if customer == in_state_customer else "out_of_state"
+        return {"customer": customer, "kind": kind}
+
+    if _normalise_state(company_state) == _normalise_state(shipping_state):
+        if not in_state_customer:
+            raise B2CBuilderError(
+                f"Order ships to in-state ({shipping_state}) but "
+                f"Marketplace Account {marketplace_account.name} has no "
+                "pseudo_customer_in_state."
+            )
+        return {"customer": in_state_customer, "kind": "in_state"}
+
+    if not out_of_state_customer:
+        raise B2CBuilderError(
+            f"Order ships out-of-state ({shipping_state}, company is "
+            f"{company_state}) but Marketplace Account "
+            f"{marketplace_account.name} has no pseudo_customer_out_of_state."
+        )
+    return {"customer": out_of_state_customer, "kind": "out_of_state"}
+
+
+def _resolve_company_state(company: str) -> str | None:
+    """Get the Company's state. Tries Company.state field first; falls
+    back to deriving from the Company's GSTIN (first 2 chars → state
+    code → state name via India Compliance's state list)."""
+    try:
+        state = frappe.db.get_value("Company", company, "state")
+    except Exception:
+        return None
+    if state:
+        return state
+
+    try:
+        gstin = frappe.db.get_value("Company", company, "gstin")
+    except Exception:
+        return None
+    if not gstin or len(gstin) < 2:
+        return None
+
+    # GSTIN state code → state name. India Compliance ships this map;
+    # we read it via the Address DocType's gst_state field convention.
+    state_code = gstin[:2]
+    return _gstin_state_code_to_name(state_code)
+
+
+def _resolve_shipping_state(order_row: dict) -> str | None:
+    """Extract the buyer's shipping address state from the EE payload.
+
+    EE payloads vary on key names; scan plausible shapes. Returns None
+    if no state can be resolved (caller defaults to in-state pool).
+    """
+    # Common: order_row.shipping_address as a nested dict
+    shipping = order_row.get("shipping_address") or order_row.get("shippingAddress")
+    if isinstance(shipping, dict):
+        for key in ("state", "state_name", "shipping_state", "stateName"):
+            if shipping.get(key):
+                return str(shipping[key]).strip()
+
+    # Flat fields at order_row top level
+    for key in (
+        "shipping_state", "ship_state", "buyer_state",
+        "customer_state", "state_name",
+    ):
+        if order_row.get(key):
+            return str(order_row[key]).strip()
+
+    return None
+
+
+def _normalise_state(state: str) -> str:
+    """Case- and whitespace-insensitive state comparison."""
+    return (state or "").strip().lower()
+
+
+def _gstin_state_code_to_name(code: str) -> str | None:
+    """Minimal GSTIN state-code → state-name lookup. Covers the
+    Indian-state GSTIN prefixes; returns None for unknown codes."""
+    # GSTIN state codes per Income Tax / GST Council assignment.
+    mapping = {
+        "01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
+        "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana",
+        "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh",
+        "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh",
+        "13": "Nagaland", "14": "Manipur", "15": "Mizoram",
+        "16": "Tripura", "17": "Meghalaya", "18": "Assam",
+        "19": "West Bengal", "20": "Jharkhand", "21": "Odisha",
+        "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
+        "25": "Daman and Diu", "26": "Dadra and Nagar Haveli",
+        "27": "Maharashtra", "28": "Andhra Pradesh", "29": "Karnataka",
+        "30": "Goa", "31": "Lakshadweep", "32": "Kerala",
+        "33": "Tamil Nadu", "34": "Puducherry", "35": "Andaman and Nicobar Islands",
+        "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh",
+        "97": "Other Territory", "99": "Centre Jurisdiction",
+    }
+    return mapping.get(code)
 
 
 # ============================================================
@@ -360,6 +496,55 @@ def _resolve_default_sales_tax_account(company: str) -> str:
 
 
 # ============================================================
+# Sync Record (audit trail — replaces Marketplace Order Map)
+# ============================================================
+
+
+def _write_sync_record(
+    *,
+    si: Any,
+    marketplace_account: Any,
+    order_row: dict,
+    ee_invoice_id: str,
+    correlation_id: str,
+) -> str | None:
+    """Write the §6/§7 Sync Record for this polled order — captures
+    the EE payload + hash for audit / replay. Never raises (audit
+    failure must not break the SI creation).
+    """
+    try:
+        payload_canonical = json.dumps(order_row, sort_keys=True, default=str)
+        payload_hash = hashlib.sha256(payload_canonical.encode("utf-8")).hexdigest()
+        idempotency_key = f"§12-b2c-pull:{marketplace_account.name}:{ee_invoice_id}"
+
+        sync = frappe.get_doc({
+            "doctype": "EasyEcom Sync Record",
+            "company": marketplace_account.company,
+            "entity_doctype": "Sales Invoice",
+            "entity_name": si.name,
+            "entity_type": "Sales Invoice",
+            "direction": "Pull",
+            "status": "Success",
+            "correlation_id": correlation_id,
+            "idempotency_key": idempotency_key,
+            "attempts": 1,
+            "last_attempt_at": now_datetime(),
+            "pull_payload_hash": payload_hash,
+            "last_response_payload": payload_canonical[:60000],
+        })
+        sync.flags.ignore_permissions = True
+        sync.insert(ignore_if_duplicate=True)
+        frappe.db.commit()
+        return sync.name
+    except Exception as exc:
+        frappe.log_error(
+            title=f"§12 Sync Record write failed for {si.name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+
+
+# ============================================================
 # Variance / Discrepancy
 # ============================================================
 
@@ -417,8 +602,6 @@ def _check_variance(
         )
         return {"tax_variance_pct": round(variance_pct, 2), "discrepancy_raised": True}
     except Exception as exc:
-        # Discrepancy raising must never break the SI creation flow.
-        # Log it for the FDE and return.
         frappe.log_error(
             title=f"§12 variance Discrepancy raise failed for {si.name}",
             message=f"{type(exc).__name__}: {exc}",
@@ -448,7 +631,8 @@ def _resolve_posting_date(order_row: dict):
 
 
 def _hash_payload(order_row: dict) -> str:
-    """SHA-256 of the canonical-JSON order payload — for the Marketplace
-    Order Map's audit hash."""
+    """SHA-256 of the canonical-JSON order payload — kept for tests +
+    future use (not currently called by builder since the Sync Record
+    write handles hashing inline)."""
     canonical = json.dumps(order_row, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
