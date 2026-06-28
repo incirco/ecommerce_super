@@ -63,6 +63,31 @@ KNOWN_ACTIVE_STATUS_IDS: frozenset[int] = frozenset(
 )
 CANCELLED_STATUS_ID: int = 9
 
+# §11.6 dispatch transitions — order_status_id → ecs_easyecom_dispatch_status
+# label. Pre-shipment statuses (1-4, 30) collapse to "Pending"; shipment
+# milestones (5/6/7) get distinct labels. status_id=9 is "Cancelled" but
+# is also handled by the full-cancellation derivation path — we still
+# stamp dispatch_status=Cancelled for SI-level visibility.
+DISPATCH_STATUS_BY_ID: dict[int, str] = {
+    1: "Pending", 2: "Pending", 3: "Pending", 4: "Pending", 30: "Pending",
+    5: "Shipped",
+    6: "Delivered",
+    7: "Returned",
+    9: "Cancelled",
+}
+
+# EE response keys to scan for a carrier tracking URL. EE's getOrderDetails
+# response is inconsistent across older Old B2B vs newer New B2B payloads;
+# the scan is defensive — first non-empty wins. If you see a payload with
+# a tracking link in a key not listed here, add it (keep existing order).
+TRACKING_URL_CANDIDATE_KEYS: tuple[str, ...] = (
+    "tracking_link",
+    "tracking_url",
+    "track_link",
+    "shipping_track_link",
+    "courier_tracking_url",
+)
+
 
 # ============================================================
 # Scheduler entry point.
@@ -231,6 +256,18 @@ def reconcile_one_map(map_name: str) -> dict:
     )
     if backfilled:
         outcome["ids_backfilled"] = backfilled
+
+    # §11.6 — Stamp dispatch status on the linked SI (if any). Runs on
+    # every poll regardless of decision so Pending → Shipped → Delivered
+    # transitions land even on quiet "no_change" ticks where the Map
+    # itself doesn't move. Re-reads map_doc because _apply_decision may
+    # have just set sales_invoice during a Mode 2 mirror.
+    dispatch_outcome = _stamp_dispatch_status_on_si(
+        map_name=map_name, rows=rows,
+    )
+    if dispatch_outcome:
+        outcome["dispatch_stamped"] = dispatch_outcome
+
     _stamp_last_polled(map_name)
     return outcome
 
@@ -669,6 +706,109 @@ def _apply_decision(
         "transitioned": False,
         "discrepancy_raised": False,
         "decision": "no_change",
+    }
+
+
+def _stamp_dispatch_status_on_si(
+    *,
+    map_name: str,
+    rows: list[dict],
+) -> dict | None:
+    """§11.6 — Mirror EE-side fulfilment status onto the linked Sales
+    Invoice's ecs_easyecom_* dispatch fields.
+
+    Reads the latest businessorder row's `order_status_id`, maps it via
+    `DISPATCH_STATUS_BY_ID`, and stamps:
+      - ecs_easyecom_dispatch_status (always, when status_id is known)
+      - ecs_easyecom_dispatched_at   (first time we see status 5)
+      - ecs_easyecom_delivered_at    (first time we see status 6)
+      - ecs_easyecom_tracking_url    (whenever EE provides one)
+
+    Returns a small dict describing what changed (or None when nothing
+    changed / nothing to stamp). update_modified=False on the write so
+    the SI's modified timestamp isn't churned on every */5 tick.
+
+    Idempotent — re-running on the same payload writes the same values.
+    Never raises; failures are silent (the polling tick must not be
+    broken by an SI without the §11.6 fields, e.g. fresh installs that
+    haven't migrated yet).
+    """
+    try:
+        map_doc = frappe.get_doc("EasyEcom B2B Order Map", map_name)
+    except Exception:
+        return None
+
+    si_name = map_doc.get("sales_invoice")
+    if not si_name:
+        return None  # No SI linked yet (Mode 2 pre-mirror or Mode 1 pre-call)
+
+    b2b_rows = [r for r in rows if r.get("order_type_key") == "businessorder"]
+    if not b2b_rows:
+        return None
+
+    latest = max(b2b_rows, key=lambda r: r.get("last_update_date") or "")
+    status_id = latest.get("order_status_id")
+    if status_id not in DISPATCH_STATUS_BY_ID:
+        return None  # Unknown status — let the derivation function handle it
+
+    new_status = DISPATCH_STATUS_BY_ID[status_id]
+    tracking_url = ""
+    for key in TRACKING_URL_CANDIDATE_KEYS:
+        candidate = latest.get(key)
+        if candidate:
+            tracking_url = str(candidate).strip()
+            break
+
+    try:
+        current = frappe.db.get_value(
+            "Sales Invoice", si_name,
+            [
+                "ecs_easyecom_dispatch_status",
+                "ecs_easyecom_dispatched_at",
+                "ecs_easyecom_delivered_at",
+                "ecs_easyecom_tracking_url",
+            ],
+            as_dict=True,
+        ) or {}
+    except Exception:
+        # Custom fields not yet migrated; bail silently.
+        return None
+
+    updates: dict[str, Any] = {}
+    if current.get("ecs_easyecom_dispatch_status") != new_status:
+        updates["ecs_easyecom_dispatch_status"] = new_status
+
+    # dispatched_at: first time we observe Shipped (or Delivered, since
+    # Delivered implies dispatch happened — backfill if we missed Shipped).
+    if status_id in (5, 6) and not current.get("ecs_easyecom_dispatched_at"):
+        updates["ecs_easyecom_dispatched_at"] = now_datetime()
+
+    # delivered_at: first time we observe Delivered.
+    if status_id == 6 and not current.get("ecs_easyecom_delivered_at"):
+        updates["ecs_easyecom_delivered_at"] = now_datetime()
+
+    # tracking URL: overwrite when EE supplies one (couriers can change
+    # mid-flight; trust EE as the source of truth).
+    if tracking_url and current.get("ecs_easyecom_tracking_url") != tracking_url:
+        updates["ecs_easyecom_tracking_url"] = tracking_url
+
+    if not updates:
+        return None
+
+    try:
+        frappe.db.set_value(
+            "Sales Invoice", si_name, updates,
+            update_modified=False,
+        )
+        frappe.db.commit()
+    except Exception:
+        return None
+
+    return {
+        "sales_invoice": si_name,
+        "status_id": status_id,
+        "new_status": new_status,
+        "fields_written": list(updates.keys()),
     }
 
 
