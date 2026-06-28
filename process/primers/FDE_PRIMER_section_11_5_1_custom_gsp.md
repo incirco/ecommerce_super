@@ -25,19 +25,31 @@ EE Account.
 ### Step 1 — Confirm India Compliance is configured
 
 ```
-On the ERPNext side:
-  1. Settings → GST Settings → has NIC IRP credentials configured
+On the ERPNext side (always required):
+  1. India Compliance app is installed
   2. Company → has GSTIN set on the seller Company
   3. Items being sold via B2B → have HSN code + Item Tax Template
-  4. (Test) manually generate an e-invoice for any draft SI to confirm IC works
+
+Only if gsp_mint_einvoice will be ON (Step 2b):
+  4. Settings → GST Settings → NIC IRP credentials configured
+  5. (Test) manually generate an e-invoice for any draft SI to confirm IC works
+
+Only if gsp_mint_ewaybill will be ON (Step 2b):
+  6. Settings → GST Settings → NIC EWB credentials configured
+  7. (Test) manually generate an e-way bill for a submitted SI
 ```
 
-If India Compliance isn't installed or has no credentials, Mode 1 will
-return HTTP 500 / 502 errors when EE calls us — fix on the ERPNext side
+**NIC portal credentials are only needed when you're minting via that
+portal.** If a client uses Custom GSP just to get the ERPNext-side PDF
+(both toggles OFF, see Step 2b), NIC credentials can stay blank — the
+SI is still created and submitted, just no IRP / EWB calls happen.
+
+If a toggle is ON but the relevant credentials aren't set, Mode 1 will
+return HTTP 500 / 502 when EE calls us — fix on the ERPNext side
 before configuring EE.
 
-mmpl16 already had 2,409 e-invoices minted via IC as of 2026-06-28, so this
-is well-tested for that bench.
+mmpl16 already had 2,409 e-invoices minted via IC as of 2026-06-28, so
+full Mode 1 (toggles ON) is well-tested for that bench.
 
 ### Step 2 — Set the Custom GSP Basic auth secret on the EasyEcom Account
 

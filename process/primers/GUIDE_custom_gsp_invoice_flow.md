@@ -359,20 +359,29 @@ Toggles (§4.4) **never disable idempotency** — they only gate whether NIC IRP
 ### Step 1 — Confirm India Compliance on ERPNext side (5 min)
 
 ```
-On ERPNext:
-  1. Verify India Compliance is installed (Desk → Module Def → search "India")
-  2. GST Settings → confirm NIC IRP credentials configured
-  3. Open the seller Company → confirm GSTIN set
-  4. Open any sample Item → confirm gst_hsn_code populated
-  5. Confirm an Item Tax Template exists for the seller Company at the right tax rate
+Always required (Custom GSP needs IC for tax / HSN / GST validation
+even when NIC minting is OFF):
+  1. India Compliance is installed (Desk → Module Def → search "India")
+  2. Seller Company has GSTIN set
+  3. Items used in B2B have gst_hsn_code populated
+  4. Item Tax Template exists for the seller Company at the right tax rate
 
-Smoke test India Compliance:
-  - Create a Draft Sales Invoice manually
-  - Click "Generate IRN" via India Compliance's standard button
-  - Confirm an IRN is returned and lands on the SI
+Only if you'll set gsp_mint_einvoice = ON (Step 2b):
+  5. GST Settings → NIC IRP credentials configured
+  6. Smoke test: create a Draft SI manually, click "Generate IRN" via
+     India Compliance's standard button, confirm IRN lands on the SI
 
-If this smoke fails, do NOT proceed — Mode 1 will fail at the IRN-mint step.
-mmpl16 is already proven: 2,409 e-invoices minted via IC as of 2026-06-27.
+Only if you'll set gsp_mint_ewaybill = ON (Step 2b):
+  7. GST Settings → NIC EWB credentials configured
+  8. Smoke test: from a submitted SI, generate an e-way bill via IC's
+     standard button, confirm ewaybill number is returned
+
+If a relevant smoke fails for a toggle you plan to leave ON, do NOT
+proceed — Mode 1 will fail at the corresponding mint step. If both
+toggles will be OFF, skip steps 5-8 entirely.
+
+mmpl16 is already proven for full Mode 1: 2,409 e-invoices minted via
+IC as of 2026-06-27.
 ```
 
 ### Step 2 — Set the Custom GSP Basic auth secret on the EE Account (5 min)
