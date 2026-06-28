@@ -109,10 +109,22 @@ tracking URL.
 
 ---
 
+## Related primers
+
+| Primer | Use when |
+|---|---|
+| `FDE_PRIMER_section_11_b2b_sales.md` | §11 Phase 1 baseline — the polling cron that drives §11.6 stamping lives here |
+| `FDE_PRIMER_section_11_5_1_custom_gsp.md` + `GUIDE_custom_gsp_invoice_flow.md` | Mode 1 Custom GSP — creates the SI that §11.6 then stamps on subsequent polls |
+
 ## Origin
 
-- §11 Phase 1 completion checklist deferred §11.6 to Phase 2
-- 2026-06-29 — built as a lightweight option per user direction (no
-  Delivery Note auto-create, Custom Fields only)
+- §11 Phase 1 completion checklist (2026-06-23) deferred §11.6 to Phase 2
+- 2026-06-29 — built as the lightweight option per user direction:
+  Custom Fields on SI + Script Report, NOT Frappe Workflow status +
+  auto-Delivery-Note creation (the heavier alternative the spec
+  describes)
+- PR #105 / commit `a856003`
 - Test coverage: 19 unit tests in `test_b2b_dispatch_status.py`
 - 0 regressions on the existing 25 polling tests
+- Spec deltas (3, all by design): see patch note 13 in
+  `SPEC_11_patch_notes.md`

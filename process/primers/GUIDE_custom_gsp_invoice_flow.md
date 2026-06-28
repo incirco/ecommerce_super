@@ -734,4 +734,14 @@ Step 2: Bearer <token>              → for /einvoice/update + /ewaybill/update
 - `EasyEcom Sync Record` with `direction = "Inbound API"`
 - EE UI shows IRN + downloadable PDF
 
-**Tracking**: Issue #99 · PR #104
+**Tracking**: Issue #99 · PR #104 · Patch note 12 in `SPEC_11_patch_notes.md`
+
+---
+
+## Related primers
+
+| Primer | Use when |
+|---|---|
+| `FDE_PRIMER_section_11_5_1_custom_gsp.md` | You just need the setup checklist, not the full architectural walkthrough |
+| `FDE_PRIMER_section_11_b2b_sales.md` | §11 Phase 1 baseline — the SO push that produces the Map row Custom GSP later finds |
+| `FDE_PRIMER_section_11_6_dispatch_status.md` | After Custom GSP mints the SI, polling stamps Shipped/Delivered on subsequent ticks |

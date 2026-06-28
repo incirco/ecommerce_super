@@ -1,14 +1,25 @@
-# FDE Primer — §11 B2B Sales (Phase 1)
+# FDE Primer — §11 B2B Sales
 
 For Forward-Deployed Engineers operating §11 in production. Companion
 to `SECTION_11_COMPLETION_CHECKLIST.md` (build state) and
 `process/test_scripts/section_11_b2b_sales.md` (repeatable smoke).
 
-Phase 1 covers: SO push (Async) → EasyEcom acknowledgement → cancel
-from ERPNext side → polling reconciliation of EE-side state changes.
+**This primer covers Phase 1**: SO push (Async) → EasyEcom
+acknowledgement → cancel from ERPNext side → polling reconciliation
+of EE-side state changes.
 
-Phase 2 (invoice flow, dispatch, SRE mirror, multi-warehouse split,
-sync push mode) is not in scope here.
+**Phase 2 work has its own primers** (each covers one sub-area):
+
+| Sub-area | Primer | Spec |
+|---|---|---|
+| §11.5.1 Mode 1 — Custom GSP (we are the GSP, ERPNext mints IRN) | `FDE_PRIMER_section_11_5_1_custom_gsp.md` (setup) + `GUIDE_custom_gsp_invoice_flow.md` (comprehensive) | §11.5.1 + patch note 12 |
+| §11.5.2 Mode 2 — EE-generated invoice mirror | no separate primer needed — runs automatically on the polling tick when EE reports `invoice_number` on a businessorder row; result lands as a Draft Sales Invoice linked from `EasyEcom B2B Order Map.sales_invoice`. >1% total variance raises a Discrepancy for FDE review | §11.5.2 + patch note 11 |
+| §11.6 Dispatch status mirror on Sales Invoice | `FDE_PRIMER_section_11_6_dispatch_status.md` | §11.6 + patch note 13 |
+
+Items NOT yet built (parked or deferred — see completion checklist
+"Phase 2 scope decisions" for status): §11.3.2 sync push mode, §11.4
+SRE mirror, §11.7 multi-warehouse split, EE webhook receivers,
+history-aware polling derivation.
 
 ---
 

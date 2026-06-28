@@ -262,12 +262,22 @@ when, from what IP).
 
 ---
 
+## Related primers
+
+| Primer | Use when |
+|---|---|
+| `GUIDE_custom_gsp_invoice_flow.md` | You need the comprehensive walkthrough — EE's full contract, our endpoint internals, auth flow, idempotency layering, every toggle / Print Format combination + response shape, smoke test |
+| `FDE_PRIMER_section_11_b2b_sales.md` | §11 Phase 1 baseline (push, cancel, polling) — context for how the SO + Map row exists before Custom GSP fires |
+| `FDE_PRIMER_section_11_6_dispatch_status.md` | After Mode 1 mints the SI, dispatch status fires on subsequent polling ticks (Custom GSP populates IRN/PDF, polling populates Shipped/Delivered) |
+
 ## Origin
 
-- Issue #99 — tracking issue
+- Issue #99 — tracking issue (closed by PR #104)
 - Live-verified India Compliance status on mmpl16 (2026-06-27): 2,409
   e-invoices already minted via IC, all infrastructure operational
 - §11.5.1 Custom GSP packet design call: 2026-06-26 with rishinikhil
+- Toggle + Print Format selector follow-on: 2026-06-28 (same PR)
+- Patch note: `SPEC_11_patch_notes.md` entry 12
 
 See `drafts/spec_sections/section_11_5_custom_gsp_packet.draft.md` for the
 full architectural rationale.
