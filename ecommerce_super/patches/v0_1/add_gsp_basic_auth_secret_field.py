@@ -82,6 +82,38 @@ def execute() -> None:
                         "this is typically ON when E-Invoice is ON."
                     ),
                 },
+                {
+                    "fieldname": "gsp_print_format",
+                    "label": "Custom GSP Invoice Print Format",
+                    "fieldtype": "Link",
+                    "options": "Print Format",
+                    "insert_after": "gsp_mint_ewaybill",
+                    "description": (
+                        "Print Format used to render the invoice PDF "
+                        "returned in /einvoice/update responses. Leave "
+                        "blank to use Frappe's 'Standard' Sales Invoice "
+                        "format. Set to a client-branded format (e.g. "
+                        "'GST Tax Invoice') so the PDF EE displays "
+                        "matches the client's existing invoice template. "
+                        "The Print Format must target the Sales Invoice "
+                        "doctype — mismatched doctypes will 500 at "
+                        "render time."
+                    ),
+                },
+                {
+                    "fieldname": "gsp_ewaybill_print_format",
+                    "label": "Custom GSP E-Way Bill Print Format",
+                    "fieldtype": "Link",
+                    "options": "Print Format",
+                    "insert_after": "gsp_print_format",
+                    "description": (
+                        "Print Format used to render the e-way bill PDF "
+                        "returned in /ewaybill/update responses. Leave "
+                        "blank to use India Compliance's 'e-Waybill' "
+                        "format. Same rules as gsp_print_format — must "
+                        "target Sales Invoice doctype."
+                    ),
+                },
             ],
         },
         ignore_validate=True,

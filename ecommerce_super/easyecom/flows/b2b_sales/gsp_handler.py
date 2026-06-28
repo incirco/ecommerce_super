@@ -228,7 +228,7 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
     # Idempotency — IRN already minted (regardless of toggle, return
     # cached if present; never re-mint).
     if si.get("irn"):
-        return _assemble_irn_response(si)
+        return _assemble_irn_response(si, ee_account=ee_account)
 
     # IC requires submitted SI. Submit if Draft (whether or not we
     # then mint IRN — the GL impact happens either way).
@@ -246,7 +246,7 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
     if not _should_mint_einvoice(ee_account):
         si.reload()
         # Return response with empty IRN fields but populated PDF URL.
-        return _assemble_irn_response(si)
+        return _assemble_irn_response(si, ee_account=ee_account)
 
     # Call India Compliance.
     from india_compliance.gst_india.utils.e_invoice import (
@@ -262,7 +262,7 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
         # safety net) — re-read the doc to grab the existing IRN.
         si.reload()
         if si.get("irn"):
-            return _assemble_irn_response(si)
+            return _assemble_irn_response(si, ee_account=ee_account)
         raise GSPHandlerError(
             f"India Compliance IRN mint failed for {si_name}: "
             f"{type(exc).__name__}: {exc}"
@@ -309,7 +309,9 @@ def mint_eway_for_si(
     si = frappe.get_doc("Sales Invoice", si_name)
 
     if si.get("ewaybill"):
-        return _assemble_eway_response(si, transport_values=transport_values)
+        return _assemble_eway_response(
+            si, transport_values=transport_values, ee_account=ee_account,
+        )
 
     if si.docstatus != 1:
         raise GSPHandlerError(
@@ -321,7 +323,9 @@ def mint_eway_for_si(
     if not _should_mint_ewaybill(ee_account):
         # Return response with empty eway fields but echo transport
         # values so EE has a paper trail of what was attempted.
-        return _assemble_eway_response(si, transport_values=transport_values)
+        return _assemble_eway_response(
+            si, transport_values=transport_values, ee_account=ee_account,
+        )
 
     import json as _json
     from india_compliance.gst_india.utils.e_waybill import (
@@ -337,7 +341,9 @@ def mint_eway_for_si(
     except Exception as exc:
         si.reload()
         if si.get("ewaybill"):
-            return _assemble_eway_response(si, transport_values=transport_values)
+            return _assemble_eway_response(
+            si, transport_values=transport_values, ee_account=ee_account,
+        )
         raise GSPHandlerError(
             f"India Compliance e-way bill mint failed for {si_name}: "
             f"{type(exc).__name__}: {exc}"
@@ -350,7 +356,7 @@ def mint_eway_for_si(
             f"{si_name}. Check e-Waybill Log for the NIC response detail."
         )
 
-    return _assemble_eway_response(si)
+    return _assemble_eway_response(si, ee_account=ee_account)
 
 
 # ============================================================
@@ -358,7 +364,11 @@ def mint_eway_for_si(
 # ============================================================
 
 
-def _assemble_irn_response(si: Any) -> dict[str, Any]:
+def _assemble_irn_response(
+    si: Any,
+    *,
+    ee_account: str | None = None,
+) -> dict[str, Any]:
     """Build the data.invoice_details payload per EE's /einvoice contract."""
     return {
         "invoice_id": str(si.get("ecs_easyecom_invoice_id") or ""),
@@ -366,7 +376,7 @@ def _assemble_irn_response(si: Any) -> dict[str, Any]:
         "irn": si.get("irn") or "",
         "ack_number": si.get("ack_no") or "",
         "ack_date": si.get("ack_dt").isoformat() if si.get("ack_dt") else "",
-        "invoice_pdf": _resolve_invoice_pdf_url(si),
+        "invoice_pdf": _resolve_invoice_pdf_url(si, ee_account=ee_account),
         "irn_qr": si.get("signed_qr_code") or "",
         # PDF base64 inline: ship both (URL + base64) per the §11.5
         # packet's lean. We compute base64 lazily — only when client
@@ -381,6 +391,7 @@ def _assemble_eway_response(
     si: Any,
     *,
     transport_values: dict[str, Any] | None = None,
+    ee_account: str | None = None,
 ) -> dict[str, Any]:
     """Build the data.invoice_details payload per EE's /ewaybill contract.
 
@@ -398,7 +409,10 @@ def _assemble_eway_response(
             si.get("e_waybill_validity").isoformat()
             if si.get("e_waybill_validity") else ""
         ),
-        "eway_bill_pdf": _resolve_eway_pdf_url(si) if si.get("ewaybill") else "",
+        "eway_bill_pdf": (
+            _resolve_eway_pdf_url(si, ee_account=ee_account)
+            if si.get("ewaybill") else ""
+        ),
         "transport_mode": (
             si.get("mode_of_transport")
             or tv.get("mode_of_transport")
@@ -468,25 +482,71 @@ def _should_mint_ewaybill(ee_account: str | None) -> bool:
     return bool(int(value))
 
 
-def _resolve_invoice_pdf_url(si: Any) -> str:
+def _resolve_invoice_pdf_url(
+    si: Any,
+    *,
+    ee_account: str | None = None,
+) -> str:
     """Return a public URL to download the SI print as PDF.
 
     Builds on Frappe's standard print URL convention. EE downloads
     on demand. No file is persisted — PDF rendered on each request.
+
+    Print format precedence:
+      1. EasyEcom Account.gsp_print_format (per-Account override)
+      2. "Standard" (Frappe default Sales Invoice format)
     """
     site_url = (frappe.utils.get_url() or "").rstrip("/")
+    format_name = _resolve_print_format(
+        ee_account, "gsp_print_format", default="Standard",
+    )
     return (
         f"{site_url}/api/method/frappe.utils.print_format.download_pdf"
         f"?doctype=Sales+Invoice&name={si.name}"
-        f"&format=Standard&no_letterhead=0"
+        f"&format={frappe.utils.quoted(format_name)}&no_letterhead=0"
     )
 
 
-def _resolve_eway_pdf_url(si: Any) -> str:
-    """Return URL for the e-way bill print format."""
+def _resolve_eway_pdf_url(
+    si: Any,
+    *,
+    ee_account: str | None = None,
+) -> str:
+    """Return URL for the e-way bill print format.
+
+    Print format precedence:
+      1. EasyEcom Account.gsp_ewaybill_print_format (per-Account override)
+      2. "e-Waybill" (India Compliance's default format)
+    """
     site_url = (frappe.utils.get_url() or "").rstrip("/")
+    format_name = _resolve_print_format(
+        ee_account, "gsp_ewaybill_print_format", default="e-Waybill",
+    )
     return (
         f"{site_url}/api/method/frappe.utils.print_format.download_pdf"
         f"?doctype=Sales+Invoice&name={si.name}"
-        f"&format=e-Waybill&no_letterhead=0"
+        f"&format={frappe.utils.quoted(format_name)}&no_letterhead=0"
     )
+
+
+def _resolve_print_format(
+    ee_account: str | None,
+    fieldname: str,
+    *,
+    default: str,
+) -> str:
+    """Read the per-Account print format override, fall back to default.
+
+    Defaults to `default` when:
+      - ee_account is None
+      - field doesn't exist (patch not yet applied)
+      - field is blank
+      - lookup raises
+    """
+    if not ee_account:
+        return default
+    try:
+        value = frappe.db.get_value("EasyEcom Account", ee_account, fieldname)
+    except Exception:
+        return default
+    return str(value).strip() if value else default

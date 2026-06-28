@@ -331,6 +331,8 @@ Toggles (§4.4) **never disable idempotency** — they only gate whether NIC IRP
 | `EasyEcom Account.gsp_basic_auth_secret` (NEW Custom Field) | Password field, encrypted. The shared secret EE configures. |
 | `EasyEcom Account.gsp_mint_einvoice` (NEW Check, default ON) | When OFF, `/einvoice/update` skips NIC IRP mint — SI still created/submitted, response carries empty IRN fields but populated PDF URL. |
 | `EasyEcom Account.gsp_mint_ewaybill` (NEW Check, default ON) | When OFF, `/ewaybill/update` skips NIC EWB mint — response has empty eway_bill_number/date/pdf, transport fields echo back from request. |
+| `EasyEcom Account.gsp_print_format` (NEW Link → Print Format) | Per-Account override for the invoice PDF format. Blank → `Standard`. Set to the client's branded GST Tax Invoice format. |
+| `EasyEcom Account.gsp_ewaybill_print_format` (NEW Link → Print Format) | Per-Account override for the e-way bill PDF format. Blank → `e-Waybill` (India Compliance's format). |
 | `Sales Invoice.ecs_easyecom_invoice_id` (NEW Custom Field) | Idempotency anchor — EE's invoice_id stamped here. |
 | `Sales Invoice.ecs_easyecom_invoice_number` (NEW) | EE-side GST invoice series number (for Mode 2 / mirror). |
 | `Sales Invoice.ecs_easyecom_invoice_pdf_url` (NEW) | URL of EE-side PDF (Mode 2 only). |
@@ -419,6 +421,28 @@ Two Check fields appear below the secret, both **ON by default**:
 **Gotcha — NIC EWB needs an IRN.** `gsp_mint_einvoice` OFF + `gsp_mint_ewaybill` ON will fail at EWB time (NIC rejects the EWB request because there's no IRN to bind to). The IC error surfaces as HTTP 422 to EE. Either keep both ON, or turn both OFF.
 
 **Toggles do not affect idempotency** — once an IRN or EWB is minted, future calls return the cached value regardless of toggle state. Flipping a toggle after minting only impacts future fresh invoices.
+
+### Step 2c — Pick the Print Formats EE will display (3 min)
+
+The `invoice_pdf` / `eway_bill_pdf` URLs we return are Frappe print URLs (`?doctype=Sales+Invoice&format=<format-name>&...`). EE downloads the PDF from there when an EE user clicks "View Invoice" / "View E-Way Bill". So the Print Format chosen here is **what the EE-side user sees**.
+
+Two Link fields, both default blank:
+
+| Field | Fallback when blank | When to set explicitly |
+|---|---|---|
+| `gsp_print_format` | `Standard` (Frappe's default Sales Invoice format) | Almost always — clients want their branded GST Tax Invoice layout, not Frappe's default. Especially important when `gsp_mint_einvoice` is OFF and Custom GSP is being used purely for the PDF. |
+| `gsp_ewaybill_print_format` | `e-Waybill` (India Compliance's format) | Only if the client needs a custom EWB layout — IC's default carries everything NIC requires, so most clients leave this blank. |
+
+Both fields filter to Sales Invoice — pointing at a Print Format for another doctype will 500 at render time.
+
+**Authoring a custom Print Format:**
+1. Desk → Print Format → New
+2. Doctype: Sales Invoice
+3. Build the layout (Print Format Builder for HTML/CSS; or use the standard Jinja templating)
+4. Save with a memorable name (e.g. "MMPL GST Tax Invoice 2026")
+5. Return to EasyEcom Account, set `gsp_print_format` to that name
+
+The Print Format itself is a Frappe DocType — version-controlled via the standard `--export-fixtures` flow if you want it under git.
 
 ### Step 3 — Configure the EE-side Custom GSP (10 min)
 

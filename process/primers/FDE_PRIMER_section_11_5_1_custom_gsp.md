@@ -93,6 +93,21 @@ Note: NIC EWB requires an IRN as input — so `gsp_mint_ewaybill` ON + `gsp_mint
 
 Idempotency is unaffected by toggles: once an IRN/EWB is minted, future calls return the cached value regardless of toggle state. Flipping a toggle after minting only affects future fresh invoices, not historical ones.
 
+### Step 2c — Pick the print formats for the PDFs EE will display
+
+Two Link fields (both default blank → use built-in formats):
+
+| Field | Default if blank | Set this when |
+|---|---|---|
+| `gsp_print_format` (Custom GSP Invoice Print Format) | `Standard` (Frappe's default Sales Invoice format) | Client has a branded GST invoice template — point to that Print Format's name |
+| `gsp_ewaybill_print_format` (Custom GSP E-Way Bill Print Format) | `e-Waybill` (India Compliance's format) | Client wants a custom EWB layout |
+
+Both fields filter to `doctype = Sales Invoice` — picking a format for another doctype will 500 at render time.
+
+**Why this matters:** the URL we return in `invoice_pdf` is a Frappe print URL like `?doctype=Sales+Invoice&format=<your-format>&...`. EE downloads the PDF from that URL when an EE user clicks "View Invoice". So the format chosen here is what the EE-side user sees.
+
+Common case: when both `gsp_mint_einvoice` and `gsp_mint_ewaybill` are OFF (ERPNext-side PDF only — no NIC minting), set `gsp_print_format` to the client's branded invoice format. That's the whole reason they enabled Custom GSP — Frappe's "Standard" template is almost certainly not what they want EE displaying.
+
 ### Step 3 — Configure EE-side Custom GSP
 
 ```
@@ -239,10 +254,11 @@ when, from what IP).
 - **Auto-cancel on EE cancel** — if EE cancels an already-minted invoice,
   we don't auto-cancel the IRN on NIC. India Compliance has its own
   `cancel_e_invoice` flow; FDE triggers it manually if needed.
-- **Print format customisation** — uses Frappe's default Sales Invoice print
-  format. If your client wants a custom layout matching EE's existing PDF,
-  build a per-client print format and reference it via the
-  `_resolve_invoice_pdf_url` helper in gsp_handler.py.
+- **Print format publishing UI** — the `gsp_print_format` /
+  `gsp_ewaybill_print_format` Link fields exist and are wired into the PDF
+  URL, but there's no in-app workflow to author a new Print Format from
+  scratch. Use Frappe's standard Print Format Builder (Desk → Print Format
+  → New) to design the layout, then point the EE Account at it.
 
 ---
 

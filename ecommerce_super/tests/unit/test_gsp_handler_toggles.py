@@ -14,6 +14,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from ecommerce_super.easyecom.flows.b2b_sales.gsp_handler import (
+    _resolve_eway_pdf_url,
+    _resolve_invoice_pdf_url,
+    _resolve_print_format,
     _should_mint_einvoice,
     _should_mint_ewaybill,
     mint_eway_for_si,
@@ -351,6 +354,118 @@ class TestMintEwaybillToggle(unittest.TestCase):
 
         mock_generate.assert_not_called()
         self.assertEqual(response["eway_bill_number"], cached_ewb)
+
+
+# ============================================================
+# Print format resolution
+# ============================================================
+
+
+class TestResolvePrintFormat(unittest.TestCase):
+
+    def test_default_when_account_is_none(self):
+        result = _resolve_print_format(None, "gsp_print_format", default="Standard")
+        self.assertEqual(result, "Standard")
+
+    def test_default_when_field_is_blank(self):
+        with patch("frappe.db.get_value", return_value=""):
+            result = _resolve_print_format(
+                "Thuraya Fashion", "gsp_print_format", default="Standard",
+            )
+        self.assertEqual(result, "Standard")
+
+    def test_default_when_field_is_none(self):
+        with patch("frappe.db.get_value", return_value=None):
+            result = _resolve_print_format(
+                "Thuraya Fashion", "gsp_print_format", default="Standard",
+            )
+        self.assertEqual(result, "Standard")
+
+    def test_returns_custom_when_set(self):
+        with patch("frappe.db.get_value", return_value="GST Tax Invoice"):
+            result = _resolve_print_format(
+                "Thuraya Fashion", "gsp_print_format", default="Standard",
+            )
+        self.assertEqual(result, "GST Tax Invoice")
+
+    def test_strips_whitespace(self):
+        with patch("frappe.db.get_value", return_value="  GST Tax Invoice  "):
+            result = _resolve_print_format(
+                "Thuraya Fashion", "gsp_print_format", default="Standard",
+            )
+        self.assertEqual(result, "GST Tax Invoice")
+
+    def test_default_when_lookup_raises(self):
+        with patch("frappe.db.get_value", side_effect=RuntimeError("boom")):
+            result = _resolve_print_format(
+                "Thuraya Fashion", "gsp_print_format", default="Standard",
+            )
+        self.assertEqual(result, "Standard")
+
+
+class TestResolveInvoicePdfUrl(unittest.TestCase):
+
+    def _patches(self, format_lookup_return):
+        return (
+            patch(
+                "ecommerce_super.easyecom.flows.b2b_sales.gsp_handler.frappe.utils.get_url",
+                return_value="https://site.example",
+            ),
+            patch("frappe.db.get_value", return_value=format_lookup_return),
+        )
+
+    def test_uses_standard_when_account_has_no_override(self):
+        si = _fake_si(name="ACC-SINV-2026-00099")
+        get_url_p, get_value_p = self._patches(None)
+        with get_url_p, get_value_p:
+            url = _resolve_invoice_pdf_url(si, ee_account="Thuraya Fashion")
+        self.assertIn("format=Standard", url)
+        self.assertIn("name=ACC-SINV-2026-00099", url)
+
+    def test_uses_custom_format_when_set(self):
+        si = _fake_si(name="ACC-SINV-2026-00099")
+        get_url_p, get_value_p = self._patches("GST Tax Invoice")
+        with get_url_p, get_value_p:
+            url = _resolve_invoice_pdf_url(si, ee_account="Thuraya Fashion")
+        # URL-encoded space → %20
+        self.assertIn("format=GST%20Tax%20Invoice", url)
+
+    def test_no_account_falls_back_to_standard(self):
+        si = _fake_si(name="ACC-SINV-2026-00099")
+        with patch(
+            "ecommerce_super.easyecom.flows.b2b_sales.gsp_handler.frappe.utils.get_url",
+            return_value="https://site.example",
+        ):
+            url = _resolve_invoice_pdf_url(si)
+        self.assertIn("format=Standard", url)
+
+
+class TestResolveEwayPdfUrl(unittest.TestCase):
+
+    def test_uses_ewaybill_default_when_no_override(self):
+        si = _fake_si(name="ACC-SINV-2026-00099")
+        with (
+            patch(
+                "ecommerce_super.easyecom.flows.b2b_sales.gsp_handler.frappe.utils.get_url",
+                return_value="https://site.example",
+            ),
+            patch("frappe.db.get_value", return_value=None),
+        ):
+            url = _resolve_eway_pdf_url(si, ee_account="Thuraya Fashion")
+        # 'e-Waybill' contains a hyphen; quoted preserves it
+        self.assertIn("format=e-Waybill", url)
+
+    def test_uses_custom_eway_format_when_set(self):
+        si = _fake_si(name="ACC-SINV-2026-00099")
+        with (
+            patch(
+                "ecommerce_super.easyecom.flows.b2b_sales.gsp_handler.frappe.utils.get_url",
+                return_value="https://site.example",
+            ),
+            patch("frappe.db.get_value", return_value="MyCo EWB"),
+        ):
+            url = _resolve_eway_pdf_url(si, ee_account="Thuraya Fashion")
+        self.assertIn("format=MyCo%20EWB", url)
 
 
 if __name__ == "__main__":
