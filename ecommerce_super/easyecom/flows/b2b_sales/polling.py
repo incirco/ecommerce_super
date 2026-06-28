@@ -490,18 +490,121 @@ def _apply_decision(
         }
 
     if decision == "transition_to" and payload == "Invoice Pending":
+        # §11.5.2 Mode 2 — EE generated the invoice on its own side.
+        # Mirror it to an ERPNext Sales Invoice (Draft) and link via
+        # Map.sales_invoice. The 1% variance check raises a
+        # Discrepancy if our SI total diverges from EE's total.
+        # Capture EE's invoice_number on the Map too.
+        from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
+            InvoiceMirrorError,
+            InvoiceMirrorVariance,
+            mirror_si_from_ee_response,
+        )
+
+        # Pick the row that carries the invoice (latest with
+        # invoice_number populated; multi-shipment splits would
+        # produce multiple invoices over time — Phase 1 mirrors
+        # the latest seen on each polling tick).
+        b2b_rows = [r for r in rows if r.get("order_type_key") == "businessorder"]
+        invoice_row = max(
+            (r for r in b2b_rows if r.get("invoice_number")),
+            key=lambda r: r.get("last_update_date") or "",
+            default=None,
+        )
+
+        updates: dict[str, Any] = {"status": "Invoice Pending"}
+        if invoice_row:
+            ee_invoice_number = (
+                invoice_row.get("invoice_number") or ""
+            ).strip()
+            if ee_invoice_number and not map_doc.get("ee_invoice_number"):
+                updates["ee_invoice_number"] = ee_invoice_number
+
+        # Mirror SI iff we haven't already (idempotent via Map.sales_invoice).
+        mirror_outcome: dict | None = None
+        variance_warning: str | None = None
+        if invoice_row and not map_doc.get("sales_invoice"):
+            try:
+                mirror_outcome = mirror_si_from_ee_response(
+                    map_doc=map_doc, ee_row=invoice_row,
+                )
+                updates["sales_invoice"] = mirror_outcome["sales_invoice"]
+                updates["sales_invoice_mirrored_at"] = now_datetime()
+                updates["status"] = "Invoice Generated"
+            except InvoiceMirrorVariance as exc:
+                # SI WAS created — it's in Draft. Variance > 1%; raise
+                # Discrepancy for FDE review but persist the link.
+                # Re-derive the SI name from the exception's inner
+                # state: the mirror function already wrote the SI before
+                # the raise. Pull from the Map's existing sales_invoice
+                # link if it got set (transactional) — else fall back
+                # to a Sales Invoice lookup by invoice_id.
+                if not map_doc.get("sales_invoice"):
+                    si_name = frappe.db.get_value(
+                        "Sales Invoice",
+                        {"ecs_easyecom_invoice_id": str(invoice_row.get("invoice_id"))},
+                        "name",
+                    )
+                    if si_name:
+                        updates["sales_invoice"] = si_name
+                        updates["sales_invoice_mirrored_at"] = now_datetime()
+                updates["status"] = "Invoice Generated"
+                variance_warning = str(exc)
+            except InvoiceMirrorError as exc:
+                # Mirror failed before SI was inserted (missing Customer
+                # Map, missing Item Map, etc.). Record on Map.last_error
+                # + raise Discrepancy. Status stays Invoice Pending so
+                # the next polling tick retries.
+                updates["last_error"] = str(exc)[:5000]
+                _raise_discrepancy(
+                    kind="B2B Mode 2 SI mirror failed — missing prerequisite",
+                    reference_doctype="EasyEcom B2B Order Map",
+                    reference_name=map_doc.name,
+                    company=company or "",
+                    reason=(
+                        f"§11.5.2 Mode 2 SI mirror failed for "
+                        f"reference_code={map_doc.sales_order!r} "
+                        f"(EE Account {ee_account_name}, correlation_id="
+                        f"{correlation_id}). EE invoice_number="
+                        f"{invoice_row.get('invoice_number')!r}, "
+                        f"invoice_id={invoice_row.get('invoice_id')!r}. "
+                        f"Error: {exc!s}. Resolve the missing prerequisite "
+                        "(Customer Map, Item Map, etc.) — next polling tick "
+                        "retries automatically."
+                    ),
+                )
+
         frappe.db.set_value(
-            "EasyEcom B2B Order Map",
-            map_doc.name,
-            {"status": "Invoice Pending"},
+            "EasyEcom B2B Order Map", map_doc.name, updates,
             update_modified=False,
         )
+
+        if variance_warning:
+            _raise_discrepancy(
+                kind="B2B Mode 2 SI mirror — variance exceeds 1%",
+                reference_doctype="EasyEcom B2B Order Map",
+                reference_name=map_doc.name,
+                company=company or "",
+                reason=(
+                    f"§11.5.2 Mode 2 SI mirror created Draft SI for "
+                    f"reference_code={map_doc.sales_order!r} but the "
+                    f"computed totals diverge >1%. {variance_warning} "
+                    "FDE: review the Item Tax Templates configured on "
+                    "the source items vs EE's tax_rate, then either "
+                    "amend or accept the Draft SI."
+                ),
+            )
+
         frappe.db.commit()
         return {
             "ok": True,
             "transitioned": True,
-            "discrepancy_raised": False,
+            "discrepancy_raised": bool(variance_warning) or (
+                mirror_outcome is None and invoice_row is not None
+            ),
             "decision": "invoice_pending",
+            "mirror_outcome": mirror_outcome,
+            "variance_warning": variance_warning,
         }
 
     if decision == "partial_cancel":

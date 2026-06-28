@@ -103,3 +103,4 @@ ecommerce_super.patches.v0_1.audit_and_rescue_custom_fields
 # specific to §11, not the broader install-verify layer).
 ecommerce_super.patches.v0_1.add_b2b_config_to_easyecom_account
 ecommerce_super.patches.v0_1.rename_b2b_worklist_cards_gt_glyph
+ecommerce_super.patches.v0_1.add_b2b_mode2_sales_invoice_fields
