@@ -63,7 +63,15 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_easyecom_invoice_number",
                     "label": "EE Invoice Number",
-                    "fieldtype": "Data",
+                    # Long Text (TEXT/mediumtext) instead of Data (varchar)
+                    # to avoid the 65535 in-row size limit on heavy benches
+                    # (mmpl16 has 12 apps installed and overflows even
+                    # with ROW_FORMAT=DYNAMIC). TEXT columns are stored
+                    # off-page with ~12-byte pointer — don't count against
+                    # the 65535 max. Field is display-only (never queried
+                    # via indexed lookup) so loss of varchar indexing is
+                    # acceptable.
+                    "fieldtype": "Long Text",
                     "insert_after": "ecs_easyecom_invoice_id",
                     "read_only": 1,
                     "description": (
@@ -77,7 +85,10 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_easyecom_invoice_pdf_url",
                     "label": "EE Invoice PDF URL",
-                    "fieldtype": "Data",
+                    # Same Long Text rationale as ecs_easyecom_invoice_number
+                    # — URLs aren't queried by exact match, so off-page
+                    # storage is fine.
+                    "fieldtype": "Long Text",
                     "insert_after": "ecs_easyecom_invoice_number",
                     "read_only": 1,
                     "description": (
