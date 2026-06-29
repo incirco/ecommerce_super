@@ -75,6 +75,34 @@ def build_si_from_ee_order(
             "— recon engine cannot join Settlement Lines without it."
         )
 
+    # Marketplace match guard — getAllOrders returns orders from ALL
+    # marketplaces on the EE Account (B2B businessorder rows leak through
+    # the status=Manifested filter; live-verified 2026-06-29 Harmony
+    # smoke). Skip rows whose marketplace_id doesn't match this Account's
+    # configured Marketplace. Per §12.9 line 2824 — should be a per-record
+    # Failed Sync Record, but a B2CBuilderError + per-record dispatch
+    # catch is functionally equivalent (caller logs + continues batch).
+    ee_marketplace_id = str(order_row.get("marketplace_id") or "").strip()
+    if ee_marketplace_id and str(marketplace_account.marketplace) != ee_marketplace_id:
+        raise B2CBuilderError(
+            f"Order row {ee_invoice_id} marketplace_id={ee_marketplace_id!r} "
+            f"does not match Marketplace Account "
+            f"{marketplace_account.name}'s marketplace="
+            f"{marketplace_account.marketplace!r}. "
+            "Skipping — likely a different marketplace's order leaking "
+            "through the polling status filter."
+        )
+
+    # Also skip B2B orders (order_type_key='businessorder') that aren't
+    # actually B2C — §11 push flows land these on the same EE Account.
+    order_type_key = str(order_row.get("order_type_key") or "").strip().lower()
+    if order_type_key == "businessorder":
+        raise B2CBuilderError(
+            f"Order row {ee_invoice_id} is order_type_key='businessorder' "
+            "(B2B). §12 only handles B2C marketplace orders; B2B is §11's "
+            "territory. Skipping."
+        )
+
     # ---- 1. Pool customer resolution (in-state vs out-of-state) ----
     pool_choice = _resolve_pool_customer(
         marketplace_account=marketplace_account,
@@ -347,16 +375,29 @@ def _gstin_state_code_to_name(code: str) -> str | None:
 
 
 def _resolve_line_items(order_row: dict) -> list[dict]:
-    """Resolve EE order_items → list of (item_code, qty, rate, hsn).
+    """Resolve EE order line array → list of (item_code, qty, rate, hsn).
 
     Reuses the §11.5.2 Item Map pattern: EE SKU → erpnext_name via
     EasyEcom Item Map. Raises B2CBuilderError listing all unmapped
     SKUs in one go (so the FDE fixes them in a single round-trip).
+
+    EE payload field name varies per endpoint:
+      - /orders/V2/getAllOrders returns `suborders` (live-verified
+        2026-06-29 Harmony smoke)
+      - /orders/V2/getOrderDetails returns `order_items` (§11 patch
+        note 1, live-verified 2026-06-23)
+    We scan both keys (plus camelCase variants) for portability.
     """
-    items = order_row.get("order_items") or order_row.get("orderItems") or []
+    items = (
+        order_row.get("suborders")
+        or order_row.get("order_items")
+        or order_row.get("orderItems")
+        or []
+    )
     if not items:
         raise B2CBuilderError(
-            "EE order row has no order_items — cannot build SI with zero lines."
+            "EE order row has no suborders / order_items — "
+            "cannot build SI with zero lines."
         )
 
     out: list[dict] = []

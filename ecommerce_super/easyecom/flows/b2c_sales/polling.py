@@ -145,10 +145,13 @@ def reconcile_one_marketplace_account(account_name: str) -> dict:
             "detail": "Skip: easyecom_account not configured on this Marketplace Account.",
         }
 
-    location_key = frappe.db.get_value(
+    # EE Account.default_location_key is a Link to EasyEcom Location
+    # (docname like ECS-LOC-xxx). EasyEcomClient expects the bare
+    # location_key string (the field on the Location row). Resolve.
+    location_docname = frappe.db.get_value(
         "EasyEcom Account", account.easyecom_account, "default_location_key"
     )
-    if not location_key:
+    if not location_docname:
         _stamp_last_pull_attempt(
             account_name,
             error=f"EasyEcom Account {account.easyecom_account!r} has no default_location_key",
@@ -158,6 +161,22 @@ def reconcile_one_marketplace_account(account_name: str) -> dict:
             "detail": (
                 f"Skip: EasyEcom Account {account.easyecom_account!r} has no "
                 "default_location_key — set one to enable §12 polling."
+            ),
+        }
+
+    location_key = frappe.db.get_value(
+        "EasyEcom Location", location_docname, "location_key"
+    )
+    if not location_key:
+        _stamp_last_pull_attempt(
+            account_name,
+            error=f"EasyEcom Location {location_docname!r} has no location_key field",
+        )
+        return {
+            "ok": False,
+            "detail": (
+                f"Skip: EasyEcom Location {location_docname!r} has no "
+                "location_key — corrupted Location row."
             ),
         }
 

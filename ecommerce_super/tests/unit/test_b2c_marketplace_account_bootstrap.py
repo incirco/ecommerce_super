@@ -238,8 +238,11 @@ class TestDefaultTaxCategories(unittest.TestCase):
     def test_default_in_state_constant(self):
         self.assertEqual(DEFAULT_TAX_CATEGORY_IN_STATE, "In-State")
 
-    def test_default_out_of_state_constant(self):
-        self.assertEqual(DEFAULT_TAX_CATEGORY_OUT_OF_STATE, "Out-of-State")
+    def test_default_out_of_state_constant_matches_india_compliance(self):
+        # India Compliance ships "Out-State" (no "of"); default updated
+        # to match. Older spec drafts said "Out-of-State" — kept as a
+        # candidate in the resolver fallback list.
+        self.assertEqual(DEFAULT_TAX_CATEGORY_OUT_OF_STATE, "Out-State")
 
 
 if __name__ == "__main__":

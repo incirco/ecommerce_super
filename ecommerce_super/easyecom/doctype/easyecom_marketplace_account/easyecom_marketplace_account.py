@@ -20,12 +20,25 @@ from frappe.model.document import Document
 from frappe.utils import now_datetime
 
 
-# Tax category names India Compliance ships by default. If a client
-# renames their tax categories, the FDE re-points the pseudo customers
-# to use the local names — the bootstrap defaults to these conventional
-# values; resolver falls back to no tax_category if neither exists.
-DEFAULT_TAX_CATEGORY_IN_STATE: str = "In-State"
-DEFAULT_TAX_CATEGORY_OUT_OF_STATE: str = "Out-of-State"
+# Tax category candidate names — tried in order; first existing one wins.
+# India Compliance ships "In-State" / "Out-State" (no "of"); some benches
+# rename to "Out-of-State" or "Inter-State". The resolver tries multiple
+# conventional names so the bootstrap works without manual setup.
+# If none match, the pool Customer is created with no tax_category and
+# the FDE re-points manually.
+TAX_CATEGORY_CANDIDATES_IN_STATE: tuple[str, ...] = (
+    "In-State",
+    "Intra-State",
+)
+TAX_CATEGORY_CANDIDATES_OUT_OF_STATE: tuple[str, ...] = (
+    "Out-State",
+    "Out-of-State",
+    "Inter-State",
+)
+
+# Back-compat alias for tests / external code.
+DEFAULT_TAX_CATEGORY_IN_STATE: str = TAX_CATEGORY_CANDIDATES_IN_STATE[0]
+DEFAULT_TAX_CATEGORY_OUT_OF_STATE: str = TAX_CATEGORY_CANDIDATES_OUT_OF_STATE[0]
 
 
 class EasyEcomMarketplaceAccount(Document):
@@ -100,11 +113,11 @@ def _bootstrap_pseudo_customers(
 
     in_state_name = _bootstrap_one_customer(
         customer_name=f"{label} B2C In-State - {company}",
-        tax_category=_resolve_tax_category(DEFAULT_TAX_CATEGORY_IN_STATE),
+        tax_category=_resolve_tax_category_from(TAX_CATEGORY_CANDIDATES_IN_STATE),
     )
     out_of_state_name = _bootstrap_one_customer(
         customer_name=f"{label} B2C Out-of-State - {company}",
-        tax_category=_resolve_tax_category(DEFAULT_TAX_CATEGORY_OUT_OF_STATE),
+        tax_category=_resolve_tax_category_from(TAX_CATEGORY_CANDIDATES_OUT_OF_STATE),
     )
     return (in_state_name, out_of_state_name)
 
@@ -131,34 +144,69 @@ def _bootstrap_one_customer(
 
 
 def _resolve_tax_category(preferred: str) -> str | None:
-    """Return the preferred Tax Category if it exists; otherwise None
-    so ERPNext applies whatever default the Company / SI implies. If
-    a client renames their tax categories, they re-point the pseudo
-    Customers manually."""
-    try:
-        if frappe.db.exists("Tax Category", preferred):
-            return preferred
-    except Exception:
-        return None
+    """Return the preferred Tax Category if it exists; otherwise None.
+
+    Kept as a single-candidate wrapper for back-compat with existing
+    tests + callers. New code should use _resolve_tax_category_from()
+    which takes a tuple of candidates."""
+    return _resolve_tax_category_from((preferred,))
+
+
+def _resolve_tax_category_from(candidates: tuple[str, ...]) -> str | None:
+    """Try each candidate Tax Category in order; return the first one
+    that exists. Returns None if none exist — the pool Customer gets
+    no tax_category and the FDE re-points manually.
+
+    Bench-portability: India Compliance ships some names; clients
+    sometimes rename. Trying multiple candidates means the bootstrap
+    works out of the box on most installations."""
+    for candidate in candidates:
+        try:
+            if frappe.db.exists("Tax Category", candidate):
+                return candidate
+        except Exception:
+            return None
     return None
 
 
 def _resolve_default_group() -> str:
-    """Return a Customer Group that exists. Prefers 'Commercial' (Frappe
-    default); falls back to whatever first group exists. ERPNext sites
-    always have at least one Customer Group."""
-    for candidate in ("Commercial", "All Customer Groups", "Individual"):
+    """Return a non-group (leaf) Customer Group that exists.
+
+    ERPNext rejects parent / group-type Customer Groups on Customer
+    rows — only leaf groups are valid. The candidate list is tried in
+    order; any candidate that's a group itself ('All Customer Groups',
+    'Commercial' on some seeded benches) is skipped.
+
+    Falls back to any leaf group on the bench. ERPNext sites with
+    no leaf Customer Group are pathological — last-resort returns
+    'Individual' (the standard Frappe leaf default)."""
+    for candidate in ("Individual", "Commercial", "All Customer Groups"):
         if frappe.db.exists("Customer Group", candidate):
-            return candidate
-    fallback = frappe.db.get_value("Customer Group", {}, "name")
-    return fallback or "Commercial"
+            is_group = frappe.db.get_value(
+                "Customer Group", candidate, "is_group"
+            )
+            if not is_group:
+                return candidate
+    # Generic leaf fallback
+    fallback = frappe.db.get_value(
+        "Customer Group", {"is_group": 0}, "name"
+    )
+    return fallback or "Individual"
 
 
 def _resolve_default_territory() -> str:
-    """Return a Territory that exists. Prefers 'India'; falls back to
-    'All Territories' (always present in ERPNext sites)."""
+    """Return a non-group (leaf) Territory that exists. Same rule as
+    `_resolve_default_group` — ERPNext rejects parent / group-type
+    Territory rows on Customers. Tries candidates in order; falls
+    back to any leaf Territory."""
     for candidate in ("India", "All Territories"):
         if frappe.db.exists("Territory", candidate):
-            return candidate
-    fallback = frappe.db.get_value("Territory", {}, "name")
+            is_group = frappe.db.get_value(
+                "Territory", candidate, "is_group"
+            )
+            if not is_group:
+                return candidate
+    fallback = frappe.db.get_value(
+        "Territory", {"is_group": 0}, "name"
+    )
     return fallback or "All Territories"
