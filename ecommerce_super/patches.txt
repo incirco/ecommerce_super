@@ -106,4 +106,10 @@ ecommerce_super.patches.v0_1.rename_b2b_worklist_cards_gt_glyph
 ecommerce_super.patches.v0_1.add_b2b_mode2_sales_invoice_fields
 ecommerce_super.patches.v0_1.add_gsp_basic_auth_secret_field
 ecommerce_super.patches.v0_1.add_b2b_dispatch_status_si_fields
+# Must run BEFORE add_b2c_sales_invoice_fields — converts heavy tables
+# to ROW_FORMAT=DYNAMIC to bypass MariaDB COMPACT row-size limit
+# (65535 bytes). Production benches with India Compliance + client
+# custom fields hit this limit when adding the 12 §12 B2C fields at
+# once. Surfaced on puresta-uat.m.frappe.cloud 2026-06-29.
+ecommerce_super.patches.v0_1.convert_sales_invoice_to_dynamic_row_format
 ecommerce_super.patches.v0_1.add_b2c_sales_invoice_fields
