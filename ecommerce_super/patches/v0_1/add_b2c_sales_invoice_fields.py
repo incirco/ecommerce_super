@@ -94,7 +94,16 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_payment_mode",
                     "label": "Payment Mode",
-                    "fieldtype": "Data",
+                    # Long Text (off-page) instead of Data (in-row varchar)
+                    # — see add_b2b_mode2_sales_invoice_fields for the
+                    # mmpl16 row-overflow rationale. Free-form EE-reported
+                    # value (Prepaid / COD / EMI / "Cash on Delivery" /
+                    # marketplace-specific strings) — never queried by
+                    # indexed equality lookup. Spec §4.2.8 lists this as
+                    # Select; pre-existing implementation drift kept the
+                    # field as Data since EE doesn't constrain the value
+                    # space to a fixed enum.
+                    "fieldtype": "Long Text",
                     "insert_after": "ecs_easyecom_order_id",
                     "read_only": 1,
                     "description": (
@@ -107,7 +116,11 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_awb_number",
                     "label": "AWB Number",
-                    "fieldtype": "Data",
+                    # Long Text (off-page) — see ecs_payment_mode rationale.
+                    # AWB is a tracking handle, not a lookup key (the
+                    # tracking_link URL on §11.6 dispatch fields is the
+                    # ops click-through; AWB is just for visual reference).
+                    "fieldtype": "Long Text",
                     "insert_after": "ecs_payment_mode",
                     "read_only": 1,
                     "description": (
@@ -119,7 +132,11 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_courier",
                     "label": "Courier",
-                    "fieldtype": "Data",
+                    # Long Text (off-page) — see ecs_payment_mode rationale.
+                    # Courier name is display-only; aggregation by carrier
+                    # is done via the recon engine's settlement reports,
+                    # not by indexed equality on this field.
+                    "fieldtype": "Long Text",
                     "insert_after": "ecs_awb_number",
                     "read_only": 1,
                     "description": (
