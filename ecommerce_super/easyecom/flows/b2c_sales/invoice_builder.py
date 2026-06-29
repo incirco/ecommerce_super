@@ -75,6 +75,38 @@ def build_si_from_ee_order(
             "— recon engine cannot join Settlement Lines without it."
         )
 
+    # Marketplace match guard — getAllOrders returns orders from ALL
+    # marketplaces on the EE Account (B2B businessorder rows leak through
+    # the status=Manifested filter; live-verified 2026-06-29 Harmony
+    # smoke). Skip rows whose marketplace_id doesn't match this Account's
+    # configured Marketplace. Per §12.9 line 2824 — should be a per-record
+    # Failed Sync Record, but a B2CBuilderError + per-record dispatch
+    # catch is functionally equivalent (caller logs + continues batch).
+    ee_marketplace_id = str(order_row.get("marketplace_id") or "").strip()
+    if ee_marketplace_id and str(marketplace_account.marketplace) != ee_marketplace_id:
+        raise B2CBuilderError(
+            f"Order row {ee_invoice_id} marketplace_id={ee_marketplace_id!r} "
+            f"does not match Marketplace Account "
+            f"{marketplace_account.name}'s marketplace="
+            f"{marketplace_account.marketplace!r}. "
+            "Skipping — likely a different marketplace's order leaking "
+            "through the polling status filter."
+        )
+
+    # Skip non-B2C order types — §10 (stocktransferorder) and §11
+    # (businessorder) flows land these on the same EE Account when
+    # marketplace_id=64 (internal B2B/STN channel). The marketplace_id
+    # guard above catches most leaks, but this defends against an FDE
+    # misconfiguring a Marketplace Account at marketplace_id=64.
+    order_type_key = str(order_row.get("order_type_key") or "").strip().lower()
+    non_b2c_keys = {"businessorder", "stocktransferorder"}
+    if order_type_key in non_b2c_keys:
+        raise B2CBuilderError(
+            f"Order row {ee_invoice_id} is order_type_key={order_type_key!r} "
+            "(§10/§11 territory). §12 only handles B2C marketplace orders. "
+            "Skipping."
+        )
+
     # ---- 1. Pool customer resolution (in-state vs out-of-state) ----
     pool_choice = _resolve_pool_customer(
         marketplace_account=marketplace_account,
@@ -88,8 +120,13 @@ def build_si_from_ee_order(
     warehouse = _resolve_warehouse(order_row, marketplace_account.company)
 
     # ---- 4. EE-supplied financials (the source of truth per Path 2) ----
+    # EE getAllOrders field for the order total is `total_amount`
+    # (live-verified 2026-06-29 Harmony — earlier candidates
+    # `invoice_amount`, `grand_total`, `total` are all absent).
+    # Kept as fallbacks for portability across EE versions / endpoints.
     ee_grand_total = float(
-        order_row.get("invoice_amount")
+        order_row.get("total_amount")
+        or order_row.get("invoice_amount")
         or order_row.get("grand_total")
         or order_row.get("total")
         or 0
@@ -302,10 +339,14 @@ def _resolve_shipping_state(order_row: dict) -> str | None:
             if shipping.get(key):
                 return str(shipping[key]).strip()
 
-    # Flat fields at order_row top level
+    # Flat fields at order_row top level. EE's getAllOrders flattens
+    # shipping address into the order_row root with bare field names —
+    # `state`, `state_code`, `city`, etc. (live-verified 2026-06-29
+    # Harmony retailorder payload).
     for key in (
         "shipping_state", "ship_state", "buyer_state",
         "customer_state", "state_name",
+        "state",  # EE getAllOrders flat-address convention
     ):
         if order_row.get(key):
             return str(order_row[key]).strip()
@@ -347,16 +388,29 @@ def _gstin_state_code_to_name(code: str) -> str | None:
 
 
 def _resolve_line_items(order_row: dict) -> list[dict]:
-    """Resolve EE order_items → list of (item_code, qty, rate, hsn).
+    """Resolve EE order line array → list of (item_code, qty, rate, hsn).
 
     Reuses the §11.5.2 Item Map pattern: EE SKU → erpnext_name via
     EasyEcom Item Map. Raises B2CBuilderError listing all unmapped
     SKUs in one go (so the FDE fixes them in a single round-trip).
+
+    EE payload field name varies per endpoint:
+      - /orders/V2/getAllOrders returns `suborders` (live-verified
+        2026-06-29 Harmony smoke)
+      - /orders/V2/getOrderDetails returns `order_items` (§11 patch
+        note 1, live-verified 2026-06-23)
+    We scan both keys (plus camelCase variants) for portability.
     """
-    items = order_row.get("order_items") or order_row.get("orderItems") or []
+    items = (
+        order_row.get("suborders")
+        or order_row.get("order_items")
+        or order_row.get("orderItems")
+        or []
+    )
     if not items:
         raise B2CBuilderError(
-            "EE order row has no order_items — cannot build SI with zero lines."
+            "EE order row has no suborders / order_items — "
+            "cannot build SI with zero lines."
         )
 
     out: list[dict] = []
@@ -422,7 +476,15 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
 
 def _resolve_warehouse(order_row: dict, company: str) -> str | None:
     """Resolve EE warehouse_id → ERPNext Warehouse via §8a Source-of-Truth
-    Map. Returns None if not resolved — SI uses Company default."""
+    Map. Returns None if not resolved — SI uses Company default.
+
+    Flow (verified 2026-06-29 Harmony smoke):
+      1. order_row.warehouse_id (EE company_id integer like 99293)
+      2. → EasyEcom Location with ee_company_id = <that integer>;
+         read its `location_key` field (the bare key, not the docname)
+      3. → Source-of-Truth Map where ee_location_key = <key> AND
+         company = <Company>; return its `warehouse` field
+    """
     ee_company_id = (
         order_row.get("warehouse_id")
         or order_row.get("assigned_warehouse_id")
@@ -431,22 +493,27 @@ def _resolve_warehouse(order_row: dict, company: str) -> str | None:
     if not ee_company_id:
         return None
 
-    ee_location = frappe.db.get_value(
+    # Source-of-Truth Map's `ee_location_key` is a Link → EasyEcom
+    # Location, so it stores the docname (e.g. ECS-LOC-ee9859099849),
+    # NOT the bare location_key field value. Live-verified
+    # 2026-06-29 Harmony smoke — LinkValidationError when using bare
+    # key.
+    location_docname = frappe.db.get_value(
         "EasyEcom Location",
         {"ee_company_id": str(ee_company_id)},
         "name",
     )
-    if not ee_location:
+    if not location_docname:
         return None
 
-    # §8a Source-of-Truth Map: EE Location → ERPNext Warehouse
     return frappe.db.get_value(
-        "EasyEcom Source Of Truth Map",
+        "Source-of-Truth Map",
         {
-            "ee_location": ee_location,
+            "ee_location_key": location_docname,
             "company": company,
+            "enabled": 1,
         },
-        "erpnext_warehouse",
+        "warehouse",
     )
 
 
@@ -489,28 +556,49 @@ def _hsn_default_rate(hsn: str) -> float:
 
 def _resolve_default_sales_tax_account(company: str) -> str:
     """Resolve the Company's default sales tax account for SI.taxes
-    rows. Looks at Company.default_tax_account, falls back to a
-    'Sales Taxes' account in the Company's CoA, raises if neither
-    exists."""
-    candidate = frappe.db.get_value("Company", company, "default_tax_account")
-    if candidate:
-        return candidate
+    rows.
 
-    # Fall back to any account named like "Output Tax" or "Sales Taxes"
-    # under the company.
-    for label in ("Output Tax - ", "Sales Taxes - "):
+    ERPNext v16 Company doctype doesn't have `default_tax_account`
+    (live-verified 2026-06-29 — column doesn't exist). Resolution
+    walks the CoA for India Compliance's conventional output-tax
+    account names: prefer IGST (the inter-state default; B2C
+    marketplace orders are commonly inter-state), then SGST / CGST,
+    then any 'Output Tax' or 'Sales Taxes' generic. Raises if none.
+
+    For proper CGST+SGST split on intra-state SIs, the SI's
+    tax_category (driven by the Customer's pool) makes ERPNext's
+    Sales Taxes and Charges Template apply automatically. This
+    function only resolves the account for the single 'Actual' EE-
+    supplied tax row when no template applies.
+    """
+    # Try canonical India Compliance output-tax account prefixes,
+    # in preference order. Most common live shapes: 'Output Tax IGST',
+    # 'Output Tax SGST', 'Output Tax CGST'.
+    candidates = (
+        "Output Tax IGST - ",
+        "Output Tax SGST - ",
+        "Output Tax CGST - ",
+        "Output Tax - ",
+        "Sales Taxes - ",
+    )
+    for prefix in candidates:
         match = frappe.db.get_value(
             "Account",
-            {"company": company, "name": ["like", f"{label}%"]},
+            {
+                "company": company,
+                "name": ["like", f"{prefix}%"],
+                "is_group": 0,
+            },
             "name",
         )
         if match:
             return match
 
     raise B2CBuilderError(
-        f"Company {company!r} has no default tax account configured. "
-        "Set Company.default_tax_account OR create an 'Output Tax' / "
-        "'Sales Taxes' account in the Chart of Accounts."
+        f"Company {company!r} has no output-tax account in the CoA. "
+        "Configure 'Output Tax IGST / SGST / CGST' accounts via India "
+        "Compliance, or create a generic 'Output Tax' / 'Sales Taxes' "
+        "Account."
     )
 
 
