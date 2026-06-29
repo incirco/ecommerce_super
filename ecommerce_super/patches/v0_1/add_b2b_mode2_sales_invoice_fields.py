@@ -24,8 +24,18 @@ from __future__ import annotations
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from ecommerce_super.easyecom._schema_utils import ensure_dynamic_row_format
+
 
 def execute() -> None:
+    # Pre-flight: ensure tabSales Invoice is on ROW_FORMAT=DYNAMIC so the
+    # column add doesn't overflow the 65535 byte InnoDB COMPACT row-size
+    # limit on heavy production benches (mmpl16 had 12 installed apps and
+    # failed here even after PR #112/#113's separate row-format patch was
+    # added, because patch order on already-deployed benches was stale).
+    # Idempotent + self-healing — survives any patches.txt ordering issue.
+    ensure_dynamic_row_format("tabSales Invoice")
+
     create_custom_fields(
         {
             "Sales Invoice": [

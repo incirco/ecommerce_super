@@ -39,8 +39,11 @@ from __future__ import annotations
 
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+from ecommerce_super.easyecom._schema_utils import ensure_dynamic_row_format
+
 
 def execute() -> None:
+    ensure_dynamic_row_format("tabSales Invoice")
     create_custom_fields(
         {
             "Sales Invoice": [
