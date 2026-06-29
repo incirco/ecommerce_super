@@ -306,6 +306,179 @@ The next downstream build (§102 B2C backfill, which is strict-blocked
 on §12 per its draft packet) should start from a patched spec so the
 backfill produces records consistent with the live §12 shape.
 
-Live-verification status: not yet smoked against Harmony. The
-SECTION_12_COMPLETION_CHECKLIST documents the unit-test coverage
-(75 tests green) and the live-smoke plan as a follow-up.
+Live-verification status:
+- Phase 1 (unit-test coverage): 74 tests green (initial 75 minus 1
+  consolidated during smoke fixes)
+- Phase 2 (live smoke against Harmony, 2026-06-29): end-to-end SI
+  creation from real EE payloads succeeded (PR #110). 3 Sales
+  Invoices minted (SINV-26-00009/10/11) against marketplace_id=10
+  retailorder rows. 11 misalignments between code and real bench /
+  real EE payloads surfaced and fixed — 4 of which are EE-contract
+  grounding corrections worth folding back into SPEC §7 / §12 (see
+  patch notes 7-10 below).
+
+---
+
+## 7. EE `getAllOrders` returns `suborders`, not `order_items` (cross-endpoint inconsistency)
+
+**Where in SPEC.md**: §12.3.2 / §12.4 (the EE payload shape
+referenced for SI line-item resolution); also §7 (the EE response
+shape contract).
+
+**The finding** (live-smoke 2026-06-29 against Harmony, invoice_id
+657765959 + retailorder rows 636253870 / 638702157 / 643904104).
+
+EE uses **different field names for the per-line array across
+endpoints**:
+- `/orders/V2/getOrderDetails` returns `order_items` (per §11
+  patch note 1 — renamed during §11 Phase 1 build from the
+  originally-assumed `suborders`)
+- `/orders/V2/getAllOrders` returns `suborders` (the original name;
+  the §11 rename does not apply here)
+
+This is an EE-side inconsistency, not a build defect. The two
+endpoints carry the same per-line shape (`sku`, `item_quantity`,
+`breakup_types`, `cancelled_quantity`, etc.) — only the parent key
+differs.
+
+**The fix.** `_resolve_line_items` in
+`flows/b2c_sales/invoice_builder.py` scans `suborders` first, falls
+back to `order_items` / `orderItems`. Defensive across both
+endpoints. Commit `b79910c`.
+
+**SPEC change required.** Add a note to §7 (EE contract / response
+shape) and to §12.4 (SI field-level mapping):
+"EE per-line array key is `suborders` on /orders/V2/getAllOrders
+and `order_items` on /orders/V2/getOrderDetails. Parser must scan
+both for portability across endpoints."
+
+Cross-link this to SPEC_11_patch_notes entry 1 (the original
+rename) so the methodology team sees the full picture.
+
+---
+
+## 8. EE `getAllOrders` `status` filter is not strict — non-B2C orders leak through
+
+**Where in SPEC.md**: §12.3.2 (the polling-cron status filter) and
+§12.9 (per-record failure handling for unknown marketplace_id).
+
+**The finding.** A 90-day sweep against Harmony with
+`status=Manifested` returned **58 orders across 13 windows**, but:
+- 55 had `marketplace_id=64` (EE-internal B2B + STN channel — our
+  own §11 push test orders + §10 STN test orders)
+- 3 had `marketplace_id=10` (Offline retailorder)
+- The "marketplace" filter we expected EE to honor was effectively
+  ignored — EE returned every order with status Manifested on
+  the EE Account, regardless of marketplace or order_type_key
+
+This is an EE-side behaviour; the `status` filter on getAllOrders
+filters by manifest status only, not by marketplace.
+
+**Phase 1 impact.** §12 polling cron picks up B2B + STN orders on
+benches where the same EE Account hosts both flows. Without per-
+record guards, the §12 SI builder would attempt to create marketplace
+SIs from B2B / STN orders → builds either fail (validation) or
+worse, create incorrect SIs.
+
+**The fix.** Two per-record guards in `build_si_from_ee_order`:
+1. `marketplace_id` mismatch guard: raises `B2CBuilderError` when
+   the EE row's `marketplace_id` doesn't match the Marketplace
+   Account's `marketplace` field. Per-record dispatch catches +
+   logs → batch continues.
+2. `order_type_key in {'businessorder', 'stocktransferorder'}`
+   guard: rejects §10 / §11 territory rows even when the
+   marketplace_id matches (defense against FDE misconfiguring a
+   Marketplace Account at `marketplace_id=64`).
+
+Both errors yield clean Failed Sync Records with actionable
+reasons. Commits `4442f82`, `b79910c`.
+
+**SPEC change required.** §12.3.2 should note that EE's
+`status=Manifested` filter is per-manifest-status only, not per-
+marketplace; §12.3.2 / §12.9 should describe the per-record
+marketplace_id + order_type_key guards as required defenses.
+
+---
+
+## 9. EE `getAllOrders` flattens shipping address into the order row
+
+**Where in SPEC.md**: §12.4 line 2774-2775 (the `shipping_address`
+field mapping).
+
+**The finding** (live-smoke 2026-06-29 — retailorder invoice_id
+643904104).
+
+EE's `getAllOrders` does **not** nest the shipping address under
+a `shipping_address` object. Instead, the address fields are
+flat at the order_row root with bare names:
+- `state` (e.g. "Uttar Pradesh")
+- `state_code` (e.g. "09")
+- `city`, `pin_code`, `address_line_1`, `address_line_2`
+- `email`, `contact_num`
+- `billing_state`, `billing_pin_code`, `billing_address_1`, etc.
+
+`/orders/V2/getOrderDetails` likely uses a different (nested) shape
+— but `getAllOrders` is flat. SPEC §12.4 implicitly assumed a nested
+`shipping_address` object.
+
+**The fix.** `_resolve_shipping_state` in builder now scans `state`
+as a fallback candidate after the spec-era names. Commit `b79910c`.
+
+**SPEC change required.** §12.4 field-mapping table should note
+that EE's `getAllOrders` flattens shipping address into the order
+row with bare field names, and the integration scans both the
+flat-root convention and the nested `shipping_address` convention
+for portability.
+
+---
+
+## 10. EE `getAllOrders` uses `total_amount`, not `invoice_amount` / `grand_total`
+
+**Where in SPEC.md**: §12.4 (the SI grand_total mapping) and §7 (EE
+response shape contract).
+
+**The finding** (live-smoke 2026-06-29 — retailorder rows).
+
+The original §12 builder's `ee_grand_total` candidate list was
+`invoice_amount` / `grand_total` / `total` — none of which are
+present in the `getAllOrders` payload. The actual field is
+`total_amount` (a Decimal-as-string like `"1000.0000"`).
+
+Builder was capturing `ee_grand_total = 0.0` on every SI from the
+smoke until the candidate list was extended. This silently broke
+the §12.9 1-paisa total variance check (compared `ee_total=0` against
+`SI.grand_total=100/600/40` and reported 0 paise variance because
+both compared as zero).
+
+**The fix.** `total_amount` added as the first candidate, ahead of
+the original three (kept as fallbacks for portability across
+endpoints / EE versions). Commit `b79910c`.
+
+**SPEC change required.** §12.4 field-mapping table should name
+`total_amount` as the canonical EE field for SI grand_total in the
+`getAllOrders` shape, with the spec-era names as fallbacks.
+
+---
+
+## Closeout (updated)
+
+Ten items now — six original architectural deviations (notes 1-6)
+plus four EE-contract grounding corrections from the 2026-06-29
+Harmony smoke (notes 7-10). The Harmony smoke that surfaced 7-10
+also caught 7 implementation-side bench-portability issues (Tax
+Category naming, leaf-group filtering, Location key vs docname,
+cursor advance, default_tax_account v15-vs-v16, SoT Map field
+type, Customer Group/Territory parents) — all fixed inline in
+PR #110, not patch-note-worthy because they're internal
+ERPNext/Frappe details rather than spec changes.
+
+All notes are by-design / live-verified. The §12 Phase 1
+implementation matches each fold-back description. Methodology
+team rewrites `SPEC.md §12` accordingly so §102 B2C backfill
+starts from a patched spec.
+
+Live-verification status: ✅ end-to-end smoke against Harmony
+2026-06-29 (PR #110). 3 SIs minted, Sync Records written, variance
+checks ran. Pending: out-of-state pool selection + ERPNext tax
+cross-check, both blocked on bench data (Company.state unset, HSN
+rates not configured on test Items) rather than code gaps.
