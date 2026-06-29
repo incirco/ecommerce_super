@@ -137,13 +137,15 @@ than flood the FDE with false positives on fresh installs.
   (not Path 3). If a specific marketplace's tax computation is so
   unreliable it pollutes the GL, we'll add the toggle then.
 
-## Part H — Related primers
+## Part H — Related primers + closeout docs
 
-| Primer | Use when |
+| Doc | Use when |
 |---|---|
-| `FDE_PRIMER_section_11_b2b_sales.md` | §11 baseline — different flow (SO → push out), shared substrate (polling cron, EE client) |
+| `FDE_PRIMER_section_11_b2b_sales.md` | §11 baseline — sibling flow (SO → push out vs §12's pull in), shared substrate (polling cron, EE client, Item Map, Source-of-Truth Map) |
 | `FDE_PRIMER_section_11_5_1_custom_gsp.md` | Mode 1 Custom GSP — relevant only for B2B; B2C never uses it |
 | `FDE_PRIMER_section_11_6_dispatch_status.md` | §11.6 dispatch status — currently only stamps B2B SIs; extending to B2C SIs is a small follow-up |
+| `spec_sections/SPEC_12_patch_notes.md` | 6 by-design deviations from SPEC.md §12 (methodology fold-back reference) |
+| `spec_sections/SECTION_12_COMPLETION_CHECKLIST.md` | Build state, test coverage, deferred items, what's next |
 
 ## Origin
 
