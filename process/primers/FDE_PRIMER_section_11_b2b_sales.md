@@ -21,6 +21,13 @@ Items NOT yet built (parked or deferred — see completion checklist
 SRE mirror, §11.7 multi-warehouse split, EE webhook receivers,
 history-aware polling derivation.
 
+**Sibling section:** §12 covers B2C / D2C / marketplace orders — the
+inverse flow (orders born in EE, polled in as Sales Invoices with no
+SO). See `FDE_PRIMER_section_12_b2c_marketplace.md` if you're working
+on Amazon / Flipkart / D2C sales. §11 and §12 share substrate (polling
+cron, EE client, Item Map, Source-of-Truth Map) but the trigger
+direction is opposite (push out vs pull in).
+
 ---
 
 ## Part A — What §11 does, in one paragraph
