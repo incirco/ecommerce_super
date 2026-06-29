@@ -93,7 +93,11 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_easyecom_tracking_url",
                     "label": "EE Tracking URL",
-                    "fieldtype": "Data",
+                    # Long Text (off-page) instead of Data (in-row varchar)
+                    # — see add_b2b_mode2_sales_invoice_fields for the
+                    # mmpl16 row-overflow rationale. URLs aren't queried
+                    # by indexed lookup so off-page storage is fine.
+                    "fieldtype": "Long Text",
                     "insert_after": "ecs_easyecom_delivered_at",
                     "read_only": 1,
                     "description": (
