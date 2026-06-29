@@ -120,12 +120,11 @@ ecommerce_super.patches.v0_1.add_b2b_mode2_sales_invoice_fields
 ecommerce_super.patches.v0_1.add_gsp_basic_auth_secret_field
 ecommerce_super.patches.v0_1.add_b2b_dispatch_status_si_fields
 # TEMPORARY — mmpl16-specific cleanup. Drops 11 legacy ee_* Custom Fields
-# (from a prior ad-hoc EasyEcom integration, last write 2026-05-26)
-# plus 2 empty orphan customer-mapping fields on tabSales Invoice that
-# are eating ~7 KB of row-size budget and blocking the b2c patch ALTER.
-# User confirmed 2026-06-29 that the 713 rows of legacy data are not
-# needed. Defensive / conditional — safe no-op on any site that doesn't
-# have these orphans. **REVERT this entry + the patch file from main
-# after the one-shot mmpl16 deploy.**
+# on tabSales Invoice (from a prior ad-hoc EasyEcom integration, last
+# write 2026-05-26) that are eating ~6.1 KB of row-size budget and
+# blocking the b2c patch ALTER. User confirmed 2026-06-29 that the 713
+# rows of legacy data are not needed. Defensive / conditional — safe
+# no-op on any site that doesn't have these columns. **REVERT this
+# entry + the patch file from main after the one-shot mmpl16 deploy.**
 ecommerce_super.patches.v0_1.drop_legacy_ee_si_columns_for_mmpl16
 ecommerce_super.patches.v0_1.add_b2c_sales_invoice_fields

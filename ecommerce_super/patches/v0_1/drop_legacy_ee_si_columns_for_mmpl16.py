@@ -1,8 +1,8 @@
-"""TEMPORARY mmpl16 cleanup — drop 11 legacy ee_* Custom Fields plus 2
-empty orphan customer-mapping fields on tabSales Invoice. They date to
-a previous ad-hoc EasyEcom integration attempt on this site (last write
-2026-05-26) and are now both (a) duplicated by our ecs_easyecom_* model
-and (b) eating row-size budget that blocks the §12 b2c patch ALTER.
+"""TEMPORARY mmpl16 cleanup — drop 11 legacy ee_* Custom Fields on
+tabSales Invoice. They date to a previous ad-hoc EasyEcom integration
+attempt on this site (last write 2026-05-26) and are now both
+(a) duplicated by our ecs_easyecom_* model and (b) eating row-size
+budget that blocks the §12 b2c patch ALTER.
 
 **Intended to be reverted from main after the one-shot mmpl16 deploy.**
 The patch file + patches.txt entry should be removed via `git revert`
@@ -10,9 +10,10 @@ so this never runs on other client benches.
 
 Per the user's 2026-06-29 decision: the 713 rows of historical EE-
 integration data carried by ee_invoice_id / ee_order_id / etc. are
-not needed. Dropping all ee_* + the two empty orphan customer-mapping
-fields frees ~7 KB of in-row headroom — comfortably unblocks the b2c
-patch with room to spare for future SI columns.
+not needed. Dropping all 11 ee_* frees ~6.1 KB of in-row headroom —
+comfortably unblocks the b2c patch with room to spare for future SI
+columns. source_customer / target_customer are intentionally NOT
+included per the same user instruction (preserved for now).
 
 Fields dropped (column drops batched in one ALTER for efficiency):
 
@@ -27,8 +28,6 @@ Fields dropped (column drops batched in one ALTER for efficiency):
   ee_carrier_id        713 rows  | DATA LOSS — no equivalent
   ee_reference_code    713 rows  | DATA LOSS — duplicates ecs_marketplace_order_id
   ee_po_id               0 rows  | empty — likely a 3rd-party app remnant
-  source_customer        0 rows  | empty orphan
-  target_customer        0 rows  | empty orphan
 
 Defensive:
 - Conditional on column existence (safe no-op on sites that don't have
@@ -61,9 +60,6 @@ _TO_DROP = (
     "ee_carrier_id",
     "ee_reference_code",
     "ee_po_id",
-    # Empty orphan customer-mapping fields from the same era
-    "source_customer",
-    "target_customer",
 )
 
 
