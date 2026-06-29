@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from ecommerce_super.easyecom.flows.b2c_sales.invoice_builder import (
     B2CBuilderError,
+    _check_total_variance,
     _check_variance,
     _compute_erpnext_tax_check,
     _gstin_state_code_to_name,
@@ -389,6 +390,117 @@ class TestCheckVariance(unittest.TestCase):
             correlation_id="cor-001",
         )
         self.assertFalse(result["discrepancy_raised"])
+
+
+# ============================================================
+# _check_total_variance — §12.9 1-paisa check
+# ============================================================
+
+
+class TestCheckTotalVariance(unittest.TestCase):
+
+    def _si(self, grand_total: float = 1180.00):
+        m = MagicMock()
+        m.name = "ACC-SINV-2026-60001"
+        m.company = "Acme Ltd"
+        m.get.side_effect = lambda key, d=None: (
+            grand_total if key == "grand_total" else d
+        )
+        return m
+
+    def test_no_alert_when_totals_match_to_the_paisa(self):
+        result = _check_total_variance(
+            si=self._si(grand_total=1180.00),
+            marketplace_account=_account(),
+            ee_invoice_id="EE-INV-100",
+            ee_grand_total=1180.00,
+            correlation_id="cor-001",
+        )
+        self.assertFalse(result["discrepancy_raised"])
+        self.assertEqual(result["total_variance_paise"], 0)
+
+    def test_no_alert_when_delta_is_one_paisa(self):
+        """1 paisa is exactly at threshold — within tolerance."""
+        result = _check_total_variance(
+            si=self._si(grand_total=1180.00),
+            marketplace_account=_account(),
+            ee_invoice_id="EE-INV-100",
+            ee_grand_total=1180.01,
+            correlation_id="cor-001",
+        )
+        self.assertFalse(result["discrepancy_raised"])
+        self.assertEqual(result["total_variance_paise"], 1)
+
+    def test_raises_when_delta_exceeds_one_paisa(self):
+        """1.5 paisa rounds to 2 → exceeds threshold → Discrepancy."""
+        with patch(
+            "ecommerce_super.easyecom.flows.grn_pull._raise_discrepancy"
+        ) as mock_disc:
+            result = _check_total_variance(
+                si=self._si(grand_total=1180.00),
+                marketplace_account=_account(),
+                ee_invoice_id="EE-INV-100",
+                ee_grand_total=1180.02,
+                correlation_id="cor-001",
+            )
+        self.assertTrue(result["discrepancy_raised"])
+        self.assertGreater(result["total_variance_paise"], 1)
+        mock_disc.assert_called_once()
+        call_kwargs = mock_disc.call_args.kwargs
+        self.assertIn("§12.9", call_kwargs["kind"])
+        self.assertIn("Path 2", call_kwargs["reason"])
+        self.assertIn("UPSTREAM-ISSUE", call_kwargs["reason"])
+
+    def test_raises_for_large_delta(self):
+        """₹10 delta — clearly an upstream bug."""
+        with patch(
+            "ecommerce_super.easyecom.flows.grn_pull._raise_discrepancy"
+        ) as mock_disc:
+            result = _check_total_variance(
+                si=self._si(grand_total=1170.00),
+                marketplace_account=_account(),
+                ee_invoice_id="EE-INV-100",
+                ee_grand_total=1180.00,
+                correlation_id="cor-001",
+            )
+        self.assertTrue(result["discrepancy_raised"])
+        self.assertEqual(result["total_variance_paise"], 1000)  # ₹10.00 = 1000 paise
+        mock_disc.assert_called_once()
+
+    def test_skips_when_ee_total_is_zero(self):
+        """Refund-only / promotional orders may have zero total —
+        don't alert."""
+        with patch(
+            "ecommerce_super.easyecom.flows.grn_pull._raise_discrepancy"
+        ) as mock_disc:
+            result = _check_total_variance(
+                si=self._si(grand_total=0),
+                marketplace_account=_account(),
+                ee_invoice_id="EE-INV-100",
+                ee_grand_total=0,
+                correlation_id="cor-001",
+            )
+        self.assertFalse(result["discrepancy_raised"])
+        mock_disc.assert_not_called()
+
+    def test_silent_when_discrepancy_raise_fails(self):
+        """Variance check must never break the SI creation flow."""
+        with (
+            patch(
+                "ecommerce_super.easyecom.flows.grn_pull._raise_discrepancy",
+                side_effect=RuntimeError("substrate down"),
+            ),
+            patch("frappe.log_error"),
+        ):
+            result = _check_total_variance(
+                si=self._si(grand_total=1180.00),
+                marketplace_account=_account(),
+                ee_invoice_id="EE-INV-100",
+                ee_grand_total=1190.00,
+                correlation_id="cor-001",
+            )
+        self.assertFalse(result["discrepancy_raised"])
+        self.assertGreater(result["total_variance_paise"], 1)
 
 
 # ============================================================
