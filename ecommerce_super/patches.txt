@@ -103,13 +103,20 @@ ecommerce_super.patches.v0_1.audit_and_rescue_custom_fields
 # specific to §11, not the broader install-verify layer).
 ecommerce_super.patches.v0_1.add_b2b_config_to_easyecom_account
 ecommerce_super.patches.v0_1.rename_b2b_worklist_cards_gt_glyph
+# Must run BEFORE any patch that adds new columns to Sales Invoice /
+# Sales Order / Customer. Converts heavy tables to ROW_FORMAT=DYNAMIC
+# to bypass MariaDB COMPACT row-size limit (65535 bytes). Production
+# benches with India Compliance + many client custom-field apps hit
+# this limit even when adding just 4 columns. First surfaced on
+# puresta-uat.m.frappe.cloud 2026-06-29 (against add_b2c_sales_invoice_fields).
+# Re-surfaced on mmpl16.frappe.cloud 2026-06-29 against
+# add_b2b_mode2_sales_invoice_fields — mmpl16 has ~12 apps installed
+# (hrms, insights, crm, modernmarwar, frappe_whatsapp, mint,
+# whatsapp_chatbot, eternal_support, etc.) so even the §11.5.2 4
+# columns overflow. Moved this patch FIRST in the §11/§12 patch
+# group to head off all subsequent SI column adds.
+ecommerce_super.patches.v0_1.convert_sales_invoice_to_dynamic_row_format
 ecommerce_super.patches.v0_1.add_b2b_mode2_sales_invoice_fields
 ecommerce_super.patches.v0_1.add_gsp_basic_auth_secret_field
 ecommerce_super.patches.v0_1.add_b2b_dispatch_status_si_fields
-# Must run BEFORE add_b2c_sales_invoice_fields — converts heavy tables
-# to ROW_FORMAT=DYNAMIC to bypass MariaDB COMPACT row-size limit
-# (65535 bytes). Production benches with India Compliance + client
-# custom fields hit this limit when adding the 12 §12 B2C fields at
-# once. Surfaced on puresta-uat.m.frappe.cloud 2026-06-29.
-ecommerce_super.patches.v0_1.convert_sales_invoice_to_dynamic_row_format
 ecommerce_super.patches.v0_1.add_b2c_sales_invoice_fields
