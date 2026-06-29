@@ -172,58 +172,69 @@ class TestResolveTaxCategory(unittest.TestCase):
 
 
 class TestResolveDefaultGroup(unittest.TestCase):
+    """Resolver tries candidates in order; for each, checks exists +
+    is_group=0 (live-bench fix 2026-06-29: 'Commercial' is a parent
+    group on some seeded benches; only leaf groups are accepted)."""
 
-    def test_prefers_commercial_when_present(self):
-        with patch(
-            "frappe.db.exists",
-            side_effect=lambda dt, name: name == "Commercial",
-        ):
-            self.assertEqual(_resolve_default_group(), "Commercial")
-
-    def test_falls_back_to_all_customer_groups(self):
-        with (
-            patch(
-                "frappe.db.exists",
-                side_effect=lambda dt, name: name == "All Customer Groups",
-            ),
-            patch("frappe.db.get_value"),
-        ):
-            self.assertEqual(_resolve_default_group(), "All Customer Groups")
-
-    def test_falls_back_to_individual_when_neither(self):
+    def test_prefers_individual_when_present_and_leaf(self):
         with (
             patch(
                 "frappe.db.exists",
                 side_effect=lambda dt, name: name == "Individual",
             ),
-            patch("frappe.db.get_value"),
+            patch("frappe.db.get_value", return_value=0),  # is_group = 0 (leaf)
         ):
             self.assertEqual(_resolve_default_group(), "Individual")
 
-    def test_falls_back_to_any_existing_group_when_no_canonical_match(self):
-        with (
-            patch("frappe.db.exists", return_value=False),
-            patch("frappe.db.get_value", return_value="Some Custom Group"),
-        ):
-            self.assertEqual(_resolve_default_group(), "Some Custom Group")
-
-
-class TestResolveDefaultTerritory(unittest.TestCase):
-
-    def test_prefers_india(self):
-        with patch(
-            "frappe.db.exists",
-            side_effect=lambda dt, name: name == "India",
-        ):
-            self.assertEqual(_resolve_default_territory(), "India")
-
-    def test_falls_back_to_all_territories(self):
+    def test_skips_commercial_when_it_is_a_parent_group(self):
+        # Commercial exists but is_group=1 (parent) — should be skipped
+        def is_group_lookup(dt, name, field=None):
+            if name == "Commercial":
+                return 1  # parent group, reject
+            return 0
         with (
             patch(
                 "frappe.db.exists",
-                side_effect=lambda dt, name: name == "All Territories",
+                side_effect=lambda dt, name: name in ("Commercial", "All Customer Groups"),
             ),
-            patch("frappe.db.get_value"),
+            patch("frappe.db.get_value", side_effect=is_group_lookup),
+        ):
+            self.assertEqual(_resolve_default_group(), "All Customer Groups")
+
+    def test_falls_back_to_any_leaf_group_when_no_canonical_match(self):
+        # No canonical names exist; the generic leaf fallback fires
+        # via frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+        with (
+            patch("frappe.db.exists", return_value=False),
+            patch("frappe.db.get_value", return_value="Some Leaf Group"),
+        ):
+            self.assertEqual(_resolve_default_group(), "Some Leaf Group")
+
+
+class TestResolveDefaultTerritory(unittest.TestCase):
+    """Same leaf-only constraint as TestResolveDefaultGroup."""
+
+    def test_prefers_india_when_leaf(self):
+        with (
+            patch(
+                "frappe.db.exists",
+                side_effect=lambda dt, name: name == "India",
+            ),
+            patch("frappe.db.get_value", return_value=0),  # leaf
+        ):
+            self.assertEqual(_resolve_default_territory(), "India")
+
+    def test_skips_india_when_it_is_a_parent_territory(self):
+        def is_group_lookup(dt, name, field=None):
+            if name == "India":
+                return 1  # parent territory
+            return 0
+        with (
+            patch(
+                "frappe.db.exists",
+                side_effect=lambda dt, name: name in ("India", "All Territories"),
+            ),
+            patch("frappe.db.get_value", side_effect=is_group_lookup),
         ):
             self.assertEqual(_resolve_default_territory(), "All Territories")
 

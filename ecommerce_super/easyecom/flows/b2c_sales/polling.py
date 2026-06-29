@@ -181,11 +181,10 @@ def reconcile_one_marketplace_account(account_name: str) -> dict:
         }
 
     correlation_id = new_correlation_id()
-    pull_window_start = now_datetime()
 
     client = EasyEcomClient(location_key=location_key)
     try:
-        orders = _walk_orders(
+        orders, window_end = _walk_orders(
             client=client,
             account=account,
             correlation_id=correlation_id,
@@ -210,16 +209,19 @@ def reconcile_one_marketplace_account(account_name: str) -> dict:
             )
         )
 
-    # Advance the cursor on success — even if some orders within the
-    # batch failed (they'll resurface on next poll if EE still returns
-    # them, otherwise they're recorded as Failed Sync Records for FDE).
-    _advance_cursor(account_name, pull_window_start)
+    # Advance the cursor to the END of the actual window walked — NOT
+    # to "now". Critical for two reasons: (a) historical sweeps with a
+    # rewound cursor iterate correctly through 7-day slices; (b) the
+    # 7-day cap (patch note 4) is respected so re-poll covers the
+    # uncovered tail.
+    _advance_cursor(account_name, window_end)
 
     return {
         "ok": True,
         "orders_pulled": len(orders),
         "outcomes": per_order_outcomes,
         "correlation_id": correlation_id,
+        "window_end": str(window_end),
     }
 
 
@@ -233,15 +235,18 @@ def _walk_orders(
     client: EasyEcomClient,
     account: Any,
     correlation_id: str,
-) -> list[dict]:
+) -> tuple[list[dict], Any]:
     """Call /orders/V2/getAllOrders with the configured status filter
-    + sliding date window (last_pull_orders → now).
+    + sliding date window (last_pull_orders → now, capped at 7 days).
 
-    Returns the list of order rows. Single-page for v1 — EE's
-    getAllOrders supports cursor paging but v1 takes whatever fits
-    in one default-page response; remainder lands on next tick. The
-    7-day-window cap (patch note 4) is respected — if the window
-    exceeds 7 days, we cap at 7 days from cursor.
+    Returns (orders, window_end). window_end is the actual end of the
+    date window walked — used by the caller to advance the cursor to
+    the right point (not to "now"), so historical sweeps can iterate
+    in 7-day slices.
+
+    Single-page for v1 — EE's getAllOrders supports cursor paging but
+    v1 takes whatever fits in one default-page response; remainder
+    lands on next tick.
     """
     status_filter = account.get("polling_status_filter") or "Manifested"
 
@@ -274,7 +279,7 @@ def _walk_orders(
         correlation_id=correlation_id,
     )
 
-    return _extract_orders(response)
+    return _extract_orders(response), end_dt
 
 
 def _extract_orders(response: Any) -> list[dict]:
