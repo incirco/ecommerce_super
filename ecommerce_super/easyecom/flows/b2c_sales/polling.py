@@ -260,7 +260,16 @@ def _walk_orders(
     `next_page_url` cursor field automatically. Caps at
     `_MAX_PAGES_PER_WINDOW` as a runaway guard.
     """
-    status_filter = account.get("polling_status_filter") or "Manifested"
+    # Note on the dropped `status="Manifested"` param:
+    # Verified 2026-06-30 against Puresta EE that EE silently ignores
+    # the `status` request param on /orders/V2/getAllOrders — same
+    # response (1000 orders, identical mp_id mix) returned for
+    # status="Manifested", status_id=7, status_id=7,10, AND no status.
+    # The valid param per EE docs is `status_id` (Integer) but EE's
+    # default response is already restricted to manifested orders
+    # (those with an invoice_id set), so we don't need to pass one.
+    # If a future need surfaces (e.g. include Returned status 10),
+    # add `status_id=...` with the integer code.
 
     # Build the date window. EE's getAllOrders requires start_date /
     # end_date (also satisfies the patch-note-3 reference_code-OR-
@@ -281,15 +290,29 @@ def _walk_orders(
     if (end_dt - start_dt).total_seconds() > max_window_seconds:
         end_dt = start_dt + (end_dt - start_dt).__class__(seconds=max_window_seconds)
 
+    # marketplaceId is honored server-side by EE (verified 2026-06-30
+    # against Puresta). Passing it filters at the EE side, which:
+    #   - Eliminates cross-marketplace cross-talk in the response
+    #     (previously every MA pulled the same all-marketplace stream
+    #     and rejected ~90% of rows post-fetch)
+    #   - Implicitly drops B2B / STN order types (mp_id=64) and
+    #     Offline marketplace (mp_id=10) leaks — those have their
+    #     own mp_ids that no B2C MA would request
+    #   - Cuts per-tick EE API load by an order of magnitude on
+    #     multi-MA benches
+    marketplace_id = account.get("marketplace")
+    params = {
+        "start_date": start_dt.isoformat(),
+        "end_date": end_dt.isoformat(),
+    }
+    if marketplace_id:
+        params["marketplaceId"] = str(marketplace_id)
+
     all_orders: list[dict] = []
     pages_walked = 0
     for page in client.paginated(
         ORDERS_GET_ALL,
-        params={
-            "status": status_filter,
-            "start_date": start_dt.isoformat(),
-            "end_date": end_dt.isoformat(),
-        },
+        params=params,
         max_pages=_MAX_PAGES_PER_WINDOW,
     ):
         page_orders = _extract_orders(page)
