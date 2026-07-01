@@ -180,6 +180,14 @@ def build_si_from_ee_order(
         "ecs_marketplace_order_id": marketplace_order_id,
         "ecs_easyecom_order_id": ee_order_id,
         "ecs_easyecom_invoice_id": ee_invoice_id,
+        # EE-generated GST invoice number (e.g. "CHR62627-5091") — this
+        # is the number printed on the invoice PDF the customer receives.
+        # For §12 B2C, EE is the invoice-numbering authority (they run
+        # the marketplace-side GSP for these orders), so we capture it
+        # here AND use it as the SI's canonical name (see rename below).
+        "ecs_easyecom_invoice_number": (
+            order_row.get("invoice_number") or order_row.get("invoiceNumber")
+        ),
         "ecs_payment_mode": order_row.get("payment_mode") or order_row.get("paymentMode"),
         "ecs_awb_number": order_row.get("awb_number") or order_row.get("awbNumber"),
         "ecs_courier": order_row.get("courier") or order_row.get("courier_name"),
@@ -212,6 +220,30 @@ def build_si_from_ee_order(
     si = frappe.get_doc(si_dict)
     si.flags.ignore_permissions = True
     si.insert()
+
+    # Rename to EE's invoice_number so the SI's canonical identifier
+    # matches the number printed on the customer's invoice PDF. For
+    # §12 B2C, EE is the numbering authority (marketplace-side GSP
+    # generated the invoice). Falling back to the auto-generated
+    # SINV-##### name when EE didn't supply one (rare — usually only
+    # for orders not yet manifested).
+    ee_invoice_number = si_dict.get("ecs_easyecom_invoice_number")
+    if ee_invoice_number and ee_invoice_number.strip() and si.name != ee_invoice_number:
+        old_name = si.name
+        try:
+            frappe.rename_doc(
+                "Sales Invoice", old_name, ee_invoice_number,
+                force=True, merge=False,
+            )
+            si = frappe.get_doc("Sales Invoice", ee_invoice_number)
+        except Exception as exc:
+            frappe.logger().warning(
+                f"§12 SI rename failed for {old_name!r} → "
+                f"{ee_invoice_number!r}: {type(exc).__name__}: {exc}. "
+                "Keeping auto-generated name; canonical invoice number "
+                "still available in ecs_easyecom_invoice_number."
+            )
+
     frappe.db.commit()
 
     # ---- 7. Sync Record — audit trail (replaces Marketplace Order Map) ----
