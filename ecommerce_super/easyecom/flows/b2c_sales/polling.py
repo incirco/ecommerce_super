@@ -230,6 +230,14 @@ def reconcile_one_marketplace_account(account_name: str) -> dict:
 # ============================================================
 
 
+# Safety cap on pages per window — at 100 orders/page, this allows up
+# to 5,000 orders in a single 7-day window before we stop. Sites with
+# higher volume would exceed this only in catch-up scenarios; if hit,
+# the leftover gets the next 5-minute tick (the cursor advances only
+# at window_end, so re-running the same window is safe).
+_MAX_PAGES_PER_WINDOW = 50
+
+
 def _walk_orders(
     *,
     client: EasyEcomClient,
@@ -237,18 +245,31 @@ def _walk_orders(
     correlation_id: str,
 ) -> tuple[list[dict], Any]:
     """Call /orders/V2/getAllOrders with the configured status filter
-    + sliding date window (last_pull_orders → now, capped at 7 days).
+    + sliding date window (last_pull_orders → now, capped at 7 days),
+    following EE's `next_page_url` until the window is exhausted.
 
     Returns (orders, window_end). window_end is the actual end of the
     date window walked — used by the caller to advance the cursor to
     the right point (not to "now"), so historical sweeps can iterate
     in 7-day slices.
 
-    Single-page for v1 — EE's getAllOrders supports cursor paging but
-    v1 takes whatever fits in one default-page response; remainder
-    lands on next tick.
+    Previously single-page (v1) — but EE returns ~50 orders per page
+    by default and the cursor was advanced to window_end regardless of
+    pagination state, so any window with >50 orders dropped the tail
+    permanently. Now uses `client.paginated()` which follows the
+    `next_page_url` cursor field automatically. Caps at
+    `_MAX_PAGES_PER_WINDOW` as a runaway guard.
     """
-    status_filter = account.get("polling_status_filter") or "Manifested"
+    # Note on the dropped `status="Manifested"` param:
+    # Verified 2026-06-30 against Puresta EE that EE silently ignores
+    # the `status` request param on /orders/V2/getAllOrders — same
+    # response (1000 orders, identical mp_id mix) returned for
+    # status="Manifested", status_id=7, status_id=7,10, AND no status.
+    # The valid param per EE docs is `status_id` (Integer) but EE's
+    # default response is already restricted to manifested orders
+    # (those with an invoice_id set), so we don't need to pass one.
+    # If a future need surfaces (e.g. include Returned status 10),
+    # add `status_id=...` with the integer code.
 
     # Build the date window. EE's getAllOrders requires start_date /
     # end_date (also satisfies the patch-note-3 reference_code-OR-
@@ -269,17 +290,54 @@ def _walk_orders(
     if (end_dt - start_dt).total_seconds() > max_window_seconds:
         end_dt = start_dt + (end_dt - start_dt).__class__(seconds=max_window_seconds)
 
-    response = client.get(
-        ORDERS_GET_ALL,
-        params={
-            "status": status_filter,
-            "start_date": start_dt.isoformat(),
-            "end_date": end_dt.isoformat(),
-        },
-        correlation_id=correlation_id,
-    )
+    # marketplaceId is honored server-side by EE (verified 2026-06-30
+    # against Puresta). Passing it filters at the EE side, which:
+    #   - Eliminates cross-marketplace cross-talk in the response
+    #     (previously every MA pulled the same all-marketplace stream
+    #     and rejected ~90% of rows post-fetch)
+    #   - Implicitly drops B2B / STN order types (mp_id=64) and
+    #     Offline marketplace (mp_id=10) leaks — those have their
+    #     own mp_ids that no B2C MA would request
+    #   - Cuts per-tick EE API load by an order of magnitude on
+    #     multi-MA benches
+    marketplace_id = account.get("marketplace")
+    params = {
+        "start_date": start_dt.isoformat(),
+        "end_date": end_dt.isoformat(),
+        # Ask EE to include per-suborder batch_codes + batchcode_expiry
+        # in the response. Without this flag, suborders come back with
+        # `batch_codes: null` even for orders that have batches assigned
+        # (live-verified 2026-07-01 on Puresta SQ-388100821 — flag on
+        # vs off toggles the batch data). Note: response wrapper key
+        # also changes with this flag (`"orders": [...]` instead of
+        # `"data": [...]`), but _extract_orders handles both shapes.
+        "get_batch_codes": 1,
+    }
+    if marketplace_id:
+        params["marketplaceId"] = str(marketplace_id)
 
-    return _extract_orders(response), end_dt
+    all_orders: list[dict] = []
+    pages_walked = 0
+    for page in client.paginated(
+        ORDERS_GET_ALL,
+        params=params,
+        max_pages=_MAX_PAGES_PER_WINDOW,
+    ):
+        page_orders = _extract_orders(page)
+        if not page_orders:
+            break
+        all_orders.extend(page_orders)
+        pages_walked += 1
+
+    if pages_walked >= _MAX_PAGES_PER_WINDOW:
+        frappe.logger().warning(
+            f"§12 polling: hit page cap ({_MAX_PAGES_PER_WINDOW}) walking "
+            f"window {start_dt} → {end_dt} (correlation_id={correlation_id}). "
+            "Leftover orders will be picked up on the next tick — cursor "
+            "advances only to window_end so the same window can be re-walked."
+        )
+
+    return all_orders, end_dt
 
 
 def _extract_orders(response: Any) -> list[dict]:

@@ -189,7 +189,16 @@ class EasyEcomClient:
 
         # Build URL.
         if _is_absolute_url:
-            url = endpoint
+            # EE's Next-Page cursor is sometimes a fully-qualified URL
+            # (https://api.../path?cursor=...) and sometimes a same-host
+            # path (/path?cursor=...) — /orders/V2/getAllOrders is the
+            # latter. Resolve relative paths against the account's base
+            # endpoint so requests doesn't raise MissingSchema.
+            if endpoint.startswith(("http://", "https://")):
+                url = endpoint
+            else:
+                # Path-only cursor — prepend base endpoint
+                url = f"{self._account.api_endpoint}{endpoint}"
             # Strip the base URL for logging-as-path if EE returned an
             # absolute Next-Page URL on the same host.
             log_endpoint = (
@@ -448,12 +457,27 @@ class EasyEcomClient:
     def _extract_next_page_url(page: dict) -> str | None:
         """EE returns the next-page cursor under different keys per
         endpoint family — `next_page_url` on v2 bulk (orders/grns/returns),
-        `nextUrl` on /Products/GetProductMaster (§8d). Order is preserve-
-        compat-first; new families append."""
+        `nextUrl` on /Products/GetProductMaster (§8d), and `data.nextUrl`
+        on /orders/V2/getAllOrders (cursor nested inside the data wrapper).
+
+        Check both top-level and inside `data` because EE is inconsistent
+        about where it puts the cursor — and missing the nested one
+        caused §12 polling to silently drop all orders beyond page 1
+        (50 orders) per window. Order is preserve-compat-first; new
+        families append.
+        """
         for key in ("next_page_url", "nextPageUrl", "next_page", "next", "nextUrl"):
             val = page.get(key)
             if val:
                 return val
+        # Also check inside the `data` wrapper — /orders/V2/getAllOrders
+        # (§12 polling) returns the cursor as `data.nextUrl`.
+        data = page.get("data")
+        if isinstance(data, dict):
+            for key in ("next_page_url", "nextPageUrl", "next_page", "next", "nextUrl"):
+                val = data.get(key)
+                if val:
+                    return val
         return None
 
 

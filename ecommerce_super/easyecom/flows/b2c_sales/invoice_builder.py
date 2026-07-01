@@ -154,16 +154,67 @@ def build_si_from_ee_order(
                 "item_code": li["item_code"],
                 "qty": li["qty"],
                 "rate": li["rate"],
+                # Pre-populate price_list_rate = rate so ERPNext's
+                # set_missing_values() doesn't fetch the Price List and
+                # overwrite our EE-sourced rate. Without this, Item Price
+                # from any active Price List (e.g. 199 for a BOGO item)
+                # replaces our rate=0 (verified 2026-07-01 on
+                # SQ-388100821).
+                "price_list_rate": li["rate"],
+                "discount_amount": 0,
+                "discount_percentage": 0,
                 "warehouse": warehouse,
                 "gst_hsn_code": li.get("gst_hsn_code"),
+                # Batch tracking — for Items with has_batch_no=1, set
+                # batch_no from the EE-supplied batch code. Batch is
+                # find-or-created via _ensure_batch. When the Item
+                # isn't batch-tracked, batch_no key is omitted (empty
+                # string would fail SI Item validation).
+                #
+                # ERPNext v16 note: v16 defaults to the Serial and
+                # Batch Bundle DocType for batch tracking (rich child
+                # link) and the plain batch_no field is only respected
+                # when use_serial_batch_fields=1. Without that flag,
+                # the "Pick Serial / Batch No" button on the SI form
+                # remains active and batch_no is treated as a hint,
+                # not the source of truth. Set both together.
+                **(
+                    {
+                        "batch_no": _ensure_batch(
+                            item_code=li["item_code"],
+                            batch_code=li["ee_batch_code"],
+                            expiry_date=li.get("ee_batch_expiry"),
+                            ee_invoice_id=ee_invoice_id,
+                        ),
+                        "use_serial_batch_fields": 1,
+                    }
+                    if li.get("ee_batch_code")
+                    and frappe.db.get_value("Item", li["item_code"], "has_batch_no")
+                    else {}
+                ),
+                # Also mark 0-rate lines as free items — extra defense
+                # against downstream pricing hooks
+                **({"is_free_item": 1} if li.get("is_free_item") else {}),
             }
             for li in line_items
         ],
+        # Prevent Pricing Rules from firing on this SI — EE is source of
+        # truth for rates (Path 2), we don't want ERPNext-side promo
+        # rules mangling the numbers.
+        "ignore_pricing_rule": 1,
         # Custom Fields (recon source-of-truth values)
         "ecs_marketplace": marketplace_account.marketplace,
         "ecs_marketplace_order_id": marketplace_order_id,
         "ecs_easyecom_order_id": ee_order_id,
         "ecs_easyecom_invoice_id": ee_invoice_id,
+        # EE-generated GST invoice number (e.g. "CHR62627-5091") — this
+        # is the number printed on the invoice PDF the customer receives.
+        # For §12 B2C, EE is the invoice-numbering authority (they run
+        # the marketplace-side GSP for these orders), so we capture it
+        # here AND use it as the SI's canonical name (see rename below).
+        "ecs_easyecom_invoice_number": (
+            order_row.get("invoice_number") or order_row.get("invoiceNumber")
+        ),
         "ecs_payment_mode": order_row.get("payment_mode") or order_row.get("paymentMode"),
         "ecs_awb_number": order_row.get("awb_number") or order_row.get("awbNumber"),
         "ecs_courier": order_row.get("courier") or order_row.get("courier_name"),
@@ -196,7 +247,54 @@ def build_si_from_ee_order(
     si = frappe.get_doc(si_dict)
     si.flags.ignore_permissions = True
     si.insert()
+
+    # Rename to the canonical customer-facing invoice identifier. Who
+    # generates the invoice differs by channel type (user directive
+    # 2026-07-01):
+    #   - Own Storefront (Shopify) / POS-Offline: EE's GSP or seller
+    #     generates the invoice → use invoice_number (e.g. CHR62627-5158)
+    #   - B2C Marketplace (Flipkart, Amazon, Myntra, FBA, etc.): the
+    #     MARKETPLACE generates the invoice → use reference_code
+    #     (e.g. OD337715325683285400 for Flipkart, 405-… for Amazon)
+    # The corresponding EE-side field is stored raw in
+    # ecs_easyecom_invoice_number regardless, for downstream tracking.
+    channel_type = frappe.db.get_value(
+        "Marketplace", marketplace_account.marketplace, "channel_type"
+    )
+    if channel_type in ("Own Storefront", "POS-Offline"):
+        canonical_name = (
+            order_row.get("invoice_number") or order_row.get("invoiceNumber")
+        )
+    else:
+        # B2C Marketplace and everything else — marketplace is the
+        # invoicing authority; reference_code is what the customer +
+        # marketplace use to refer to the order/invoice.
+        canonical_name = marketplace_order_id
+
+    if canonical_name and canonical_name.strip() and si.name != canonical_name:
+        old_name = si.name
+        try:
+            frappe.rename_doc(
+                "Sales Invoice", old_name, canonical_name,
+                force=True, merge=False,
+            )
+            si = frappe.get_doc("Sales Invoice", canonical_name)
+        except Exception as exc:
+            frappe.logger().warning(
+                f"§12 SI rename failed for {old_name!r} → "
+                f"{canonical_name!r}: {type(exc).__name__}: {exc}. "
+                "Keeping auto-generated name; canonical invoice number "
+                "still available in ecs_easyecom_invoice_number / "
+                "ecs_marketplace_order_id."
+            )
+
     frappe.db.commit()
+
+    # ---- 6b. Attach EE-hosted PDFs (invoice + shipping label) ----
+    # documents dict from getAllOrders payload — presigned S3 URLs
+    # that can be fetched without EE auth. Two attachments per SI:
+    # the customer's invoice PDF and the courier shipping label.
+    _attach_ee_documents(si, order_row)
 
     # ---- 7. Sync Record — audit trail (replaces Marketplace Order Map) ----
     sync_record_name = _write_sync_record(
@@ -449,13 +547,74 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
                 if (1 + tax_rate / 100) else gross_per_unit
             )
 
-        hsn = frappe.db.get_value("Item", item_code, "gst_hsn_code")
-        out.append({
-            "item_code": item_code,
-            "qty": qty,
-            "rate": rate,
-            "gst_hsn_code": hsn,
-        })
+        item_meta = frappe.db.get_value(
+            "Item", item_code,
+            ["gst_hsn_code", "has_batch_no", "is_stock_item"],
+            as_dict=True,
+        ) or {}
+        hsn = item_meta.get("gst_hsn_code")
+        # Only real stock items with batch tracking get batch handling.
+        # Non-stock combos / bundles (is_stock_item=0) ignore batch_no
+        # even if has_batch_no=1 — ERPNext strips it silently — so
+        # don't waste rows splitting them per batch. Also don't call
+        # _ensure_batch (would create orphan Batches).
+        item_takes_batch = bool(
+            item_meta.get("has_batch_no") and item_meta.get("is_stock_item")
+        )
+
+        # Batch codes — EE returns them per suborder when the polling
+        # request includes get_batch_codes=1 (live-verified 2026-07-01
+        # against Puresta). Format (single or multi-batch pick):
+        #   batch_codes:       "`<code>" or "`<code1>,<code2>,..."
+        #   batchcode_expiry:  "<code>:<date>" or "<c1>:<d1>,<c2>:<d2>,..."
+        batch_codes_raw = line.get("batch_codes") or ""
+        batchcode_expiry_raw = line.get("batchcode_expiry") or ""
+        batch_codes = (
+            _parse_all_batch_codes(batch_codes_raw) if item_takes_batch else []
+        )
+        n_batches = len(batch_codes)
+
+        # Multi-batch handling: when EE picked from N batches to fulfil
+        # a qty (typically one unit per batch — verified against
+        # Combo_Acne on CHR62627-5049), we SPLIT the SI line into N
+        # rows of qty distributed as evenly as possible. Keeps the
+        # batch → row mapping unambiguous for stock-ledger accounting.
+        # For non-stock items this loop runs once with batch=None.
+        batch_qty_pairs: list[tuple[str | None, int]] = []
+        if n_batches == 0:
+            batch_qty_pairs = [(None, qty)]
+        elif n_batches == 1:
+            batch_qty_pairs = [(batch_codes[0], qty)]
+        else:
+            base = qty // n_batches
+            remainder = qty - (base * n_batches)
+            for i, code in enumerate(batch_codes):
+                extra = remainder if i == n_batches - 1 else 0
+                batch_qty_pairs.append((code, base + extra))
+
+        for batch_code, row_qty in batch_qty_pairs:
+            if row_qty <= 0:
+                continue
+            expiry_date = (
+                _parse_batch_expiry(batchcode_expiry_raw, batch_code)
+                if batch_code else None
+            )
+
+            item_out = {
+                "item_code": item_code,
+                "qty": row_qty,
+                "rate": rate,
+                "gst_hsn_code": hsn,
+                "ee_batch_code": batch_code,
+                "ee_batch_expiry": expiry_date,
+            }
+            # BOGO / promo / bundle free items — EE sends selling_price=None
+            # (rate resolves to 0). Without is_free_item=1, ERPNext's
+            # set_missing_values() auto-fetches the Item Price from the Price
+            # List (e.g. 199) and overwrites our rate=0.
+            if rate == 0:
+                item_out["is_free_item"] = 1
+            out.append(item_out)
 
     if unmapped:
         raise B2CBuilderError(
@@ -466,6 +625,187 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
         raise B2CBuilderError(
             "All order_items had zero qty — nothing to invoice."
         )
+    return out
+
+
+# ============================================================
+# Batch parsing helpers (EE payload → ERPNext Batch)
+# ============================================================
+
+
+def _parse_all_batch_codes(raw: str) -> list[str]:
+    """EE's batch_codes field on a suborder — verified format
+    (Puresta 2026-07-01):
+
+        "`MD01"                    → one batch (single-batch pick)
+        "`N72600135,MD36"          → two batches (multi-GRN pick, qty=2)
+        "" | None | "NA"           → no batch
+
+    Leading backtick is always present when batches exist; multiple
+    batches are then COMMA-separated (not backtick-delimited as an
+    earlier guess assumed). Order matches picking order — the k-th
+    batch corresponds to the k-th unit of the qty.
+
+    Returns the list of batch codes in order, or empty list.
+    """
+    if not raw or raw in ("NA", "N/A"):
+        return []
+    if not isinstance(raw, str):
+        return []
+    # Strip leading backtick(s), then split on comma
+    stripped = raw.lstrip("`")
+    return [p.strip() for p in stripped.split(",") if p.strip()]
+
+
+def _parse_first_batch_code(raw: str) -> str | None:
+    """Backwards-compat wrapper — returns first batch or None."""
+    codes = _parse_all_batch_codes(raw)
+    return codes[0] if codes else None
+
+
+def _parse_batch_expiry(raw: str, batch_code: str | None):
+    """EE's batchcode_expiry field:
+      "N72600117:2028-02-28"                  → single {code: date}
+      "N72600117:2028-02-28,MD02:2027-05-15"  → multi
+      "" | None | "NA"                        → no expiry
+    Returns the expiry for the given batch_code, or None.
+    """
+    if not raw or raw in ("NA", "N/A") or not batch_code:
+        return None
+    if not isinstance(raw, str):
+        return None
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        code, expiry = pair.split(":", 1)
+        if code.strip() == batch_code:
+            try:
+                from frappe.utils import getdate
+                return getdate(expiry.strip())
+            except Exception:
+                return None
+    return None
+
+
+def _ensure_batch(
+    *,
+    item_code: str,
+    batch_code: str,
+    expiry_date=None,
+    ee_invoice_id: str | None = None,
+) -> str:
+    """Find-or-create an ERPNext Batch for (item_code, batch_code).
+
+    Batch DocType names Batches by their batch_id field. We use the
+    EE batch code directly (e.g. 'MD01', 'N72600117'). If the Batch
+    already exists, we return its name. If not, we create a fresh one
+    with the expiry_date. Idempotent under concurrent poll ticks — a
+    unique-key collision on the (item, batch_id) tuple is caught and
+    the existing Batch is returned.
+    """
+    existing = frappe.db.get_value(
+        "Batch",
+        {"item": item_code, "batch_id": batch_code},
+        "name",
+    )
+    if existing:
+        return existing
+
+    try:
+        batch_doc = frappe.get_doc({
+            "doctype": "Batch",
+            "batch_id": batch_code,
+            "item": item_code,
+            "expiry_date": expiry_date,
+            "reference_doctype": "EasyEcom Sync Record" if ee_invoice_id else None,
+        })
+        batch_doc.flags.ignore_permissions = True
+        batch_doc.flags.ignore_mandatory = True
+        batch_doc.insert()
+        return batch_doc.name
+    except frappe.DuplicateEntryError:
+        # Race — another poll created it in the meantime
+        return frappe.db.get_value(
+            "Batch",
+            {"item": item_code, "batch_id": batch_code},
+            "name",
+        )
+
+
+# ============================================================
+# EE document attachment (invoice PDF + shipping label PDF)
+# ============================================================
+
+
+def _attach_ee_documents(si, order_row: dict) -> dict:
+    """Fetch invoice + label PDFs from EE's presigned S3 URLs and
+    attach them as File records on the SI. URLs live in the
+    `documents` dict of the getAllOrders payload:
+
+        documents.easyecom_invoice → invoice PDF (always for EE-billed)
+        documents.label            → shipping label PDF
+        documents.marketplaceinvoice / marketplace_tax_invoice /
+        marketplace_b2c_invoice     → marketplace-billed invoices
+                                      (Flipkart, Amazon, etc.)
+
+    Returns a summary of what was attached / skipped / failed.
+    """
+    import requests
+
+    docs = order_row.get("documents") or {}
+    if not isinstance(docs, dict):
+        return {"skipped": "no documents dict"}
+
+    # In priority order: try marketplace-generated invoices first for
+    # marketplace channels (Flipkart / Amazon issue their own PDFs),
+    # fall back to easyecom_invoice for Own Storefront / Offline.
+    attachments: list[tuple[str, str, str]] = []  # (label, url, filename_prefix)
+    for key, prefix in (
+        ("marketplace_tax_invoice", "invoice"),
+        ("marketplaceinvoice", "invoice"),
+        ("marketplace_b2c_invoice", "invoice"),
+        ("easyecom_invoice", "invoice"),
+    ):
+        url = docs.get(key)
+        if url:
+            attachments.append((key, url, prefix))
+            break  # take the first invoice we find
+
+    label_url = docs.get("label") or docs.get("originalLabelUrl")
+    if label_url:
+        attachments.append(("label", label_url, "label"))
+
+    out = {"attached": [], "failed": []}
+    for source_key, url, prefix in attachments:
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            out["failed"].append({"key": source_key, "reason": "not a URL"})
+            continue
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code != 200 or not r.content:
+                out["failed"].append({
+                    "key": source_key,
+                    "reason": f"HTTP {r.status_code}, {len(r.content)} bytes",
+                })
+                continue
+            file_doc = frappe.get_doc({
+                "doctype": "File",
+                "file_name": f"{prefix}-{si.name}.pdf",
+                "attached_to_doctype": "Sales Invoice",
+                "attached_to_name": si.name,
+                "content": r.content,
+                "is_private": 1,
+            })
+            file_doc.flags.ignore_permissions = True
+            file_doc.insert()
+            out["attached"].append({"key": source_key, "file": file_doc.name})
+        except Exception as exc:
+            out["failed"].append({
+                "key": source_key,
+                "reason": f"{type(exc).__name__}: {str(exc)[:150]}",
+            })
+    frappe.db.commit()
     return out
 
 
