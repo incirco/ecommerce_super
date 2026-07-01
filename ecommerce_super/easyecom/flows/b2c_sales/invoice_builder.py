@@ -547,41 +547,74 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
                 if (1 + tax_rate / 100) else gross_per_unit
             )
 
-        hsn = frappe.db.get_value("Item", item_code, "gst_hsn_code")
+        item_meta = frappe.db.get_value(
+            "Item", item_code,
+            ["gst_hsn_code", "has_batch_no", "is_stock_item"],
+            as_dict=True,
+        ) or {}
+        hsn = item_meta.get("gst_hsn_code")
+        # Only real stock items with batch tracking get batch handling.
+        # Non-stock combos / bundles (is_stock_item=0) ignore batch_no
+        # even if has_batch_no=1 — ERPNext strips it silently — so
+        # don't waste rows splitting them per batch. Also don't call
+        # _ensure_batch (would create orphan Batches).
+        item_takes_batch = bool(
+            item_meta.get("has_batch_no") and item_meta.get("is_stock_item")
+        )
 
         # Batch codes — EE returns them per suborder when the polling
         # request includes get_batch_codes=1 (live-verified 2026-07-01
-        # against Puresta SQ-388100821 which showed batch MD01 /
-        # N72600117 / N72600135 with expiry N72600117:2028-02-28 etc.).
-        # Format:
-        #   batch_codes:       "`<code>" or "`<code1>`<code2>" (backtick delim)
-        #   batchcode_expiry:  "<code>:<yyyy-mm-dd>" or "" or "NA"
-        # Multiple batches per suborder are possible when EE picked
-        # from multiple GRNs to fulfil the qty; we take the first (v1).
+        # against Puresta). Format (single or multi-batch pick):
+        #   batch_codes:       "`<code>" or "`<code1>,<code2>,..."
+        #   batchcode_expiry:  "<code>:<date>" or "<c1>:<d1>,<c2>:<d2>,..."
         batch_codes_raw = line.get("batch_codes") or ""
         batchcode_expiry_raw = line.get("batchcode_expiry") or ""
-        batch_code = _parse_first_batch_code(batch_codes_raw)
-        expiry_date = _parse_batch_expiry(batchcode_expiry_raw, batch_code)
+        batch_codes = (
+            _parse_all_batch_codes(batch_codes_raw) if item_takes_batch else []
+        )
+        n_batches = len(batch_codes)
 
-        item_out = {
-            "item_code": item_code,
-            "qty": qty,
-            "rate": rate,
-            "gst_hsn_code": hsn,
-            "ee_batch_code": batch_code,
-            "ee_batch_expiry": expiry_date,
-        }
-        # BOGO / promo / bundle free items — EE sends selling_price=None
-        # (rate resolves to 0). Without is_free_item=1, ERPNext's
-        # set_missing_values() auto-fetches the Item Price from the Price
-        # List (e.g. 199) and overwrites our rate=0, blowing up the SI
-        # total vs EE's actual invoice (verified 2026-07-01 on SQ-388100821
-        # where 2 BOGO items came back at rate=199 each instead of 0).
-        # is_free_item=1 tells ERPNext "this is genuinely 0-rate, don't
-        # try to price it from any source".
-        if rate == 0:
-            item_out["is_free_item"] = 1
-        out.append(item_out)
+        # Multi-batch handling: when EE picked from N batches to fulfil
+        # a qty (typically one unit per batch — verified against
+        # Combo_Acne on CHR62627-5049), we SPLIT the SI line into N
+        # rows of qty distributed as evenly as possible. Keeps the
+        # batch → row mapping unambiguous for stock-ledger accounting.
+        # For non-stock items this loop runs once with batch=None.
+        batch_qty_pairs: list[tuple[str | None, int]] = []
+        if n_batches == 0:
+            batch_qty_pairs = [(None, qty)]
+        elif n_batches == 1:
+            batch_qty_pairs = [(batch_codes[0], qty)]
+        else:
+            base = qty // n_batches
+            remainder = qty - (base * n_batches)
+            for i, code in enumerate(batch_codes):
+                extra = remainder if i == n_batches - 1 else 0
+                batch_qty_pairs.append((code, base + extra))
+
+        for batch_code, row_qty in batch_qty_pairs:
+            if row_qty <= 0:
+                continue
+            expiry_date = (
+                _parse_batch_expiry(batchcode_expiry_raw, batch_code)
+                if batch_code else None
+            )
+
+            item_out = {
+                "item_code": item_code,
+                "qty": row_qty,
+                "rate": rate,
+                "gst_hsn_code": hsn,
+                "ee_batch_code": batch_code,
+                "ee_batch_expiry": expiry_date,
+            }
+            # BOGO / promo / bundle free items — EE sends selling_price=None
+            # (rate resolves to 0). Without is_free_item=1, ERPNext's
+            # set_missing_values() auto-fetches the Item Price from the Price
+            # List (e.g. 199) and overwrites our rate=0.
+            if rate == 0:
+                item_out["is_free_item"] = 1
+            out.append(item_out)
 
     if unmapped:
         raise B2CBuilderError(
@@ -600,19 +633,34 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
 # ============================================================
 
 
-def _parse_first_batch_code(raw: str) -> str | None:
-    """EE's batch_codes field is a backtick-delimited string:
-      "`MD01"                 → one batch
-      "`MD01`MD02"            → multiple (multi-GRN pick)
-      "" | None | "NA"        → no batch
-    Returns the first code, or None.
+def _parse_all_batch_codes(raw: str) -> list[str]:
+    """EE's batch_codes field on a suborder — verified format
+    (Puresta 2026-07-01):
+
+        "`MD01"                    → one batch (single-batch pick)
+        "`N72600135,MD36"          → two batches (multi-GRN pick, qty=2)
+        "" | None | "NA"           → no batch
+
+    Leading backtick is always present when batches exist; multiple
+    batches are then COMMA-separated (not backtick-delimited as an
+    earlier guess assumed). Order matches picking order — the k-th
+    batch corresponds to the k-th unit of the qty.
+
+    Returns the list of batch codes in order, or empty list.
     """
     if not raw or raw in ("NA", "N/A"):
-        return None
+        return []
     if not isinstance(raw, str):
-        return None
-    parts = [p.strip() for p in raw.split("`") if p and p.strip()]
-    return parts[0] if parts else None
+        return []
+    # Strip leading backtick(s), then split on comma
+    stripped = raw.lstrip("`")
+    return [p.strip() for p in stripped.split(",") if p.strip()]
+
+
+def _parse_first_batch_code(raw: str) -> str | None:
+    """Backwards-compat wrapper — returns first batch or None."""
+    codes = _parse_all_batch_codes(raw)
+    return codes[0] if codes else None
 
 
 def _parse_batch_expiry(raw: str, batch_code: str | None):
