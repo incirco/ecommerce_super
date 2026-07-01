@@ -170,13 +170,24 @@ def build_si_from_ee_order(
                 # find-or-created via _ensure_batch. When the Item
                 # isn't batch-tracked, batch_no key is omitted (empty
                 # string would fail SI Item validation).
+                #
+                # ERPNext v16 note: v16 defaults to the Serial and
+                # Batch Bundle DocType for batch tracking (rich child
+                # link) and the plain batch_no field is only respected
+                # when use_serial_batch_fields=1. Without that flag,
+                # the "Pick Serial / Batch No" button on the SI form
+                # remains active and batch_no is treated as a hint,
+                # not the source of truth. Set both together.
                 **(
-                    {"batch_no": _ensure_batch(
-                        item_code=li["item_code"],
-                        batch_code=li["ee_batch_code"],
-                        expiry_date=li.get("ee_batch_expiry"),
-                        ee_invoice_id=ee_invoice_id,
-                    )}
+                    {
+                        "batch_no": _ensure_batch(
+                            item_code=li["item_code"],
+                            batch_code=li["ee_batch_code"],
+                            expiry_date=li.get("ee_batch_expiry"),
+                            ee_invoice_id=ee_invoice_id,
+                        ),
+                        "use_serial_batch_fields": 1,
+                    }
                     if li.get("ee_batch_code")
                     and frappe.db.get_value("Item", li["item_code"], "has_batch_no")
                     else {}
