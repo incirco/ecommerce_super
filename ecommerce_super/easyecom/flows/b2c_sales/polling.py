@@ -304,6 +304,14 @@ def _walk_orders(
     params = {
         "start_date": start_dt.isoformat(),
         "end_date": end_dt.isoformat(),
+        # Ask EE to include per-suborder batch_codes + batchcode_expiry
+        # in the response. Without this flag, suborders come back with
+        # `batch_codes: null` even for orders that have batches assigned
+        # (live-verified 2026-07-01 on Puresta SQ-388100821 — flag on
+        # vs off toggles the batch data). Note: response wrapper key
+        # also changes with this flag (`"orders": [...]` instead of
+        # `"data": [...]`), but _extract_orders handles both shapes.
+        "get_batch_codes": 1,
     }
     if marketplace_id:
         params["marketplaceId"] = str(marketplace_id)
