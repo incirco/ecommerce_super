@@ -221,27 +221,44 @@ def build_si_from_ee_order(
     si.flags.ignore_permissions = True
     si.insert()
 
-    # Rename to EE's invoice_number so the SI's canonical identifier
-    # matches the number printed on the customer's invoice PDF. For
-    # §12 B2C, EE is the numbering authority (marketplace-side GSP
-    # generated the invoice). Falling back to the auto-generated
-    # SINV-##### name when EE didn't supply one (rare — usually only
-    # for orders not yet manifested).
-    ee_invoice_number = si_dict.get("ecs_easyecom_invoice_number")
-    if ee_invoice_number and ee_invoice_number.strip() and si.name != ee_invoice_number:
+    # Rename to the canonical customer-facing invoice identifier. Who
+    # generates the invoice differs by channel type (user directive
+    # 2026-07-01):
+    #   - Own Storefront (Shopify) / POS-Offline: EE's GSP or seller
+    #     generates the invoice → use invoice_number (e.g. CHR62627-5158)
+    #   - B2C Marketplace (Flipkart, Amazon, Myntra, FBA, etc.): the
+    #     MARKETPLACE generates the invoice → use reference_code
+    #     (e.g. OD337715325683285400 for Flipkart, 405-… for Amazon)
+    # The corresponding EE-side field is stored raw in
+    # ecs_easyecom_invoice_number regardless, for downstream tracking.
+    channel_type = frappe.db.get_value(
+        "Marketplace", marketplace_account.marketplace, "channel_type"
+    )
+    if channel_type in ("Own Storefront", "POS-Offline"):
+        canonical_name = (
+            order_row.get("invoice_number") or order_row.get("invoiceNumber")
+        )
+    else:
+        # B2C Marketplace and everything else — marketplace is the
+        # invoicing authority; reference_code is what the customer +
+        # marketplace use to refer to the order/invoice.
+        canonical_name = marketplace_order_id
+
+    if canonical_name and canonical_name.strip() and si.name != canonical_name:
         old_name = si.name
         try:
             frappe.rename_doc(
-                "Sales Invoice", old_name, ee_invoice_number,
+                "Sales Invoice", old_name, canonical_name,
                 force=True, merge=False,
             )
-            si = frappe.get_doc("Sales Invoice", ee_invoice_number)
+            si = frappe.get_doc("Sales Invoice", canonical_name)
         except Exception as exc:
             frappe.logger().warning(
                 f"§12 SI rename failed for {old_name!r} → "
-                f"{ee_invoice_number!r}: {type(exc).__name__}: {exc}. "
+                f"{canonical_name!r}: {type(exc).__name__}: {exc}. "
                 "Keeping auto-generated name; canonical invoice number "
-                "still available in ecs_easyecom_invoice_number."
+                "still available in ecs_easyecom_invoice_number / "
+                "ecs_marketplace_order_id."
             )
 
     frappe.db.commit()
