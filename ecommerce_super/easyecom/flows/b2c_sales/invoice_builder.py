@@ -154,11 +154,27 @@ def build_si_from_ee_order(
                 "item_code": li["item_code"],
                 "qty": li["qty"],
                 "rate": li["rate"],
+                # Pre-populate price_list_rate = rate so ERPNext's
+                # set_missing_values() doesn't fetch the Price List and
+                # overwrite our EE-sourced rate. Without this, Item Price
+                # from any active Price List (e.g. 199 for a BOGO item)
+                # replaces our rate=0 (verified 2026-07-01 on
+                # SQ-388100821).
+                "price_list_rate": li["rate"],
+                "discount_amount": 0,
+                "discount_percentage": 0,
                 "warehouse": warehouse,
                 "gst_hsn_code": li.get("gst_hsn_code"),
+                # Also mark 0-rate lines as free items — extra defense
+                # against downstream pricing hooks
+                **({"is_free_item": 1} if li.get("is_free_item") else {}),
             }
             for li in line_items
         ],
+        # Prevent Pricing Rules from firing on this SI — EE is source of
+        # truth for rates (Path 2), we don't want ERPNext-side promo
+        # rules mangling the numbers.
+        "ignore_pricing_rule": 1,
         # Custom Fields (recon source-of-truth values)
         "ecs_marketplace": marketplace_account.marketplace,
         "ecs_marketplace_order_id": marketplace_order_id,
@@ -450,12 +466,23 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
             )
 
         hsn = frappe.db.get_value("Item", item_code, "gst_hsn_code")
-        out.append({
+        item_out = {
             "item_code": item_code,
             "qty": qty,
             "rate": rate,
             "gst_hsn_code": hsn,
-        })
+        }
+        # BOGO / promo / bundle free items — EE sends selling_price=None
+        # (rate resolves to 0). Without is_free_item=1, ERPNext's
+        # set_missing_values() auto-fetches the Item Price from the Price
+        # List (e.g. 199) and overwrites our rate=0, blowing up the SI
+        # total vs EE's actual invoice (verified 2026-07-01 on SQ-388100821
+        # where 2 BOGO items came back at rate=199 each instead of 0).
+        # is_free_item=1 tells ERPNext "this is genuinely 0-rate, don't
+        # try to price it from any source".
+        if rate == 0:
+            item_out["is_free_item"] = 1
+        out.append(item_out)
 
     if unmapped:
         raise B2CBuilderError(
