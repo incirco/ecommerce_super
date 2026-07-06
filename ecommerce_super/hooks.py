@@ -507,8 +507,16 @@ scheduler_events = {
             "ecommerce_super.easyecom.flows.b2c_sales.polling.reconcile_all_marketplace_accounts",
         ],
         # Reclaim Queue Job rows in state=Running with no live RQ job (§6.3.9).
+        # gh#120 also uses this hourly slot: Held-Pre-QC GRN re-sweep.
+        # The forward-only created_after watermark can leave GRNs stranded
+        # when their QC completes after the watermark advances; this
+        # catches them independently by walking the Held-Pre-QC subset.
+        # Bounded by _HELD_PREQC_STALENESS_DAYS (30d) so we don't hammer
+        # EE for GRNs that will never QC-complete. Idempotent — no-op
+        # when there are no held rows.
         "0 */1 * * *": [
             "ecommerce_super.easyecom.queue.workers.reclaim_orphaned_jobs",
+            "ecommerce_super.easyecom.flows.grn_pull.resweep_held_pre_qc_grns",
         ],
         # §10 Stage 4 — daily aged-GIT scan. Runs at 06:30 IST (after
         # the §8f supplier pull at 06:00, before business hours start).

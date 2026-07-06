@@ -274,6 +274,183 @@ def scheduled_grn_pull(account_name: str | None = None) -> dict[str, Any]:
     return {"ok": True, "summaries": summaries}
 
 
+# ============================================================
+# gh#120 — Held-Pre-QC re-sweep (independent of forward watermark)
+# ============================================================
+#
+# The forward-only `created_after = grn_pull_high_watermark` delta pull
+# is anchored on `grn_created_at`. QC completion is a LATER status
+# change that does NOT move `grn_created_at`. Once the watermark
+# advances past a held GRN's creation time, the normal delta pull
+# never returns it again — so a GRN that was held for QC and later
+# QC-completed will stay Held-Pre-QC forever without a manual
+# backdated pull.
+#
+# `resweep_held_pre_qc_grns` fixes that by walking the Held-Pre-QC
+# subset directly. For each held row, we re-fetch by asking EE for
+# GRNs `created_after` the earliest held row's creation timestamp
+# (minus a 1s guard band so EE definitely re-includes it), then let
+# `process_one_grn` re-decide — if QC has since completed, Step 5
+# receipts the GRN and clears the held state. Idempotent by design:
+# already-Receipted GRNs are a Step-4 short-circuit no-op.
+#
+# Aging: rows older than `_HELD_PREQC_STALENESS_DAYS` (default 30) are
+# skipped from the automatic re-sweep and left for the existing "GRNs
+# Held-Pre-QC" number card / FDE attention flow — some GRNs never
+# QC-complete (product returns, dead SKUs) and we don't want to
+# hammer EE forever.
+
+_HELD_PREQC_STALENESS_DAYS = 30
+
+
+@frappe.whitelist()
+def resweep_held_pre_qc_grns(
+    account_name: str | None = None,
+    max_age_days: int = _HELD_PREQC_STALENESS_DAYS,
+) -> dict[str, Any]:
+    """gh#120: Re-sweep GRN Map rows in Held-Pre-QC state so QC
+    completions that landed after the forward watermark advanced can
+    still convert to Purchase Receipts.
+
+    Bounded by `max_age_days` (defaults to 30 days from the held row's
+    `grn_created_at`) — older rows are left for manual triage via the
+    "GRNs Held-Pre-QC" number card.
+    """
+    if account_name is None:
+        account_name = frappe.db.get_value(
+            "EasyEcom Account", {"enabled": 1}, "name"
+        )
+    if not account_name:
+        return {"ok": False, "message": "No enabled EasyEcom Account."}
+
+    from datetime import timedelta
+
+    cutoff_dt = now_datetime() - timedelta(days=int(max_age_days or 0))
+
+    held_rows = frappe.db.get_all(
+        "EasyEcom GRN Map",
+        filters={"status": "Held-Pre-QC"},
+        fields=[
+            "name", "ee_grn_id", "grn_created_at",
+            "inwarded_warehouse_c_id",
+        ],
+        order_by="grn_created_at ASC",
+    )
+
+    fresh: list[dict] = []
+    stale = 0
+    for row in held_rows:
+        row_dt = row.get("grn_created_at")
+        if row_dt and row_dt < cutoff_dt:
+            stale += 1
+            continue
+        fresh.append(row)
+
+    frappe.logger().info(
+        f"[gh#120] Held-Pre-QC re-sweep starting: "
+        f"{len(held_rows)} held ({stale} stale > {max_age_days}d, "
+        f"{len(fresh)} to re-fetch)"
+    )
+
+    receipted = 0
+    still_held = 0
+    failed = 0
+    errors: list[dict] = []
+
+    # Group held rows by their inwarded warehouse's location so each
+    # re-fetch runs under the right JWT / location scope.
+    from collections import defaultdict
+    by_location: dict[str, list[dict]] = defaultdict(list)
+    for row in fresh:
+        wh_c_id = row.get("inwarded_warehouse_c_id")
+        location_row = _resolve_location_for_warehouse_c_id(int(wh_c_id or 0))
+        if location_row is None:
+            failed += 1
+            errors.append({
+                "ee_grn_id": row.get("ee_grn_id"),
+                "msg": f"warehouse_c_id={wh_c_id} does not resolve to an EE Location",
+            })
+            continue
+        by_location[location_row["location_key"]].append(row)
+
+    for location_key, rows_for_loc in by_location.items():
+        # Earliest held row on this location — use its grn_created_at
+        # (minus a 1s guard) as `created_after` so EE re-returns it in
+        # the sweep. `process_one_grn` handles idempotency (Step 4
+        # Receipted short-circuit) so re-fetching already-processed
+        # GRNs on the same page is safe.
+        earliest_dt = min(
+            (r.get("grn_created_at") for r in rows_for_loc if r.get("grn_created_at")),
+            default=None,
+        )
+        if not earliest_dt:
+            for row in rows_for_loc:
+                failed += 1
+                errors.append({
+                    "ee_grn_id": row.get("ee_grn_id"),
+                    "msg": "GRN Map row missing grn_created_at",
+                })
+            continue
+
+        created_after = earliest_dt - timedelta(seconds=1)
+
+        try:
+            client = EasyEcomClient(location_key=location_key)
+            pull_grns_for_location(
+                location_key=location_key,
+                account_name=account_name,
+                client=client,
+                created_after=str(created_after),
+            )
+        except Exception as exc:
+            for row in rows_for_loc:
+                failed += 1
+                errors.append({
+                    "ee_grn_id": row.get("ee_grn_id"),
+                    "msg": f"re-fetch sweep failed: {type(exc).__name__}: {str(exc)[:180]}",
+                })
+            frappe.log_error(
+                title=f"gh#120 Held-Pre-QC re-sweep failed on {location_key}",
+                message=f"{type(exc).__name__}: {exc}",
+            )
+            continue
+
+        # Post-sweep: recheck each held row's status
+        held_ids_this_loc = {int(r["ee_grn_id"]) for r in rows_for_loc if r.get("ee_grn_id")}
+        for ee_grn_id in held_ids_this_loc:
+            new_status = frappe.db.get_value(
+                "EasyEcom GRN Map",
+                {"ee_grn_id": ee_grn_id},
+                "status",
+            )
+            if new_status == "Receipted":
+                receipted += 1
+            elif new_status == "Held-Pre-QC":
+                still_held += 1
+            else:
+                failed += 1
+                errors.append({
+                    "ee_grn_id": ee_grn_id,
+                    "msg": f"transitioned to unexpected status: {new_status!r}",
+                })
+
+    frappe.logger().info(
+        f"[gh#120] Held-Pre-QC re-sweep done: "
+        f"receipted={receipted}, still_held={still_held}, "
+        f"failed={failed}, stale_skipped={stale}"
+    )
+
+    return {
+        "ok": True,
+        "held_scanned": len(held_rows),
+        "held_stale": stale,
+        "receipted": receipted,
+        "still_held": still_held,
+        "failed": failed,
+        "errors": errors[:50],
+    }
+
+
 def grn_pull_queue_handler(qj: Any) -> None:
     """JOB_TYPE_HANDLERS['GRN Pull'] dispatch — workers.execute_job
     calls this with the loaded Queue Job. Reads location_key from the
