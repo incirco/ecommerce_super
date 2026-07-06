@@ -405,8 +405,8 @@ def _warehouse_gstin(warehouse: str) -> str:
 
 
 def _unmapped_items_for_dn(dn: Any) -> list[str]:
-    """Return the list of DN line `item_code`s that have no
-    EasyEcom Item Map row. Empty list when every line is synced.
+    """Return the list of DN line `item_code`s that are not resolvable
+    on EasyEcom. Empty list when every line is genuinely synced.
 
     gh#93: shared between the post-submit `_run_preconditions` check
     (accumulates to Drift / Failed Sync Record) and the pre-submit
@@ -414,14 +414,62 @@ def _unmapped_items_for_dn(dn: Any) -> list[str]:
     two surfaces consistent — the FDE always sees the same set of
     unsynced items whether they hit the early guard or the late
     precondition.
+
+    Original gh#93 fix caught only the "no Item Map row" case. The
+    2026-07-04 reopener showed a case (DL-261309-3, line 5 SKU
+    `FG06601-4-M`) where the local Item Map row existed but EE
+    still returned "Unable to find the sku with provided parameters"
+    — i.e. the map row was stale / partial and did not actually
+    represent a live EE sku. We now also block when:
+
+      - the map row's `status` is "Flagged-Not-Created" (map exists
+        as a placeholder but the item was never created in EE), or
+      - the map row's `status` is "Disabled" (explicitly excluded), or
+      - the map row has no `ee_product_id` populated (map exists but
+        no successful push has ever landed one).
+
+    Statuses treated as OK-to-push:
+      - "Mapped"          → clean state
+      - "Created-Flagged" → created in EE, flagged for FDE cleanup
+                           on a non-blocking field (e.g. missing HSN);
+                           the push itself resolves
+      - "Drift"           → EE has the item, data has diverged; push
+                           resolves via re-sync path (blocking here
+                           would strand every DN on the drift set)
     """
     unmapped: list[str] = []
+    ok_statuses = {"Mapped", "Created-Flagged", "Drift"}
     for line in dn.items or []:
-        if not frappe.db.exists(
+        map_row = frappe.db.get_value(
             "EasyEcom Item Map",
             {"erpnext_doctype": "Item", "erpnext_name": line.item_code},
-        ):
+            ["name", "status", "ee_product_id"],
+            as_dict=True,
+        )
+        if not map_row:
             unmapped.append(line.item_code)
+            continue
+        status = (map_row.get("status") or "").strip()
+        if status not in ok_statuses:
+            # Flagged-Not-Created / Disabled / anything else the FDE
+            # hasn't reviewed — treat as unsynced. Item-specific
+            # message so the FDE knows exactly what to fix.
+            unmapped.append(
+                f"{line.item_code} (Item Map status={status!r})"
+            )
+            continue
+        ee_product_id = str(map_row.get("ee_product_id") or "").strip()
+        if not ee_product_id:
+            # Map row exists but no EE-side product ID ever landed —
+            # the previous "push" never succeeded. This is the exact
+            # stale-map class of failure gh#93's reopener flagged
+            # (DL-261309-3 line 5 was rejected by EE with "sku not
+            # found" for a SKU whose local map row lacked
+            # ee_product_id).
+            unmapped.append(
+                f"{line.item_code} (Item Map exists but no ee_product_id "
+                "— previous push never landed)"
+            )
     return unmapped
 
 
