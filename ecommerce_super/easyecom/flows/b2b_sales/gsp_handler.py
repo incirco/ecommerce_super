@@ -29,6 +29,7 @@ doesn't touch HTTP.
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import frappe
@@ -370,6 +371,13 @@ def _assemble_irn_response(
     ee_account: str | None = None,
 ) -> dict[str, Any]:
     """Build the data.invoice_details payload per EE's /einvoice contract."""
+    # gh#134: render the PDF as base64 alongside the URL. Base64 is the
+    # primary delivery mechanism (self-contained in the response, immune
+    # to the auth-middleware trap on the URL side). URL is kept as
+    # belt-and-suspenders for EE clients that prefer it.
+    invoice_format = _resolve_print_format(
+        ee_account, "gsp_print_format", default="Standard",
+    )
     return {
         "invoice_id": str(si.get("ecs_easyecom_invoice_id") or ""),
         "erp_invoice_num": si.name,
@@ -378,12 +386,9 @@ def _assemble_irn_response(
         "ack_date": si.get("ack_dt").isoformat() if si.get("ack_dt") else "",
         "invoice_pdf": _resolve_invoice_pdf_url(si, ee_account=ee_account),
         "irn_qr": si.get("signed_qr_code") or "",
-        # PDF base64 inline: ship both (URL + base64) per the §11.5
-        # packet's lean. We compute base64 lazily — only when client
-        # needs it (some EE deployments prefer URL, others base64).
-        # Phase 1 leaves this empty; populate in Stage 4 once we have
-        # a sample of what EE actually uses.
-        "invoice_base64": "",
+        "invoice_base64": _render_si_pdf_base64(
+            si, format_name=invoice_format,
+        ),
     }
 
 
@@ -401,6 +406,12 @@ def _assemble_eway_response(
     SI hasn't yet had those fields set by the IC flow.
     """
     tv = transport_values or {}
+    # gh#134: render base64 only when an e-way bill actually exists on
+    # the SI. Rendering a "no eway" print-format PDF would be empty and
+    # confusing to EE.
+    eway_format = _resolve_print_format(
+        ee_account, "gsp_ewaybill_print_format", default="e-Waybill",
+    )
     return {
         "invoice_id": str(si.get("ecs_easyecom_invoice_id") or ""),
         "erp_invoice_num": si.name,
@@ -432,7 +443,10 @@ def _assemble_eway_response(
         "transporter_name": (
             si.get("transporter_name") or tv.get("transporter_name") or ""
         ),
-        "eway_bill_base64": "",
+        "eway_bill_base64": (
+            _render_si_pdf_base64(si, format_name=eway_format)
+            if si.get("ewaybill") else ""
+        ),
     }
 
 
@@ -482,6 +496,51 @@ def _should_mint_ewaybill(ee_account: str | None) -> bool:
     return bool(int(value))
 
 
+def _render_si_pdf_base64(
+    si: Any,
+    *,
+    format_name: str,
+    letterhead: bool = True,
+) -> str:
+    """Render the SI print-format as PDF bytes, base64-encode, return
+    as ASCII string ready to inline in the JSON response.
+
+    gh#134: EE's Custom-GSP client (Mode 1) reads `invoice_base64` /
+    `eway_bill_base64` directly from the JSON — no follow-up HTTP fetch.
+    This eliminates the "can EE reach our URL?" reliability problem the
+    URL-only delivery had (the URL endpoint requires session auth and
+    hits the same validate_auth trap gh#123 / gh#130 fixed for the
+    request side — but there's no equivalent fix on the response-URL
+    side EE would GET).
+
+    Empty string on any render failure — never raises. The URL fields
+    stay populated too as belt-and-suspenders.
+
+    format_name — precedence caller decides (see _resolve_invoice_pdf_url
+    / _resolve_eway_pdf_url for the standard precedence rules).
+    """
+    try:
+        pdf_bytes = frappe.get_print(
+            doctype="Sales Invoice",
+            name=si.name,
+            print_format=format_name,
+            as_pdf=True,
+            no_letterhead=0 if letterhead else 1,
+        )
+        if not pdf_bytes:
+            return ""
+        # Frappe returns bytes for PDF renders; guard for str fallback.
+        if isinstance(pdf_bytes, str):
+            pdf_bytes = pdf_bytes.encode("utf-8")
+        return base64.b64encode(pdf_bytes).decode("ascii")
+    except Exception as exc:
+        frappe.log_error(
+            title=f"gh#134 GSP base64 PDF render failed for {si.name}",
+            message=f"format={format_name!r}: {type(exc).__name__}: {exc}",
+        )
+        return ""
+
+
 def _resolve_invoice_pdf_url(
     si: Any,
     *,
@@ -491,6 +550,12 @@ def _resolve_invoice_pdf_url(
 
     Builds on Frappe's standard print URL convention. EE downloads
     on demand. No file is persisted — PDF rendered on each request.
+
+    NOTE (gh#134): the URL is populated as a belt-and-suspenders
+    fallback, but the primary delivery mechanism is `invoice_base64`
+    on the response payload. Frappe's `download_pdf` endpoint requires
+    session auth and EE's anonymous GET would hit the same
+    validate_auth trap gh#123 / gh#130 fixed for the request side.
 
     Print format precedence:
       1. EasyEcom Account.gsp_print_format (per-Account override)
