@@ -31,6 +31,7 @@ Idempotency:
 from __future__ import annotations
 
 import json
+from functools import wraps
 from typing import Any
 
 import frappe
@@ -75,11 +76,119 @@ _GSP_PATH_SUFFIXES = (
     "/api/method/ecommerce_super.easyecom.api.gsp.ewaybill_update",
 )
 
+# gh#130 — EE's Custom GSP client calls ROOT paths at the site root
+# (POST <site>/gettoken, /einvoice/update, /ewaybill/update) — not the
+# dotted /api/method/... URLs Frappe normally exposes. The EE "Add
+# Channel → Custom GSP" form only takes a single Base URL; EE appends
+# the sub-paths itself. We rewrite the WSGI PATH_INFO on the way in so
+# Frappe's normal route dispatcher lands on the correct whitelisted
+# method.
+_GSP_ROOT_PATH_MAP = {
+    "/gettoken":         "/api/method/ecommerce_super.easyecom.api.gsp.gettoken",
+    "/einvoice/update":  "/api/method/ecommerce_super.easyecom.api.gsp.einvoice_update",
+    "/ewaybill/update":  "/api/method/ecommerce_super.easyecom.api.gsp.ewaybill_update",
+}
+
 # WSGI environ key used to stash the Authorization value past Frappe's
 # validate_auth. Not a real HTTP header — Frappe upcase-prefixes real
 # headers with HTTP_ but this key is set by our own hook so validate_auth
 # can't observe it, and downstream we read the environ directly.
 _GSP_AUTH_STASH_KEY = "HTTP_ECS_GSP_AUTHORIZATION"
+
+
+def rewrite_gsp_root_paths() -> None:
+    """gh#130 pre-dispatch hook: rewrite EE's root-path calls to the
+    dotted /api/method/... URLs Frappe's route dispatcher understands.
+
+    EE's Custom GSP client is hard-coded (verified 2026-07-08 with EE
+    tech) to call:
+
+        POST <base>/gettoken
+        POST <base>/einvoice/update
+        POST <base>/ewaybill/update
+
+    where <base> is the single Base URL the FDE configures in EE's
+    'Add Channel → Custom GSP' form. EE does NOT append a dotted
+    method path. Without this rewrite the request falls through to
+    the website router, which has no page at those root paths and
+    returns Frappe's 'Session Expired' HTML → EE sees an opaque 401
+    and never reaches gettoken() / einvoice_update() / ewaybill_update().
+
+    Runs BEFORE normalise_gsp_auth_header so that hook's suffix check
+    (which looks for /api/method/... paths) also matches after we
+    rewrite.
+
+    Must be registered BEFORE normalise_gsp_auth_header in hooks.py's
+    before_request list.
+    """
+    try:
+        request = getattr(frappe.local, "request", None)
+        if request is None:
+            return
+        path = (getattr(request, "path", "") or "")
+        new_path = _GSP_ROOT_PATH_MAP.get(path)
+        if not new_path:
+            return
+        environ = request.environ
+        # Mutate PATH_INFO — Frappe reads path from this environ key.
+        environ["PATH_INFO"] = new_path
+        # Some Frappe / werkzeug code paths re-read `path` off the
+        # request object; clear the cached property so the next read
+        # picks up the new PATH_INFO.
+        for cache_attr in ("path", "full_path", "url", "base_url"):
+            try:
+                delattr(request, cache_attr)
+            except (AttributeError, TypeError):
+                pass
+    except Exception:
+        # before_request must NEVER block the request.
+        return
+
+
+def _write_gsp_flat_response(payload: dict[str, Any], http_status: int) -> None:
+    """Write the payload's keys directly onto `frappe.local.response` so
+    the emitted HTTP JSON is FLAT ({"status": 200, "access_token": ...})
+    and pop the default `message` wrapper so it doesn't survive.
+
+    gh#130: EE's contract (guide §3) reads response fields at the top
+    level, not under `{"message": {...}}`. Frappe's default handler
+    would re-wrap our return value under `message` — so the endpoints
+    below use `_gsp_endpoint` (decorator) which invokes this helper
+    then returns None to prevent the wrap.
+    """
+    frappe.local.response["http_status_code"] = http_status
+    for key, value in payload.items():
+        frappe.local.response[key] = value
+    frappe.local.response.pop("message", None)
+
+
+def _gsp_endpoint(fn):
+    """gh#130 endpoint decorator: transforms a `return {"status": ...}`
+    dict from a GSP handler into a FLAT `frappe.local.response` write
+    and returns None to prevent Frappe's handler layer from re-wrapping
+    it in `{"message": {...}}`.
+
+    Handlers keep the ergonomic `return {...}` shape (easy to read,
+    easy to unit-test — the dict is the sole source of truth for the
+    response). The decorator does the transport-layer wiring.
+
+    The `status` key in the returned dict is used as the HTTP status
+    code (defaults to 200 if absent — but every handler in this
+    module always sets `status` explicitly).
+    """
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        result = fn(*args, **kwargs)
+        if result is None:
+            # Handler already wrote to frappe.local.response directly.
+            return None
+        if isinstance(result, dict):
+            http_status = int(result.get("status") or 200)
+            _write_gsp_flat_response(result, http_status=http_status)
+            return None
+        # Non-dict return — leave alone (unlikely in these endpoints).
+        return result
+    return wrapper
 
 
 def normalise_gsp_auth_header() -> None:
@@ -137,13 +246,15 @@ def _get_gsp_auth_header() -> str | None:
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+@_gsp_endpoint
 def gettoken() -> dict[str, Any]:
     """EE's /gettoken contract:
 
     Headers:
         Authorization: Basic <base64-encoded user:secret>
 
-    Returns:
+    HTTP response body (FLAT — @_gsp_endpoint transforms the returned
+    dict into a top-level response, no {"message": {...}} wrapper):
         {"status": 200, "access_token": "<token>",
          "token_type": "Bearer", "expires_in": 3600}
 
@@ -155,7 +266,6 @@ def gettoken() -> dict[str, Any]:
             _get_gsp_auth_header()
         )
     except EasyEcomGSPAuthError as exc:
-        frappe.response.http_status_code = 401
         return {"status": 401, "message": str(exc)}
 
     try:
@@ -168,7 +278,6 @@ def gettoken() -> dict[str, Any]:
             title=f"§11.5.1 /gettoken: token mint failed for {account_name}",
             message=f"{type(exc).__name__}: {exc}",
         )
-        frappe.response.http_status_code = 500
         return {"status": 500, "message": "Token mint failed."}
 
     return {
@@ -185,6 +294,7 @@ def gettoken() -> dict[str, Any]:
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+@_gsp_endpoint
 def einvoice_update() -> dict[str, Any]:
     """EE's /einvoice/update contract:
 
@@ -244,6 +354,7 @@ def einvoice_update() -> dict[str, Any]:
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
+@_gsp_endpoint
 def ewaybill_update() -> dict[str, Any]:
     """EE's /ewaybill/update contract:
 
