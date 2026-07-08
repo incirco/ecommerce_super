@@ -142,6 +142,7 @@ class PullOutcome:
     created_flagged: int = 0
     flagged_not_created: int = 0
     drift_count: int = 0  # Stage 5: post-flip detection
+    deduped: int = 0  # gh#126 §8e alias-dedup path
     failed: int = 0
     outcomes: list[CustomerOutcome] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
@@ -210,6 +211,8 @@ def process_customer_rows(rows: list[dict]) -> PullOutcome:
         aggregate.outcomes.append(outcome)
         if outcome.status == "Mapped" and outcome.operation == "created":
             aggregate.created += 1
+        elif outcome.operation == "deduped":
+            aggregate.deduped += 1
         elif outcome.operation == "skipped":
             aggregate.skipped += 1
         if outcome.status == "Created-Flagged":
