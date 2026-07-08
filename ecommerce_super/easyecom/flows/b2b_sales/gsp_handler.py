@@ -528,17 +528,76 @@ def _render_si_pdf_base64(
             no_letterhead=0 if letterhead else 1,
         )
         if not pdf_bytes:
+            _mark_pdf_render_failure(
+                si,
+                reason="render returned empty result",
+                format_name=format_name,
+            )
             return ""
         # Frappe returns bytes for PDF renders; guard for str fallback.
         if isinstance(pdf_bytes, str):
             pdf_bytes = pdf_bytes.encode("utf-8")
         return base64.b64encode(pdf_bytes).decode("ascii")
     except Exception as exc:
-        frappe.log_error(
-            title=f"gh#134 GSP base64 PDF render failed for {si.name}",
-            message=f"format={format_name!r}: {type(exc).__name__}: {exc}",
+        _mark_pdf_render_failure(
+            si,
+            reason=f"{type(exc).__name__}: {exc}",
+            format_name=format_name,
         )
         return ""
+
+
+def _mark_pdf_render_failure(
+    si: Any,
+    *,
+    reason: str,
+    format_name: str,
+) -> None:
+    """gh#137: surface a PDF-render failure on the SI's timeline so an
+    FDE looking at the SI immediately sees why EE got IRN+ack but no
+    invoice_base64. Keeps the Error Log entry (audit trail) AND adds a
+    Comment on the SI docname so the failure isn't invisible.
+
+    Failure mode design (from gh#137):
+      - DO NOT fail /einvoice/update — the IRN mint succeeded, that's
+        the load-bearing side effect. Response still ships 200 with
+        IRN + ack + URL.
+      - DO NOT create a Failed Sync Record — the SI push succeeded;
+        Failed Sync Record would misleadingly imply the push failed.
+      - DO log to Error Log (audit trail).
+      - DO add a Comment to the SI so the FDE sees it in the SI timeline.
+
+    Never raises — best-effort observability layer on top of the
+    existing best-effort render.
+    """
+    # Existing behaviour: Error Log entry (kept — audit trail).
+    try:
+        frappe.log_error(
+            title=f"gh#134 GSP base64 PDF render failed for {si.name}",
+            message=f"format={format_name!r}: {reason}",
+        )
+    except Exception:
+        pass
+
+    # gh#137: also drop a Comment on the SI's timeline.
+    try:
+        comment_text = (
+            f"gh#137: GSP PDF render failed on Custom-GSP response "
+            f"assembly. EE received IRN + ack but no invoice_base64. "
+            f"Reason: {reason}. Print Format: {format_name!r}. "
+            "Investigate wkhtmltopdf / print-format on this bench."
+        )
+        frappe.get_doc({
+            "doctype": "Comment",
+            "comment_type": "Comment",
+            "reference_doctype": "Sales Invoice",
+            "reference_name": si.name,
+            "content": comment_text,
+        }).insert(ignore_permissions=True)
+    except Exception:
+        # If Comment insert fails for any reason (permissions, DB, etc.),
+        # keep going — Error Log entry above is still the audit trail.
+        pass
 
 
 def _resolve_invoice_pdf_url(
