@@ -373,11 +373,23 @@ Every synced customer has a row in **EasyEcom Customer Map**, linking the EE cus
 
 The map is also your worklist — the workspace shows Customers in Drift / Created-Flagged / Flagged-Not-Created counts, each clicking through to the filtered list.
 
-## Matching — strictly map-row-only, no natural key
+## Matching — map row first, then narrow natural-key dedup, then create
 
-Unlike Item (which auto-matches on exact SKU==item_code), Customer has **no natural-key matching at all.** A map row exists → use it; otherwise → **create a new Customer + map row.** No matching on gstNum, companyname, or email.
+The customer master has a **three-step lookup** on every pull:
 
-Why: the real EE data has heavily duplicated GSTINs and company names (one GSTIN appeared 7 times across distinct partners). Auto-matching on any of these would silently collapse separate businesses into one Customer — a wrong link, which is silent corruption. The rule is "never wrongly link > never duplicate": duplicates are visible and you dedupe them; a wrong link quietly corrupts your books. So the master errs toward creating, and you dedupe by hand if needed.
+1. **Map row for this c_id → use it.** 1:1 as before. Unchanged.
+2. **No map row → try natural-key dedup** (gh#126, added 2026-07-09). Match on the two keys that would trip India Compliance uniqueness anyway:
+   - **Primary: mobile_no exact match** (`Customer.mobile_no`).
+   - **Secondary: gstin exact match** on real (non-URP) GSTINs only.
+
+   On match: **reuse** the canonical Customer. The incoming EE companyname is appended to canonical's `customer_alias` field (v16 alternate-name field, searchable in link pickers). Incoming Billing + Shipping Addresses are created on the canonical, each tagged with `Address.ecs_ee_c_id = <this c_id>`. A fresh Map row is written pointing this c_id → canonical Customer. Outcome: **Mapped**, `operation="deduped"` — no held state, no FDE cleanup.
+3. **No dedup match → create a new Customer + map row.** The original path, unchanged.
+
+Why the narrow dedup key: mobile is the exact trip wire — India Compliance rejects a second Customer with the same mobile with *"Mobile Number X is already associated with another customer: Y"*. Pre-#126, this rejection sent the c_id straight to **Flagged-Not-Created** and required an FDE to manually merge. Now the flow does the reuse automatically.
+
+Why NOT match on companyname or email: the real EE data has heavily duplicated company names (one GSTIN appeared 7 times across distinct partners). Auto-matching on those would silently collapse separate businesses. The rule is still "never wrongly link > never duplicate" — mobile and GSTIN are strong enough natural keys because IC already enforces them. Anything softer, we don't touch.
+
+**Map is now N:1.** N EE c_ids can point at 1 canonical Customer. Callers doing `frappe.db.get_value("EasyEcom Customer Map", {"erpnext_name": X})` still work, but return the *first* match — which may not be the c_id the caller meant. `get_all` returns all. FDE audit checklist item: sites doing `get_value` for lookup direction should switch to `get_all` + explicit disambiguation.
 
 ## GST gating — the held vs flagged split
 
