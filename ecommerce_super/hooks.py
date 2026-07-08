@@ -75,6 +75,16 @@ after_install = "ecommerce_super.install.after_install"
 
 before_request = [
     "ecommerce_super.easyecom.api.webhook.normalise_webhook_auth_header",
+    # gh#130: EE's Custom GSP client (§11.5.1 Mode 1) calls ROOT paths
+    # at the site root (POST <site>/gettoken, /einvoice/update,
+    # /ewaybill/update) — NOT the dotted /api/method/... URLs Frappe
+    # normally exposes. Without this hook, EE's calls fall through to
+    # the website router which returns Frappe's "Session Expired" HTML
+    # (401). This hook rewrites the WSGI PATH_INFO on the way in so
+    # Frappe's normal route dispatcher lands on the correct whitelisted
+    # method. Must run BEFORE normalise_gsp_auth_header so the auth
+    # hook's suffix check matches the rewritten path.
+    "ecommerce_super.easyecom.api.gsp.rewrite_gsp_root_paths",
     # gh#123: identical pattern to the webhook hook above but for the
     # §11.5.1 Custom GSP endpoints (/gettoken, /einvoice/update,
     # /ewaybill/update). Frappe's validate_auth() consumes the
