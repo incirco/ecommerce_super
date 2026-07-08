@@ -44,6 +44,94 @@ from ecommerce_super.easyecom.flows.b2b_sales.gsp_auth import (
 
 
 # ============================================================
+# gh#123 — Pre-auth header normalisation for GSP routes
+# ============================================================
+#
+# Frappe's validate_auth() (frappe/auth.py) runs during request init,
+# BEFORE dispatching to the whitelisted method. For an
+# `Authorization: Basic <b64>` header it base64-decodes to `key:secret`,
+# looks up a User whose api_key matches `key`, finds none, and raises
+# `AuthenticationError`. `@whitelist(allow_guest=True)` governs
+# permission, not credential validation — so a Basic header on our
+# /gettoken endpoint dies before we ever see it.
+#
+# Same trap for Bearer on /einvoice/update + /ewaybill/update: even
+# though Frappe's api_key path skips Bearer, the tail of validate_auth
+# checks "any 2-part Authorization header AND session still Guest → raise"
+# (the same shape as gh#1's webhook fix).
+#
+# Fix (mirrors gh#1 `normalise_webhook_auth_header`): before validate_auth
+# runs, we shift the header out of `HTTP_AUTHORIZATION` into a custom
+# stash environ key `HTTP_ECS_GSP_AUTHORIZATION`. Frappe then sees no
+# Authorization header and skips its check. The GSP endpoints below read
+# from the stash first, fall back to the standard `Authorization` header
+# (so a bypassing test or an already-fixed environment still works).
+# Non-GSP paths are untouched.
+
+# Path suffixes the GSP endpoints resolve to under any site mount.
+_GSP_PATH_SUFFIXES = (
+    "/api/method/ecommerce_super.easyecom.api.gsp.gettoken",
+    "/api/method/ecommerce_super.easyecom.api.gsp.einvoice_update",
+    "/api/method/ecommerce_super.easyecom.api.gsp.ewaybill_update",
+)
+
+# WSGI environ key used to stash the Authorization value past Frappe's
+# validate_auth. Not a real HTTP header — Frappe upcase-prefixes real
+# headers with HTTP_ but this key is set by our own hook so validate_auth
+# can't observe it, and downstream we read the environ directly.
+_GSP_AUTH_STASH_KEY = "HTTP_ECS_GSP_AUTHORIZATION"
+
+
+def normalise_gsp_auth_header() -> None:
+    """gh#123 pre-auth hook: shift `Authorization: ...` to a stash environ
+    key for the three GSP endpoints (gettoken / einvoice_update /
+    ewaybill_update) so Frappe's validate_auth() doesn't reject the
+    request as `AuthenticationError` before our endpoint runs.
+
+    Applies to Basic on /gettoken (the primary bug) AND to Bearer on
+    /einvoice/update + /ewaybill/update (same underlying trap — any
+    2-part Authorization header + session-still-Guest at the end of
+    validate_auth raises).
+    """
+    try:
+        request = getattr(frappe.local, "request", None)
+        if request is None:
+            return
+        path = (getattr(request, "path", "") or "")
+        if not any(path.endswith(suffix) for suffix in _GSP_PATH_SUFFIXES):
+            return
+        environ = request.environ
+        auth = environ.get("HTTP_AUTHORIZATION", "")
+        if not auth:
+            return
+        # Stash then remove so validate_auth sees no Authorization header.
+        environ.setdefault(_GSP_AUTH_STASH_KEY, auth)
+        environ.pop("HTTP_AUTHORIZATION", None)
+    except Exception:
+        # before_request must NEVER block the request — leave the headers
+        # as-is on any unexpected error and let the downstream layers
+        # handle whatever comes through.
+        return
+
+
+def _get_gsp_auth_header() -> str | None:
+    """Read the Authorization value for a GSP endpoint, preferring the
+    stash environ key that `normalise_gsp_auth_header` populates. Falls
+    back to the standard Authorization header so tests or environments
+    where the pre-request hook doesn't fire still work.
+    """
+    try:
+        request = getattr(frappe.local, "request", None)
+        if request is not None:
+            stashed = request.environ.get(_GSP_AUTH_STASH_KEY)
+            if stashed:
+                return stashed
+    except Exception:
+        pass
+    return frappe.get_request_header("Authorization")
+
+
+# ============================================================
 # /gettoken — Basic auth → Bearer mint
 # ============================================================
 
@@ -64,7 +152,7 @@ def gettoken() -> dict[str, Any]:
     """
     try:
         account_name = validate_basic_auth(
-            frappe.get_request_header("Authorization")
+            _get_gsp_auth_header()
         )
     except EasyEcomGSPAuthError as exc:
         frappe.response.http_status_code = 401
@@ -126,7 +214,7 @@ def einvoice_update() -> dict[str, Any]:
     """
     try:
         ee_account = validate_bearer(
-            frappe.get_request_header("Authorization")
+            _get_gsp_auth_header()
         )
     except EasyEcomGSPAuthError as exc:
         frappe.response.http_status_code = 401
@@ -188,7 +276,7 @@ def ewaybill_update() -> dict[str, Any]:
     """
     try:
         ee_account = validate_bearer(
-            frappe.get_request_header("Authorization")
+            _get_gsp_auth_header()
         )
     except EasyEcomGSPAuthError as exc:
         frappe.response.http_status_code = 401
