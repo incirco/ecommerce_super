@@ -75,6 +75,15 @@ after_install = "ecommerce_super.install.after_install"
 
 before_request = [
     "ecommerce_super.easyecom.api.webhook.normalise_webhook_auth_header",
+    # gh#123: identical pattern to the webhook hook above but for the
+    # §11.5.1 Custom GSP endpoints (/gettoken, /einvoice/update,
+    # /ewaybill/update). Frappe's validate_auth() consumes the
+    # Authorization header (Basic → api_key lookup fails → AuthenticationError;
+    # or generic 2-part-header-with-Guest-session tail check) BEFORE our
+    # whitelisted method runs. This hook shifts the header out of
+    # HTTP_AUTHORIZATION into a stash environ key so validate_auth skips
+    # its check; the GSP handlers then read from the stash.
+    "ecommerce_super.easyecom.api.gsp.normalise_gsp_auth_header",
 ]
 
 
