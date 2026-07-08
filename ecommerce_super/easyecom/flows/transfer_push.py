@@ -963,7 +963,7 @@ def _build_b2b_payload(
         "orderType": "businessorder",
         "orderNumber": dn.name,
         "orderDate": _fmt_utc(dn.posting_date, getattr(dn, "posting_time", None)),
-        "expDeliveryDate": _fmt_ist(getattr(dn, "delivery_date", None)),
+        "expDeliveryDate": _fmt_ist(getattr(dn, "delivery_date", None) or dn.posting_date),
         "shippingCost": 0,
         "paymentMode": _extract_int_prefix(
             account.get("stn_default_payment_mode"), _DEFAULT_PAYMENT_MODE
@@ -1246,7 +1246,7 @@ def _build_stn_payload(
         "orderType": "stocktransferorder",
         "orderNumber": dn.name,
         "orderDate": _fmt_utc(dn.posting_date, getattr(dn, "posting_time", None)),
-        "expDeliveryDate": _fmt_ist(getattr(dn, "delivery_date", None)),
+        "expDeliveryDate": _fmt_ist(getattr(dn, "delivery_date", None) or dn.posting_date),
         "shippingCost": 0,
         "paymentMode": _extract_int_prefix(
             account.get("stn_default_payment_mode"), _DEFAULT_PAYMENT_MODE
@@ -1355,7 +1355,15 @@ def _fmt_utc(date_value: Any, posting_time: Any) -> str:
 
 
 def _fmt_ist(date_value: Any) -> str:
-    """`YYYY-MM-DD HH:MM:SS` IST per §10.G expDeliveryDate spec."""
+    """`YYYY-MM-DD HH:MM:SS` IST per §10.G expDeliveryDate spec.
+
+    NOTE for callers: never pass a bare ``getattr(dn, "delivery_date", None)``
+    for a Delivery Note — DN has no ``delivery_date`` field (that lives on
+    Sales Order), so the getattr always returns None, this returns ``""``,
+    and EE renders the empty date as ``01/01/1970 05:30 AM`` in its B2B
+    Orders grid (gh#131). Coalesce with ``dn.posting_date`` at the call
+    site so we always send a real date.
+    """
     if not date_value:
         return ""
     return f"{date_value} 23:59:59"
