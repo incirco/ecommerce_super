@@ -311,6 +311,8 @@ If EE's Custom GSP UI accepts only a **base URL** (and appends fixed paths like 
 - Constant-time secret comparison via `secrets.compare_digest` to avoid timing leaks.
 - Expired tokens auto-deleted by a daily scheduler (after a 7-day audit retention window).
 
+**Frappe auth middleware bypass (gh#123).** Frappe's `validate_auth()` runs during request init, before our `@whitelist(allow_guest=True)` endpoint dispatches. For `Authorization: Basic <b64>` it decodes to `key:secret`, looks up a User whose `api_key` matches `key`, finds none, and raises `AuthenticationError` — killing the request before `gettoken()` ever runs. The same tail check ("2-part Authorization header + session-still-Guest → raise") also bites `Authorization: Bearer` on the follow-on /einvoice + /ewaybill endpoints. We work around this in `ecommerce_super/easyecom/api/gsp.py :: normalise_gsp_auth_header` — a `before_request` hook that path-matches the 3 GSP endpoints, moves `HTTP_AUTHORIZATION` → stash environ key `HTTP_ECS_GSP_AUTHORIZATION` before Frappe sees it, and the endpoints then read via `_get_gsp_auth_header()` (prefers the stash, falls back to the standard header). Non-GSP paths are untouched. **If a fresh deploy suddenly shows `{"exc_type":"AuthenticationError"}` responses from /gettoken, the site is running old `hooks.py` — `bench --site <site> clear-cache && bench restart`.** This mirrors the identical fix the webhook receiver uses (gh#1).
+
 ### 4.3 Idempotency model
 
 Critical because re-minting IRN on NIC IRP creates duplicate IRNs that **cannot be deleted** — the only remediation is calling NIC support.
