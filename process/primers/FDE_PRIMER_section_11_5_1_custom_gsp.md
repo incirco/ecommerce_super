@@ -201,7 +201,8 @@ with the error detail — FDE worklist surfaces these.
 
 | EE-side symptom | What it means | Where to look |
 |---|---|---|
-| "Invalid GSP credentials" / 401 | Basic auth secret on EE doesn't match the one stored on the EE Account | Re-check Step 2/3 — secrets match? |
+| Response body `{"exc_type":"AuthenticationError"}` (any 4xx) — but no structured `{"status":401,"message":"..."}` | Frappe's global auth middleware consumed the `Authorization: Basic ...` header BEFORE our endpoint ran. This means the `before_request` header-normalisation hook isn't firing on your bench. | Bench needs to pick up the latest `hooks.py`: run `bench --site <site> clear-cache && bench restart`. If the site is on Frappe Cloud, trigger a redeploy so the app registry reloads `before_request`. Verified fix for this class of failure: gh#123 (2026-07-08). |
+| "Invalid GSP credentials" / 401 (structured body `{"status":401,"message":"..."}`) | Basic auth secret on EE doesn't match the one stored on the EE Account | Re-check Step 2/3 — secrets match? |
 | "Order not found" / 422 | EE's reference_code doesn't resolve to a B2B Order Map row | Check `EasyEcom B2B Order Map` for the SO; if missing, the SO was never §11-pushed to EE |
 | "Customer Map missing" / 422 | The buyer in the EE order isn't synced to ERPNext via §8e Customer Map | Run §8e Customer Push or wait for pull |
 | "Item Map missing" / 422 | A line item's SKU isn't in ERPNext via §8d Item Map | Run §8d Item Push |
