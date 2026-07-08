@@ -128,7 +128,7 @@ class CustomerOutcome:
     ee_c_id: str
     customer_docname: str | None
     status: CustomerStatus
-    operation: Literal["created", "skipped", "flagged"]
+    operation: Literal["created", "skipped", "flagged", "deduped"]
     flag_reasons: list[str] = field(default_factory=list)
 
 
@@ -332,6 +332,37 @@ def process_one_customer(
             operation="skipped",
         )
 
+    # === 1.5) gh#126 — Natural-key dedup via v16 Customer Alias field ===
+    # Before creating a fresh Customer, check whether an existing Customer
+    # already has the same mobile / GSTIN as this incoming EE row. If yes,
+    # reuse that Customer instead of trying to insert a new one that
+    # India Compliance's mobile-uniqueness check would reject anyway (see
+    # gh#59 for the reproduced failure mode on live16version.frappe.cloud).
+    #
+    # Semantics:
+    #   - Map row for THIS c_id → still 1 row, → canonical Customer.
+    #   - Canonical Customer's `customer_alias` field gets the incoming
+    #     companyname as a searchable alternate name (v16+ only; falls
+    #     back gracefully on older sites).
+    #   - Incoming addresses land on the canonical Customer, tagged with
+    #     `ecs_ee_c_id = <this c_id>` so the reverse lookup "which addresses
+    #     came from which EE c_id?" stays crisp.
+    #
+    # §10 / §11 lookup contract — audit note:
+    #   `frappe.db.get_value("EasyEcom Customer Map", {"erpnext_name": X})`
+    #   was 1:1 pre-#126. Post-#126, one canonical Customer may be pointed
+    #   at by N Map rows (one per c_id). Consumers using `get_value` (single
+    #   row) will get the first (typically oldest) match, which may not be
+    #   the c_id they meant. `get_all` returns all. See gh#59 comment
+    #   2026-06-24 for the audit checklist; treat this as a follow-up.
+    canonical = _find_customer_by_natural_key(erpnext_fields)
+    if canonical:
+        return _dedup_to_existing_customer(
+            ee_c_id=ee_c_id,
+            canonical_customer=canonical,
+            erpnext_fields=erpnext_fields,
+        )
+
     # === 2) GSTIN gating ===
     gstin_raw = (erpnext_fields.get("gstin") or "").strip().upper()
     is_urp = gstin_raw in ("", "URP")
@@ -449,6 +480,223 @@ def _identify_validator(error_message: str) -> str:
 
 
 # ----- Helpers (split for testability + readability) -----
+
+
+# ============================================================
+# gh#126 — v16 Customer Alias-based dedup for §8e customer pull
+# ============================================================
+#
+# See gh#126 for the design rationale + the questions from gh#59 that this
+# resolves. Short version: EE sometimes issues a fresh c_id for a customer
+# who already exists in ERPNext (address change on EE side → new EE
+# record). Pre-#126 we'd try to create a new ERPNext Customer, hit India
+# Compliance's mobile-uniqueness rejection, land as Flagged-Not-Created,
+# and leave the FDE to manually merge.
+#
+# Post-#126: before creating, we look for a Customer whose mobile matches
+# the incoming EE payload. If found, we reuse it — add the incoming
+# companyname as an Alias on that canonical Customer (v16 field —
+# graceful no-op on older sites), point the new Map row at the canonical,
+# create addresses on the canonical tagged with `ecs_ee_c_id`.
+
+
+def _find_customer_by_natural_key(erpnext_fields: dict[str, Any]) -> str | None:
+    """Return the docname of an existing Customer whose natural key
+    matches this EE row, or None.
+
+    Precedence:
+      1. mobile_no exact match (primary — matches the IC mobile
+         uniqueness constraint that gh#59 tripped on)
+      2. gstin exact match (secondary — B2B customers with distinct
+         mobiles but shared GSTIN across sub-entities)
+
+    Deliberately excludes:
+      - email_id (weakly unique — shared inboxes / typos common)
+      - customer_name (already handled by gh#50 dup-name-suffix path;
+        different mechanism)
+
+    Returns the first match. In the rare case where multiple existing
+    Customers share the same mobile (which India Compliance prevents
+    at insert time, so should be zero on a clean site), we log a warning
+    but still return the first — the alias-dedup path is strictly
+    better than the pre-#126 Flagged-Not-Created behavior.
+    """
+    mobile_no = (erpnext_fields.get("mobile_no") or "").strip()
+    if mobile_no:
+        matches = frappe.get_all(
+            "Customer",
+            filters={"mobile_no": mobile_no},
+            fields=["name"],
+            limit=2,
+        )
+        if matches:
+            if len(matches) > 1:
+                frappe.logger().warning(
+                    f"gh#126 natural-key dedup: mobile_no={mobile_no!r} "
+                    f"matches {len(matches)} Customers "
+                    f"({[m.name for m in matches]!r}); using first."
+                )
+            return matches[0].name
+
+    gstin = (erpnext_fields.get("gstin") or "").strip().upper()
+    if gstin and gstin != "URP":
+        # Customer.gstin is Indian-Compliance-managed; matches on the
+        # exact 15-char pattern.
+        match = frappe.db.get_value(
+            "Customer",
+            {"gstin": gstin},
+            "name",
+        )
+        if match:
+            return match
+
+    return None
+
+
+def _dedup_to_existing_customer(
+    *,
+    ee_c_id: str,
+    canonical_customer: str,
+    erpnext_fields: dict[str, Any],
+) -> CustomerOutcome:
+    """Wire a new EE c_id onto an existing canonical Customer.
+
+    Steps:
+      1. Add the incoming EE companyname as a Customer Alias
+         (v16 `customer_alias` field — no-op fallback on older Frappe).
+      2. Create Billing + Shipping addresses on the canonical, tagged
+         with `ecs_ee_c_id` so the reverse lookup is crisp.
+      3. Create the Customer Map row → canonical.
+      4. Write the Pull Sync Record.
+
+    Returns a CustomerOutcome with operation="deduped" so the FDE
+    workspace tallies can distinguish pure-create from natural-key-merge.
+    """
+    incoming_name = (erpnext_fields.get("customer_name") or "").strip()
+    _try_add_customer_alias(canonical_customer, incoming_name, ee_c_id)
+
+    # gstin gating for Address inserts — same rules as the main path.
+    gstin_raw = (erpnext_fields.get("gstin") or "").strip().upper()
+    is_urp = gstin_raw in ("", "URP")
+    gstin_for_address = "" if is_urp else gstin_raw
+
+    # Address inserts — best-effort. If IC rejects one, we skip it
+    # rather than fail the whole dedup (the canonical already has
+    # working addresses; a bad new one shouldn't strand the c_id).
+    for address_type, prefix in (("Billing", "billing"), ("Shipping", "dispatch")):
+        try:
+            addr_name = _create_address_strict(
+                customer_docname=canonical_customer,
+                address_type=address_type,
+                street=erpnext_fields.get(f"{prefix}_street") or "",
+                city=erpnext_fields.get(f"{prefix}_city") or "",
+                zipcode=erpnext_fields.get(f"{prefix}_zipcode") or "",
+                state_name=erpnext_fields.get(f"{prefix}_state_name") or "",
+                country_name=erpnext_fields.get(f"{prefix}_country_name") or "",
+                gstin=gstin_for_address or None,
+            )
+            if addr_name:
+                _tag_address_with_c_id(addr_name, ee_c_id)
+        except frappe.ValidationError as exc:
+            frappe.logger().info(
+                f"gh#126 dedup: skipping {address_type} address on "
+                f"{canonical_customer!r} for c_id={ee_c_id}: {exc}"
+            )
+
+    _create_mapped_row(
+        ee_c_id=ee_c_id,
+        customer_docname=canonical_customer,
+        status="Mapped",
+        flag_reasons=[],
+    )
+    _write_pull_sync_record(
+        entity_name=canonical_customer,
+        ee_c_id=ee_c_id,
+        status=STATUS_SUCCESS,
+        last_error=None,
+    )
+    return CustomerOutcome(
+        ee_c_id=ee_c_id,
+        customer_docname=canonical_customer,
+        status="Mapped",
+        operation="deduped",
+        flag_reasons=[],
+    )
+
+
+def _try_add_customer_alias(
+    customer_docname: str,
+    alias_text: str,
+    ee_c_id: str,
+) -> None:
+    """Populate the v16 Customer Alias field with the incoming EE
+    companyname, if the field exists on this Frappe version. Graceful
+    no-op on pre-v16 (Alias field absent) OR when the alias text is
+    already populated / matches the canonical name.
+    """
+    if not alias_text:
+        return
+    try:
+        meta = frappe.get_meta("Customer")
+        if not meta.get_field("customer_alias"):
+            # Pre-v16 site — Alias field not shipped. No-op.
+            return
+    except Exception:
+        return
+
+    try:
+        current_alias = frappe.db.get_value(
+            "Customer", customer_docname, "customer_alias"
+        ) or ""
+        current_name = frappe.db.get_value(
+            "Customer", customer_docname, "customer_name"
+        ) or ""
+        # Skip if the alias equals the canonical name (no info gained)
+        # OR if the alias text already appears in the field.
+        if alias_text == current_name:
+            return
+        if alias_text.lower() in current_alias.lower():
+            return
+        # Append with a comma separator; the field is free-form.
+        new_alias = (
+            f"{current_alias}, {alias_text}" if current_alias else alias_text
+        )
+        frappe.db.set_value(
+            "Customer", customer_docname, "customer_alias", new_alias,
+            update_modified=False,
+        )
+    except Exception as exc:
+        # Non-fatal — the dedup succeeds even if the alias field write
+        # fails (permissions, unusual DocType override, etc.).
+        frappe.logger().warning(
+            f"gh#126 alias write failed for {customer_docname!r} "
+            f"(c_id={ee_c_id}): {type(exc).__name__}: {exc}"
+        )
+
+
+def _tag_address_with_c_id(address_name: str, ee_c_id: str) -> None:
+    """Tag an Address with the originating EE c_id via the ecs_ee_c_id
+    Custom Field. Silent no-op if the field doesn't exist on this
+    bench (patch hasn't run).
+    """
+    try:
+        meta = frappe.get_meta("Address")
+        if not meta.get_field("ecs_ee_c_id"):
+            return
+        frappe.db.set_value(
+            "Address", address_name, "ecs_ee_c_id", ee_c_id,
+            update_modified=False,
+        )
+    except Exception as exc:
+        frappe.logger().warning(
+            f"gh#126 address tag failed for {address_name!r} "
+            f"(c_id={ee_c_id}): {type(exc).__name__}: {exc}"
+        )
+
+
+# ============================================================
+# Existing customer-create path (pre-#126)
+# ============================================================
 
 
 def _create_customer(
