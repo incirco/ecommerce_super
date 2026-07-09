@@ -129,17 +129,29 @@ def rewrite_gsp_root_paths() -> None:
         new_path = _GSP_ROOT_PATH_MAP.get(path)
         if not new_path:
             return
-        environ = request.environ
-        # Mutate PATH_INFO — Frappe reads path from this environ key.
-        environ["PATH_INFO"] = new_path
-        # Some Frappe / werkzeug code paths re-read `path` off the
-        # request object; clear the cached property so the next read
-        # picks up the new PATH_INFO.
-        for cache_attr in ("path", "full_path", "url", "base_url"):
-            try:
-                delattr(request, cache_attr)
-            except (AttributeError, TypeError):
-                pass
+        # gh#130 crash post-mortem (2026-07-09):
+        #   werkzeug's Request.__init__ copies PATH_INFO out of environ
+        #   into `self.path` as a **plain instance attribute** (see
+        #   werkzeug/sansio/request.py: `self.path = "/" + path.lstrip("/")`).
+        #   It is NOT a cached_property that reads back from environ on
+        #   subsequent access. So:
+        #     - Mutating `environ["PATH_INFO"]` alone does NOT change
+        #       `request.path` — Frappe's dispatcher (`request.path.startswith("/api/")`)
+        #       still sees the ORIGINAL root path and falls through to the
+        #       website handler.
+        #     - `delattr(request, "path")` REMOVES the instance attribute,
+        #       so every subsequent `request.path` access raises
+        #       AttributeError → Frappe's exception handler ALSO reads
+        #       request.path → cascading crash → bare 500 (werkzeug's
+        #       default, not Frappe's styled page). This is what Garv
+        #       reported on mmpl16 + ee-uat, 2026-07-09.
+        #
+        # The correct rewrite is a plain attribute assignment. We also
+        # keep the PATH_INFO mutation for downstream code that reads
+        # environ directly (werkzeug's Map.bind_to_environ in
+        # frappe.api.handle uses environ, not request.path).
+        request.path = new_path
+        request.environ["PATH_INFO"] = new_path
     except Exception:
         # before_request must NEVER block the request.
         return
