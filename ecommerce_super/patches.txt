@@ -132,3 +132,7 @@ ecommerce_super.patches.v0_1.add_b2c_sales_invoice_fields
 # "flagged-<docname>" placeholder even though push has since populated
 # ee_customer_id with the real EE c_id. Idempotent, no-op on clean sites.
 ecommerce_super.patches.v0_1.backfill_customer_map_ee_c_id
+# gh#126 — Address Custom Field ecs_ee_c_id, used by §8e alias-dedup
+# to tag addresses with the originating EE c_id when a new c_id is
+# wired onto an existing canonical Customer.
+ecommerce_super.patches.v0_1.add_address_ee_c_id_field

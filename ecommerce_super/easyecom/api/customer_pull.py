@@ -96,6 +96,7 @@ def discover_customers(inline: int | bool = False) -> dict[str, Any]:
         "enqueued": False,
         "total": outcome.total,
         "created": outcome.created,
+        "deduped": outcome.deduped,  # gh#126 §8e alias-dedup
         "skipped": outcome.skipped,
         "created_flagged": outcome.created_flagged,
         "flagged_not_created": outcome.flagged_not_created,
@@ -133,6 +134,7 @@ def _discover_customers_worker(triggered_by: str | None = None) -> None:
 
     summary = (
         f"Total: {outcome.total} | Created: {outcome.created} | "
+        f"Deduped: {outcome.deduped} | "
         f"Skipped: {outcome.skipped} | Created-Flagged: {outcome.created_flagged} | "
         f"FNC: {outcome.flagged_not_created} | Failed: {outcome.failed}"
     )
