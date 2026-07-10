@@ -446,6 +446,25 @@ def _do_update(
     sparse = {k: v for k, v in sparse.items() if v not in (None, "")}
 
     client.post(WHOLESALE_CUSTOMER_UPDATE, payload=sparse)
+
+    # gh#144: heal a stale "flagged-<docname>" placeholder in ee_c_id
+    # left over from the pre-fix _upsert_map_row_after_create path.
+    # We already know the real EE c_id (== ee_customer_id, verified
+    # 2026-05-27). Only touch rows whose ee_c_id still looks like a
+    # placeholder — real c_ids are numeric strings and never start
+    # with "flagged-".
+    current_ee_c_id = str(map_row.get("ee_c_id") or "")
+    real_customer_id = str(map_row["ee_customer_id"])
+    if current_ee_c_id.startswith("flagged-") and real_customer_id:
+        frappe.db.set_value(
+            "EasyEcom Customer Map",
+            map_row["name"],
+            "ee_c_id",
+            real_customer_id,
+            update_modified=False,
+        )
+        map_row["ee_c_id"] = real_customer_id
+
     _save_push_snapshot(customer_docname=customer.name, payload=full_payload)
     _write_push_sync_record(
         entity_name=customer.name,
@@ -522,10 +541,19 @@ def _upsert_map_row_after_create(
     carries the returned customerId. Stage 3 may have left a map row
     with ee_customer_id = ee_c_id (placeholder); overwrite cleanly."""
     if existing_map:
+        # gh#144: also overwrite ee_c_id. Pre-fix, this write only
+        # updated ee_customer_id — so an existing Flagged-Not-Created
+        # row that had `ee_c_id = "flagged-<docname>"` as a
+        # unique-constraint placeholder kept the placeholder forever,
+        # and the inbound resolver (invoice_mirror._resolve_customer)
+        # queries by ee_c_id → never matched. Both ids are the SAME
+        # value on EE (per the 2026-05-27 verification comment near
+        # customer_id extraction above), so overwriting is safe.
         frappe.db.set_value(
             "EasyEcom Customer Map",
             existing_map["name"],
             {
+                "ee_c_id": ee_customer_id,
                 "ee_customer_id": ee_customer_id,
                 "status": "Mapped",
                 "flag_reason": "",

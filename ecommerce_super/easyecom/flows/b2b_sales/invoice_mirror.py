@@ -192,11 +192,20 @@ def mirror_si_from_ee_response(
 def _resolve_customer(ee_row: dict) -> str | None:
     """Find the ERPNext Customer via EasyEcom Customer Map.
 
-    Lookup priority:
-      1. EE Customer Map keyed on ee_c_id (= merchant_c_id from response)
-      2. (Future: per-marketplace generic customer fallback for B2C)
+    Lookup priority (gh#144):
+      1. EE Customer Map keyed on ee_c_id      (= merchant_c_id / customer_code)
+      2. EE Customer Map keyed on ee_customer_id (write-side alias — same
+         value on EE, but historical rows may have only one populated)
+      3. (Future: per-marketplace generic customer fallback for B2C)
+
+    Payload may carry either `merchant_c_id` or `customer_code` (EE
+    sends both for the same underlying id). Try both.
     """
-    ee_c_id = str(ee_row.get("merchant_c_id") or "").strip()
+    ee_c_id = str(
+        ee_row.get("merchant_c_id")
+        or ee_row.get("customer_code")
+        or ""
+    ).strip()
     if not ee_c_id:
         return None
 
@@ -205,7 +214,16 @@ def _resolve_customer(ee_row: dict) -> str | None:
         {"ee_c_id": ee_c_id},
         "erpnext_name",
     )
-    return erpnext_name
+    if erpnext_name:
+        return erpnext_name
+    # gh#144 fallback: pre-fix map rows have ee_c_id="flagged-<docname>"
+    # placeholder and ee_customer_id=<real_id>. Try the write-side field
+    # so the resolver survives until the backfill patch runs.
+    return frappe.db.get_value(
+        "EasyEcom Customer Map",
+        {"ee_customer_id": ee_c_id},
+        "erpnext_name",
+    )
 
 
 def _resolve_line_items(ee_row: dict) -> list[dict]:
