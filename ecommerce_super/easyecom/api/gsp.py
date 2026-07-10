@@ -184,27 +184,189 @@ def _gsp_endpoint(fn):
     and returns None to prevent Frappe's handler layer from re-wrapping
     it in `{"message": {...}}`.
 
-    Handlers keep the ergonomic `return {...}` shape (easy to read,
-    easy to unit-test — the dict is the sole source of truth for the
-    response). The decorator does the transport-layer wiring.
-
-    The `status` key in the returned dict is used as the HTTP status
-    code (defaults to 200 if absent — but every handler in this
-    module always sets `status` explicitly).
+    gh#147: also logs an EasyEcom API Call row (direction=Inbound) with
+    request + response snapshots on EVERY hit — 2xx, 4xx, 5xx alike —
+    so successful calls also leave an audit trail.
     """
+    endpoint_path = f"/{fn.__name__.replace('_', '/')}"
+
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        result = fn(*args, **kwargs)
-        if result is None:
-            # Handler already wrote to frappe.local.response directly.
-            return None
-        if isinstance(result, dict):
-            http_status = int(result.get("status") or 200)
-            _write_gsp_flat_response(result, http_status=http_status)
-            return None
-        # Non-dict return — leave alone (unlikely in these endpoints).
-        return result
+        import time
+        started = time.time()
+        result = None
+        exc_class: str | None = None
+        exc_message: str | None = None
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as exc:
+            # Never let a handler crash escape unlogged. The outer
+            # Frappe exception path will still shape the 500 response;
+            # we just capture the entry in the inbound log.
+            exc_class = type(exc).__name__
+            exc_message = str(exc)
+            _log_inbound_gsp_call(
+                endpoint=endpoint_path,
+                started_at=started,
+                result=None,
+                error_class=exc_class,
+                error_message=exc_message,
+            )
+            raise
+        try:
+            if isinstance(result, dict):
+                http_status = int(result.get("status") or 200)
+                _write_gsp_flat_response(result, http_status=http_status)
+                _log_inbound_gsp_call(
+                    endpoint=endpoint_path,
+                    started_at=started,
+                    result=result,
+                )
+                return None
+            if result is None:
+                # Handler already wrote to frappe.local.response.
+                _log_inbound_gsp_call(
+                    endpoint=endpoint_path,
+                    started_at=started,
+                    result=None,
+                )
+                return None
+            # Non-dict return — leave alone (unlikely in these endpoints).
+            _log_inbound_gsp_call(
+                endpoint=endpoint_path,
+                started_at=started,
+                result=None,
+            )
+            return result
+        except Exception:
+            # Response-shaping / logging failure must not shadow the
+            # actual handler result.
+            return result
     return wrapper
+
+
+def _log_inbound_gsp_call(
+    *,
+    endpoint: str,
+    started_at: float,
+    result: dict | None,
+    error_class: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """gh#147 — write one EasyEcom API Call row (direction=Inbound) for
+    every hit on a GSP endpoint (success, 4xx, 5xx, unhandled crash).
+
+    Never raises. Redacts Authorization header. Best-effort — if the
+    write itself fails, we log a single warning and move on.
+    """
+    import hashlib
+    import time
+    try:
+        request = getattr(frappe.local, "request", None)
+        if request is None:
+            return
+        http_status = (
+            int((result or {}).get("status") or 200)
+            if result is not None
+            else (500 if error_class else 200)
+        )
+        latency_ms = int((time.time() - started_at) * 1000)
+        # Redact Authorization (Basic + Bearer both) from the headers
+        # snapshot. Everything else is fine to capture.
+        redacted_headers = {}
+        try:
+            for k, v in dict(request.headers).items():
+                if k.lower() == "authorization":
+                    parts = str(v).split(None, 1)
+                    scheme = parts[0] if parts else "Auth"
+                    redacted_headers[k] = f"{scheme} <REDACTED>"
+                elif k.lower() == "cookie":
+                    redacted_headers[k] = "<REDACTED>"
+                else:
+                    redacted_headers[k] = str(v)
+        except Exception:
+            redacted_headers = {}
+        # Request body — capped at 32 KB for storage sanity.
+        try:
+            raw_body = request.get_data(as_text=True) or ""
+        except Exception:
+            raw_body = ""
+        req_body_capped = raw_body[:32_000]
+        req_hash = hashlib.sha256(raw_body.encode("utf-8")).hexdigest()
+        # Response body: assemble from frappe.local.response, capped.
+        try:
+            resp_body = json.dumps(
+                {k: v for k, v in dict(frappe.local.response).items() if k != "docs"},
+                default=str,
+            )
+        except Exception:
+            resp_body = ""
+        resp_body_capped = resp_body[:32_000]
+        resp_hash = hashlib.sha256(resp_body.encode("utf-8")).hexdigest()
+        # Resolve account: we don't always know it (e.g. /gettoken pre-
+        # auth check). Fall back to any enabled account so the required
+        # link resolves. Not ideal — but the alternative is skipping the
+        # row entirely, which defeats the purpose.
+        account_name = None
+        # Prefer a bound account when the handler picked one up.
+        for attr in ("_gsp_ee_account",):
+            v = getattr(frappe.local, attr, None) if hasattr(frappe.local, attr) else None
+            if v:
+                account_name = v
+                break
+        if not account_name:
+            account_name = frappe.db.get_value(
+                "EasyEcom Account", {"enabled": 1}, "name"
+            )
+        if not account_name:
+            # No account on this bench — skip (nothing to link).
+            return
+        company = frappe.db.get_value(
+            "EasyEcom Account", account_name, "company"
+        )
+        # Correlation ID: prefer inbound header if EE sent one (gh#153).
+        # Else, generate.
+        correlation_id = (
+            request.headers.get("X-ECS-Correlation-Id")
+            or frappe.generate_hash(length=32)
+        )
+        status = "Success" if 200 <= http_status < 300 else "Failed"
+        doc = frappe.new_doc("EasyEcom API Call")
+        doc.update({
+            "direction": "Inbound",
+            "easyecom_account": account_name,
+            "company": company,
+            "is_foundational": 1 if endpoint == "/gettoken" else 0,
+            "status": status,
+            "attempted_at": frappe.utils.now_datetime(),
+            "completed_at": frappe.utils.now_datetime(),
+            "correlation_id": correlation_id,
+            "sub_correlation_id": correlation_id,
+            "endpoint": endpoint,
+            "http_method": (request.method or "POST"),
+            "request_url": str(request.url or endpoint)[:1000],
+            "request_headers": json.dumps(redacted_headers, indent=2)[:32_000],
+            "request_payload": req_body_capped,
+            "request_payload_hash": req_hash,
+            "response_status_code": http_status,
+            "response_headers": "",
+            "response_payload": resp_body_capped,
+            "response_payload_hash": resp_hash,
+            "latency_ms": latency_ms,
+            "attempt_number": 1,
+            "error_class": error_class,
+            "error_message": (error_message or "")[:8000] if error_message else None,
+        })
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception:
+        try:
+            frappe.log_error(
+                title=f"gh#147: inbound API Call log write failed for {endpoint}",
+                message=frappe.get_traceback(),
+            )
+        except Exception:
+            pass
 
 
 def normalise_gsp_auth_header() -> None:
