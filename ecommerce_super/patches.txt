@@ -128,3 +128,7 @@ ecommerce_super.patches.v0_1.add_b2b_dispatch_status_si_fields
 # entry + the patch file from main after the one-shot mmpl16 deploy.**
 ecommerce_super.patches.v0_1.drop_legacy_ee_si_columns_for_mmpl16
 ecommerce_super.patches.v0_1.add_b2c_sales_invoice_fields
+# gh#144 — heal Customer Map rows whose ee_c_id is still a pre-fix
+# "flagged-<docname>" placeholder even though push has since populated
+# ee_customer_id with the real EE c_id. Idempotent, no-op on clean sites.
+ecommerce_super.patches.v0_1.backfill_customer_map_ee_c_id
