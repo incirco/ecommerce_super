@@ -169,9 +169,13 @@ def _write_gsp_flat_response(payload: dict[str, Any], http_status: int) -> None:
     then returns None to prevent the wrap.
     """
     frappe.local.response["http_status_code"] = http_status
+    # gh#142: pop Frappe's default `message` wrapper BEFORE writing the
+    # payload keys — the original order dropped OUR intentional `message`
+    # field on error responses (bare `{"status":422}` with no reason,
+    # observed on SO-2610382 einvoice attempt 2026-07-09).
+    frappe.local.response.pop("message", None)
     for key, value in payload.items():
         frappe.local.response[key] = value
-    frappe.local.response.pop("message", None)
 
 
 def _gsp_endpoint(fn):
@@ -250,6 +254,76 @@ def _get_gsp_auth_header() -> str | None:
     except Exception:
         pass
     return frappe.get_request_header("Authorization")
+
+
+def _log_inbound_gsp_failure(
+    *,
+    endpoint: str,
+    ee_row: dict[str, Any] | None,
+    ee_account: str | None,
+    reason: str,
+    http_status: int,
+) -> None:
+    """gh#142: on any inbound GSP-callback failure, emit both an Error
+    Log (traceback + payload snapshot) AND an EasyEcom Sync Record
+    (direction=Inbound API, status=Failed) so the failure is auditable
+    when EE only sees a status code.
+
+    Never raises — best-effort observability layer, must not shadow the
+    actual failure being reported to EE.
+    """
+    ee_row = ee_row or {}
+    ref = str(ee_row.get("reference_code") or ee_row.get("order_id") or "") or None
+    inv_id = str(ee_row.get("invoice_id") or "") or None
+    # 1. Error Log — always.
+    try:
+        frappe.log_error(
+            title=(
+                f"§11.5.1 {endpoint} failed "
+                f"(HTTP {http_status}) ref={ref or '?'} inv={inv_id or '?'}"
+            ),
+            message=(
+                f"reason: {reason}\n"
+                f"account: {ee_account or '?'}\n"
+                f"ee_row: {json.dumps(ee_row, default=str, indent=2)[:8000]}\n"
+                f"traceback:\n{frappe.get_traceback()}"
+            ),
+        )
+    except Exception:
+        pass
+    # 2. Inbound Sync Record — best-effort. Falls back to a bare log if
+    # the Sync Record write itself blows up (schema drift, etc.).
+    try:
+        # Resolve Company from Account (SR.company is required). Fall
+        # back to any Company if the Account itself isn't known yet
+        # (top-level body-shape rejection paths).
+        company = None
+        if ee_account:
+            company = frappe.db.get_value(
+                "EasyEcom Account", ee_account, "company"
+            )
+        if not company:
+            company = frappe.db.get_value("Company", {}, "name")
+        sr = frappe.new_doc("EasyEcom Sync Record")
+        sr.update({
+            "company": company or "",
+            "entity_type": "Sales Invoice",
+            "erpnext_name": ref or "",
+            "direction": "Inbound API",
+            "status": "Failed",
+            "easyecom_account": ee_account or "",
+            "last_error": f"[{endpoint} HTTP {http_status}] {reason}",
+        })
+        sr.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception:
+        try:
+            frappe.log_error(
+                title=f"§11.5.1 {endpoint}: failed to write inbound Sync Record",
+                message=frappe.get_traceback(),
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -348,15 +422,31 @@ def einvoice_update() -> dict[str, Any]:
         frappe.response.http_status_code = 422
         return {"status": 422, "message": f"Invalid JSON body: {exc}"}
 
-    orders = body.get("orders") or []
-    if not isinstance(orders, list) or not orders:
+    # gh#142: EE's live /einvoice/update call sends `orders` as a
+    # SINGLE OBJECT (not an array). Contract doc §3 shows an array; live
+    # sample from Garv 2026-07-10 sends an object with the same fields
+    # flat. Same defensive both-shapes pattern as /ewaybill/update.
+    orders = body.get("orders")
+    if isinstance(orders, list):
+        if not orders:
+            frappe.response.http_status_code = 422
+            return {
+                "status": 422,
+                "message": "Body 'orders' array is empty.",
+            }
+        ee_row = orders[0]
+    elif isinstance(orders, dict):
+        ee_row = orders
+    else:
         frappe.response.http_status_code = 422
         return {
             "status": 422,
-            "message": "Body must have orders[] array with at least one row.",
+            "message": (
+                "Body must have 'orders' as a single object or a "
+                f"non-empty array; got {type(orders).__name__}."
+            ),
         }
 
-    ee_row = orders[0]
     return _einvoice_handler(ee_row=ee_row, ee_account=ee_account)
 
 
@@ -438,36 +528,61 @@ def _einvoice_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
         GSPHandlerError,
         mint_irn_for_si,
     )
+    ref = str(ee_row.get("reference_code") or "") or None
 
     try:
         si_name = find_or_create_si_for_gsp(
             ee_row=ee_row, ee_account=ee_account,
         )
     except GSPHandlerError as exc:
+        reason = str(exc)
+        _log_inbound_gsp_failure(
+            endpoint="/einvoice/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=422,
+        )
         frappe.response.http_status_code = 422
-        return {"status": 422, "message": str(exc)}
+        return {"status": 422, "message": reason, "reference_code": ref}
+    except Exception as exc:
+        # gh#142: Frappe validation throws (India Compliance,
+        # place-of-supply, missing template) come through here — surface
+        # the real message instead of swallowing behind a bare 422.
+        reason = f"{type(exc).__name__}: {exc}"
+        _log_inbound_gsp_failure(
+            endpoint="/einvoice/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=422,
+        )
+        frappe.response.http_status_code = 422
+        return {"status": 422, "message": reason, "reference_code": ref}
 
     try:
         irn_data = mint_irn_for_si(si_name, ee_account=ee_account)
     except GSPHandlerError as exc:
+        reason = str(exc)
+        _log_inbound_gsp_failure(
+            endpoint="/einvoice/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=422,
+        )
         frappe.response.http_status_code = 422
         return {
             "status": 422,
-            "message": str(exc),
+            "message": reason,
+            "reference_code": ref,
             "data": {"invoice_details": {
                 "invoice_id": str(ee_row.get("invoice_id") or ""),
                 "erp_invoice_num": si_name,
             }},
         }
     except Exception as exc:
-        frappe.log_error(
-            title=f"§11.5.1 /einvoice mint failed for {si_name}",
-            message=f"{type(exc).__name__}: {exc}",
+        reason = f"{type(exc).__name__}: {exc}"
+        _log_inbound_gsp_failure(
+            endpoint="/einvoice/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=502,
         )
         frappe.response.http_status_code = 502
         return {
             "status": 502,
-            "message": f"NIC IRP mint failed: {type(exc).__name__}",
+            "message": f"NIC IRP mint failed: {reason}",
+            "reference_code": ref,
         }
 
     return {
@@ -486,15 +601,29 @@ def _ewaybill_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
     )
 
     ee_invoice_id = str(ee_row.get("invoice_id") or "").strip()
+    ref = str(ee_row.get("reference_code") or "") or None
     if not ee_invoice_id:
+        _log_inbound_gsp_failure(
+            endpoint="/ewaybill/update", ee_row=ee_row,
+            ee_account=ee_account, reason="Body missing invoice_id.",
+            http_status=422,
+        )
         frappe.response.http_status_code = 422
-        return {"status": 422, "message": "Body missing invoice_id."}
+        return {
+            "status": 422, "message": "Body missing invoice_id.",
+            "reference_code": ref,
+        }
 
     try:
         si_name = find_si_by_invoice_id(ee_invoice_id)
     except GSPHandlerError as exc:
+        reason = str(exc)
+        _log_inbound_gsp_failure(
+            endpoint="/ewaybill/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=409,
+        )
         frappe.response.http_status_code = 409
-        return {"status": 409, "message": str(exc)}
+        return {"status": 409, "message": reason, "reference_code": ref}
 
     transport_values = {
         "transporter_gst_no": ee_row.get("transporter_gst"),
@@ -512,17 +641,24 @@ def _ewaybill_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
             ee_account=ee_account,
         )
     except GSPHandlerError as exc:
+        reason = str(exc)
+        _log_inbound_gsp_failure(
+            endpoint="/ewaybill/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=422,
+        )
         frappe.response.http_status_code = 422
-        return {"status": 422, "message": str(exc)}
+        return {"status": 422, "message": reason, "reference_code": ref}
     except Exception as exc:
-        frappe.log_error(
-            title=f"§11.5.1 /ewaybill mint failed for {si_name}",
-            message=f"{type(exc).__name__}: {exc}",
+        reason = f"{type(exc).__name__}: {exc}"
+        _log_inbound_gsp_failure(
+            endpoint="/ewaybill/update", ee_row=ee_row,
+            ee_account=ee_account, reason=reason, http_status=502,
         )
         frappe.response.http_status_code = 502
         return {
             "status": 502,
-            "message": f"NIC EWB mint failed: {type(exc).__name__}",
+            "message": f"NIC EWB mint failed: {reason}",
+            "reference_code": ref,
         }
 
     return {
