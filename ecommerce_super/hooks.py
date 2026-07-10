@@ -363,7 +363,11 @@ doc_events: dict[str, dict[str, str]] = {
     #     Non-EE-mapped set_warehouse → silently inert (pure ERPNext).
     "Sales Order": {
         "validate": "ecommerce_super.easyecom.flows.b2b_sales.push.validate_pre_push",
-        "on_submit": "ecommerce_super.easyecom.flows.b2b_sales.push.on_submit_push",
+        "on_submit": [
+            "ecommerce_super.easyecom.flows.b2b_sales.push.on_submit_push",
+            # gh#141 — must run AFTER push. Non-throwing.
+            "ecommerce_super.easyecom.flows.setup_observability.detect_so_intent_gap",
+        ],
         # §11 Phase 1 (this packet): synchronous block-on-refusal
         # cancel propagation. before_cancel runs BEFORE Frappe flips
         # docstatus to 2 so a throw here leaves the SO submitted —
@@ -372,6 +376,12 @@ doc_events: dict[str, dict[str, str]] = {
         # Scope-guard inside the wrapper ensures non-EE SOs are
         # untouched (vanilla cancel still works).
         "before_cancel": "ecommerce_super.easyecom.flows.b2b_sales.cancel.on_before_cancel_dispatch",
+    },
+    # gh#141 — Warehouse half-mapping detector. Non-throwing warning
+    # when ecs_ee_location_label is populated but ecs_ee_location FK
+    # is empty (setup gap that silently breaks §11 Gate 0).
+    "Warehouse": {
+        "validate": "ecommerce_super.easyecom.flows.setup_observability.check_warehouse_half_mapping",
     },
     # §9 Stage 2: PO push hooks.
     #   - validate: mixed-warehouse refusal + warehouse-flip refusal on
