@@ -293,24 +293,54 @@ def _log_inbound_gsp_failure(
         pass
     # 2. Inbound Sync Record — best-effort. Falls back to a bare log if
     # the Sync Record write itself blows up (schema drift, etc.).
+    #
+    # gh#143 landed with missing mandatory fields (verified live 2026-07-10:
+    # 5 /einvoice/update failures logged to Error Log but zero SR rows
+    # written — silent mandatory-field rejection). Sync Record's schema
+    # requires: company, entity_doctype, entity_name (Dynamic Link on
+    # entity_doctype), entity_type, direction, status, correlation_id,
+    # idempotency_key, attempts. The entity_name field is a Dynamic Link
+    # so Frappe validates the (entity_doctype, entity_name) pair references
+    # a REAL record — we can't stuff arbitrary strings.
+    #
+    # Strategy: use Sales Order + reference_code as the entity when the SO
+    # exists on our side (the common case — EE only calls /einvoice/update
+    # after we successfully pushed the SO). If the SO can't be resolved
+    # (rare: EE is calling for an unknown reference), skip the SR write
+    # cleanly — Error Log above already carries the full detail.
     try:
-        # Resolve Company from Account (SR.company is required). Fall
-        # back to any Company if the Account itself isn't known yet
-        # (top-level body-shape rejection paths).
+        entity_doctype = "Sales Order"
+        entity_name = ref if ref and frappe.db.exists(entity_doctype, ref) else None
+        if not entity_name:
+            # Fall back gracefully — no SR row, Error Log has it.
+            return
         company = None
         if ee_account:
             company = frappe.db.get_value(
                 "EasyEcom Account", ee_account, "company"
             )
         if not company:
+            company = frappe.db.get_value(
+                "Sales Order", entity_name, "company"
+            )
+        if not company:
             company = frappe.db.get_value("Company", {}, "name")
+        # Idempotency key: identify THIS particular inbound attempt so
+        # the SR row for a repeat re-fire of the SAME payload is an
+        # upsert (same key) rather than a new row every time.
+        inv_id_str = str(ee_row.get("invoice_id") or "") or "no-invoice-id"
+        idem = f"gsp{endpoint}:{inv_id_str}"
         sr = frappe.new_doc("EasyEcom Sync Record")
         sr.update({
             "company": company or "",
-            "entity_type": "Sales Invoice",
-            "erpnext_name": ref or "",
+            "entity_type": "Sales Order",
+            "entity_doctype": entity_doctype,
+            "entity_name": entity_name,
             "direction": "Inbound API",
             "status": "Failed",
+            "correlation_id": frappe.generate_hash(length=32),
+            "idempotency_key": idem,
+            "attempts": 1,
             "easyecom_account": ee_account or "",
             "last_error": f"[{endpoint} HTTP {http_status}] {reason}",
         })
