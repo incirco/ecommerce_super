@@ -136,3 +136,6 @@ ecommerce_super.patches.v0_1.backfill_customer_map_ee_c_id
 # to tag addresses with the originating EE c_id when a new c_id is
 # wired onto an existing canonical Customer.
 ecommerce_super.patches.v0_1.add_address_ee_c_id_field
+# gh#147 — EasyEcom API Call gained a `direction` field (Outbound/Inbound).
+# Backfill legacy rows to Outbound so the reqd constraint holds.
+ecommerce_super.patches.v0_1.backfill_api_call_direction

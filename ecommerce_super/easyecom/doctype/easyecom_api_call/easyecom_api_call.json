@@ -6,6 +6,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "direction",
   "easyecom_account",
   "company",
   "is_foundational",
@@ -39,6 +40,18 @@
   "schema_snapshot"
  ],
  "fields": [
+  {
+   "fieldname": "direction",
+   "fieldtype": "Select",
+   "label": "Direction",
+   "options": "Outbound\nInbound",
+   "default": "Outbound",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1,
+   "description": "gh#147: Outbound = us calling EE. Inbound = EE calling us (§11.5.1 Custom GSP — /gettoken, /einvoice/update, /ewaybill/update). Legacy rows default to Outbound via backfill patch."
+  },
   {
    "fieldname": "easyecom_account",
    "fieldtype": "Link",
