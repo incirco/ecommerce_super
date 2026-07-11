@@ -19,6 +19,7 @@ frappe.ui.form.on("Sales Order", {
         if (frm.doc.docstatus !== 1) return;
         maybe_add_cancel_button(frm);
         maybe_add_trace_button(frm);
+        maybe_add_repush_button(frm);
     },
     set_warehouse(frm) {
         refresh_b2b_branch_chip(frm);
@@ -230,4 +231,68 @@ function trace_b2b(frm) {
             });
         },
     });
+}
+
+
+// Re-fire the §11 push when the automatic on_submit path failed to
+// enqueue (orphaned Queue Job, worker restart during hook). Only
+// visible when the SO is submitted but has no B2B Order Map — the
+// exact recovery case. Idempotent: server-side re-check prevents
+// double-firing.
+function maybe_add_repush_button(frm) {
+    if (frm.doc.ecs_b2b_order_map) return;  // Already mapped
+    frm.add_custom_button(
+        __("Re-fire EasyEcom Push"),
+        () => confirm_and_repush(frm),
+        __("EasyEcom")
+    );
+}
+
+
+function confirm_and_repush(frm) {
+    frappe.confirm(
+        __(
+            "Re-fire the §11 B2B push for this Sales Order? Use this " +
+                "when the automatic on-submit push failed to enqueue " +
+                "(no EasyEcom B2B Order Map was created)."
+        ),
+        () => {
+            frappe.call({
+                method:
+                    "ecommerce_super.easyecom.api.manual_repush.repush_so",
+                args: { so_name: frm.doc.name },
+                freeze: true,
+                freeze_message: __("Enqueueing §11 push…"),
+                callback(r) {
+                    const m = r && r.message;
+                    if (!m) return;
+                    if (m.ok && !m.already_mapped) {
+                        frappe.show_alert({
+                            message: __(
+                                "Push enqueued (Queue Job: {0}).",
+                                [m.queue_job || "(pending)"]
+                            ),
+                            indicator: "green",
+                        });
+                        setTimeout(() => frm.reload_doc(), 1500);
+                    } else if (m.ok && m.already_mapped) {
+                        frappe.show_alert({
+                            message: __(
+                                "Already mapped (B2B Order Map: {0}).",
+                                [m.b2b_order_map]
+                            ),
+                            indicator: "blue",
+                        });
+                        frm.reload_doc();
+                    } else {
+                        frappe.msgprint({
+                            title: __("Re-push blocked"),
+                            message: m.message || __("Unknown error"),
+                            indicator: "red",
+                        });
+                    }
+                },
+            });
+        }
+    );
 }
