@@ -134,8 +134,25 @@ def mirror_si_from_ee_response(
     si.company = company
     si.currency = (ee_row.get("invoice_currency_code") or "INR").strip()
     si.posting_date = _parse_posting_date(ee_row)
+    # gh#161: also pin transaction_date to posting_date. Any Customer
+    # default payment_terms_template that resolves due_date FROM
+    # transaction_date would otherwise land due_date before posting_date
+    # (transaction_date defaults earlier) → validate throws "Due Date
+    # cannot be before Posting Date". Fires every polling cycle on
+    # ECS-B2B-SO-2610386.
+    si.transaction_date = si.posting_date
     si.due_date = si.posting_date  # B2B can have terms, but default to posting
+    # gh#161: also clear any payment_terms_template that would reset
+    # payment_schedule to a date before posting_date. Mirror is
+    # invoice-first from an already-invoiced EE order; no terms apply.
+    si.payment_terms_template = ""
     si.set_warehouse = _resolve_warehouse(ee_row)
+    # gh#160: §11.5.1 Mode 1 is invoice-first — there is no separately-
+    # tracked Delivery Note yet. Setting update_stock=1 tells ERPNext
+    # to do the stock movement inline via Stock Ledger entries so
+    # India Compliance's e-invoicing validator doesn't refuse with
+    # "Delivery Note is mandatory for Item X" on stock items.
+    si.update_stock = 1
 
     # Back-references
     si.ecs_easyecom_invoice_id = ee_invoice_id
