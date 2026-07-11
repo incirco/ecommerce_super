@@ -321,9 +321,13 @@ def _log_inbound_gsp_call(
         if not account_name:
             # No account on this bench — skip (nothing to link).
             return
-        company = frappe.db.get_value(
-            "EasyEcom Account", account_name, "company"
-        )
+        # gh#147 hotfix (2026-07-11 mmpl16): EasyEcom Account has NO
+        # `company` field — company lives on EasyEcom Location, not the
+        # Account. Trying to read it crashes with "Unknown column
+        # 'company'" and kills the entire inbound-log write silently.
+        # `EasyEcom API Call.company` is reqd=None, so leave it blank
+        # when we can't resolve it cleanly.
+        company = None
         # Correlation ID: prefer inbound header if EE sent one (gh#153).
         # Else, generate.
         correlation_id = (
