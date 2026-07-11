@@ -1809,10 +1809,36 @@ def _resolve_update_write_id(
     return None
 
 
+# gh#158 (Garv 2026-07-11 mmpl16): EasyEcom's UpdateMasterProduct
+# treats certain fields as mandatory on EVERY call — a sparse payload
+# that omits them because they're unchanged from the baseline gets
+# rejected with `400 "TaxRuleName is a mandatory parameter"` (or the
+# equivalent for whichever field went missing).
+#
+# The baseline was written from the successful Create, so unchanged
+# tax fields get dropped on every subsequent Update. Force-include
+# them regardless of the diff.
+#
+# Members are documented as hard-mandatory in the Create/Update payload
+# builder:
+#   - TaxRuleName     (line 1390 comment: mandatory-parameter live find 2026-06-16)
+#   - TaxRate         (line 1371: hard mandatory, no defensible default)
+#   - ProductTaxCode  (line 1354: HSN — hard mandatory)
+#
+# productId is the key, always sent.
+_ALWAYS_SEND_UPDATE_FIELDS: frozenset[str] = frozenset({
+    "productId",
+    "TaxRuleName",
+    "TaxRate",
+    "ProductTaxCode",
+})
+
+
 def _build_sparse_update_payload(
     *, full_payload: dict, item_code: str
 ) -> dict:
-    """Compute the partial-update payload: productId + changed fields.
+    """Compute the partial-update payload: productId + changed fields
+    + EE's always-mandatory fields (gh#158).
 
     Reads the prior push snapshot from the Item Map; if missing
     (first push of this SKU as Update, e.g. pulled item being pushed
@@ -1848,9 +1874,15 @@ def _build_sparse_update_payload(
     if not isinstance(prior, dict):
         return dict(full_payload)
 
-    delta = {"productId": full_payload.get("productId")}
+    # Seed with EE's always-mandatory fields — they must ride on every
+    # UpdateMasterProduct call regardless of diff.
+    delta: dict = {
+        k: full_payload[k]
+        for k in _ALWAYS_SEND_UPDATE_FIELDS
+        if k in full_payload
+    }
     for k, v in full_payload.items():
-        if k == "productId":
+        if k in _ALWAYS_SEND_UPDATE_FIELDS:
             continue
         # Treat None and missing as "no value". Send field only when
         # the canonical comparison differs.
