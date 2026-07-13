@@ -188,12 +188,35 @@ def _reenqueue(qj, *, delay_seconds: int) -> None:
 
 
 def reclaim_orphaned_jobs() -> int:
-    """Scheduler hook (§6.3.9). Find Queue Job rows in state=Running that
-    haven't been touched in >10 minutes AND have no live RQ job, and
-    transition them back to Retrying for re-enqueue.
+    """Scheduler hook (§6.3.9). Reclaim Queue Job rows that got stuck.
 
-    Returns the count of jobs reclaimed (for observability/logging)."""
+    Two orphan patterns handled:
+
+    1. state=Running, last_attempted_at > 10 min ago, no live RQ job.
+       Worker died mid-job. Original §6.3.9 scope.
+
+    2. state=Queued, creation > 10 min ago, no live RQ job. (gh#176,
+       added 2026-07-13.) `frappe.enqueue` failed silently after the
+       DocType insert, OR a duplicate enqueue landed and the sibling
+       job won — either way, this row sits at Queued forever unless we
+       reclaim it. Handling:
+         - If underlying work is already done (idempotency check —
+           map/target row exists), transition_to_success with a
+           reconciliation note. No re-enqueue needed.
+         - Otherwise, re-enqueue.
+
+    Returns the count of jobs reclaimed."""
     cutoff = frappe.utils.now_datetime() - timedelta(minutes=10)
+    reclaimed = 0
+
+    reclaimed += _reclaim_running_orphans(cutoff)
+    reclaimed += _reclaim_queued_orphans(cutoff)  # gh#176
+
+    return reclaimed
+
+
+def _reclaim_running_orphans(cutoff) -> int:
+    """Original reclaim path — state=Running, worker died mid-job."""
     candidates = frappe.db.get_all(
         "EasyEcom Queue Job",
         filters={
@@ -238,6 +261,126 @@ def reclaim_orphaned_jobs() -> int:
         reclaimed += 1
 
     return reclaimed
+
+
+def _reclaim_queued_orphans(cutoff) -> int:
+    """gh#176 — pick up state=Queued rows the RQ side never fired for.
+
+    Two outcomes:
+      - Underlying work already done (target row exists via idempotency)
+        → transition_to_success with a reconciliation note, no re-enqueue
+      - Not done → re-enqueue via the standard path
+    """
+    candidates = frappe.db.get_all(
+        "EasyEcom Queue Job",
+        filters={
+            "state": "Queued",
+            "creation": ["<=", cutoff],
+        },
+        fields=[
+            "name", "rq_job_id", "company", "queue_tier", "job_type",
+            "attempts", "target_doctype", "target_name",
+        ],
+    )
+    if not candidates:
+        return 0
+
+    reclaimed = 0
+    for row in candidates:
+        try:
+            from rq import Worker  # noqa: F401
+            live = bool(row.rq_job_id) and _rq_job_alive(row.rq_job_id)
+        except Exception:
+            live = False
+        if live:
+            continue
+
+        qj = frappe.get_doc("EasyEcom Queue Job", row.name)
+        work_already_done = _queued_work_already_completed(row)
+        if work_already_done:
+            # Reconciliation success — the actual work landed via a
+            # sibling job / earlier attempt. Nothing to do; just flip
+            # state so the row stops sitting in the operator's worklist.
+            try:
+                qj.transition_to_success()
+                _annotate(qj, (
+                    "Reconciled by gh#176 reclaim: target row already "
+                    "exists (idempotency); this Queue Job was a "
+                    "duplicate / orphaned enqueue."
+                ))
+            except Exception as exc:  # noqa: BLE001
+                frappe.log_error(
+                    title=f"gh#176 reconcile-success failed for {qj.name}",
+                    message=f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            reclaimed += 1
+            continue
+
+        # Not done — re-enqueue. No semaphore release: Queued state means
+        # execute_job never ran, so no slot was ever taken.
+        _reenqueue(qj, delay_seconds=5)
+        _annotate(qj, (
+            "Re-enqueued by gh#176 reclaim: state was Queued > 10 min "
+            "with no live RQ task."
+        ))
+        reclaimed += 1
+
+    return reclaimed
+
+
+def _queued_work_already_completed(row) -> bool:
+    """Best-effort idempotency probe — did the underlying work land
+    despite this Queue Job never running? Returns True if we can prove
+    the target has an EasyEcom-side artifact that indicates completion.
+
+    Heuristics per job_type:
+      - SO Push  → EasyEcom B2B Order Map exists for the SO
+      - PO Push  → EasyEcom PO Map exists for the PO (if that DocType exists)
+      - Item Push → EasyEcom Item Map has ee_product_id set for the Item
+      - Customer Push → EasyEcom Customer Map has ee_customer_id set
+      - Any other job_type → False (conservative — force re-enqueue)
+
+    False on any lookup error (conservative — force re-enqueue).
+    """
+    if not row.target_name:
+        return False
+    try:
+        if row.job_type == "SO Push":
+            return bool(frappe.db.get_value(
+                "EasyEcom B2B Order Map",
+                {"sales_order": row.target_name},
+                "name",
+            ))
+        if row.job_type == "Item Push":
+            return bool(frappe.db.get_value(
+                "EasyEcom Item Map",
+                {"erpnext_doctype": "Item", "erpnext_name": row.target_name},
+                "ee_product_id",
+            ))
+        if row.job_type == "Customer Push":
+            return bool(frappe.db.get_value(
+                "EasyEcom Customer Map",
+                {"erpnext_doctype": "Customer", "erpnext_name": row.target_name},
+                "ee_customer_id",
+            ))
+    except Exception:
+        return False
+    return False
+
+
+def _annotate(qj, note: str) -> None:
+    """Append a note to the Queue Job's error_message for audit."""
+    try:
+        existing = qj.get("last_error") or ""
+        sep = "\n---\n" if existing else ""
+        qj.db_set(
+            "last_error",
+            (existing + sep + note)[:4000],
+            update_modified=False,
+        )
+    except Exception:
+        pass
 
 
 def _rq_job_alive(rq_job_id: str) -> bool:
