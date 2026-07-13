@@ -312,9 +312,16 @@ def _reassert_si_dates_for_submit(si: Any) -> None:
     if si.get("set_posting_time") != 1:
         si.set_posting_time = 1
         changed = True
-    if si.transaction_date != si.posting_date:
-        si.transaction_date = si.posting_date
-        changed = True
+    # Sales Invoice doesn't natively have transaction_date; it might be
+    # a Custom Field on some sites. Use getattr so a missing attribute
+    # doesn't throw — sites without it just skip this heal step.
+    current_td = getattr(si, "transaction_date", None)
+    if current_td != si.posting_date and hasattr(si, "transaction_date"):
+        try:
+            si.transaction_date = si.posting_date
+            changed = True
+        except AttributeError:
+            pass  # field doesn't exist on this site — safe to skip
     if si.due_date and getdate(si.due_date) < getdate(si.posting_date):
         si.due_date = si.posting_date
         changed = True

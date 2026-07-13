@@ -439,24 +439,35 @@ def _append_taxes_from_ee_row(si: Any, *, ee_row: dict, company: str) -> None:
 def _lookup_output_gst_accounts(company: str) -> dict | None:
     """Return the {igst_account, cgst_account, sgst_account,
     utgst_account} row from GST Settings for this company's Output.
-    None on any lookup failure."""
+
+    gh#181 part 2 followup (2026-07-13): the previous version used
+    `frappe.db.get_value("GST Account", {parent: ..., company: ..., ...})`
+    which returned None on mmpl16 even though the row existed and matched
+    all filters (verified by direct REST API query). Frappe's ORM query
+    on a child DocType via dict filters is unreliable. Rewritten to
+    load the parent GST Settings Single doc and iterate its child
+    table — same result, no ORM quirk.
+    """
     try:
-        row_name = frappe.db.get_value(
-            "GST Account",
-            {"parent": "GST Settings", "company": company, "account_type": "Output"},
-            "name",
+        gst_settings = frappe.get_cached_doc("GST Settings")
+    except Exception as exc:
+        frappe.log_error(
+            title=f"gh#181: GST Settings load failed for {company!r}",
+            message=f"{type(exc).__name__}: {exc}",
         )
-        if not row_name:
-            return None
-        row = frappe.db.get_value(
-            "GST Account",
-            row_name,
-            ["igst_account", "cgst_account", "sgst_account", "utgst_account"],
-            as_dict=True,
-        )
-        return dict(row) if row else None
-    except Exception:
         return None
+    for row in gst_settings.get("gst_accounts") or []:
+        if (
+            getattr(row, "company", None) == company
+            and getattr(row, "account_type", None) == "Output"
+        ):
+            return {
+                "igst_account": getattr(row, "igst_account", None),
+                "cgst_account": getattr(row, "cgst_account", None),
+                "sgst_account": getattr(row, "sgst_account", None),
+                "utgst_account": getattr(row, "utgst_account", None),
+            }
+    return None
 
 
 def _resolve_warehouse(ee_row: dict) -> str | None:
