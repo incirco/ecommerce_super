@@ -180,6 +180,15 @@ def mirror_si_from_ee_response(
     for line in line_items:
         si.append("items", line)
 
+    # gh#181 part 2 — populate SI.taxes from EE's per-item tax breakdown.
+    # Pre-fix the taxes child table was left empty because we didn't set
+    # a taxes_and_charges template — ERPNext then reported IGST 0% on
+    # the SI even though the item had item_tax_template=GST5. Result:
+    # SI grand_total = net_total, missing the actual tax amount.
+    _append_taxes_from_ee_row(
+        si, ee_row=ee_row, company=company
+    )
+
     si.flags.ignore_permissions = True
     si.insert()
 
@@ -350,6 +359,104 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
         )
 
     return out
+
+
+def _append_taxes_from_ee_row(si: Any, *, ee_row: dict, company: str) -> None:
+    """gh#181 part 2 — populate SI.taxes from EE's per-item tax breakdown.
+
+    Sums EE's per-item `igst` / `cgst` / `sgst` / `utgst` across all
+    order_items, looks up the company's Output GST account heads via
+    India Compliance's GST Settings, and appends one Sales Taxes and
+    Charges row per non-zero tax bucket. Uses charge_type=\"Actual\"
+    with the exact tax_amount from EE — no re-computation, no
+    rounding drift.
+
+    Skips silently when:
+      - No GST Settings gst_accounts row exists for this company + Output
+      - All tax buckets sum to zero
+    """
+    order_items = ee_row.get("order_items") or []
+    if not isinstance(order_items, list) or not order_items:
+        return
+
+    taxable_total = 0.0
+    tax_totals: dict[str, float] = {"igst": 0.0, "cgst": 0.0, "sgst": 0.0, "utgst": 0.0}
+    for it in order_items:
+        try:
+            taxable_total += float(it.get("taxable_value") or 0)
+            for k in tax_totals:
+                tax_totals[k] += float(it.get(k) or 0)
+        except (TypeError, ValueError):
+            continue
+
+    if all(v == 0 for v in tax_totals.values()):
+        return  # zero-tax order — leave taxes empty
+
+    gst_accounts = _lookup_output_gst_accounts(company)
+    if not gst_accounts:
+        # No account map on this company — surface via Comment on the
+        # SI so FDE knows why taxes are missing; don't break the mirror.
+        frappe.log_error(
+            title=(
+                f"gh#181: no Output GST accounts on GST Settings for "
+                f"{company!r}; SI {si.get('name') or '(unsaved)'} left "
+                "without tax rows."
+            ),
+            message=f"tax_totals: {tax_totals}",
+        )
+        return
+
+    account_map = {
+        "igst": gst_accounts.get("igst_account"),
+        "cgst": gst_accounts.get("cgst_account"),
+        "sgst": gst_accounts.get("sgst_account"),
+        "utgst": gst_accounts.get("utgst_account"),
+    }
+
+    for bucket, amount in tax_totals.items():
+        if amount <= 0:
+            continue
+        account_head = account_map.get(bucket)
+        if not account_head:
+            continue
+        # Derive display rate for the description — informational only,
+        # actual tax_amount is what's used for computation.
+        rate_pct = (
+            round((amount / taxable_total) * 100, 2)
+            if taxable_total > 0
+            else 0
+        )
+        si.append("taxes", {
+            "charge_type": "Actual",
+            "account_head": account_head,
+            "description": f"{bucket.upper()} @ {rate_pct}% (mirrored from EE)",
+            "tax_amount": round(amount, 2),
+            "rate": 0,
+            "included_in_print_rate": 0,
+        })
+
+
+def _lookup_output_gst_accounts(company: str) -> dict | None:
+    """Return the {igst_account, cgst_account, sgst_account,
+    utgst_account} row from GST Settings for this company's Output.
+    None on any lookup failure."""
+    try:
+        row_name = frappe.db.get_value(
+            "GST Account",
+            {"parent": "GST Settings", "company": company, "account_type": "Output"},
+            "name",
+        )
+        if not row_name:
+            return None
+        row = frappe.db.get_value(
+            "GST Account",
+            row_name,
+            ["igst_account", "cgst_account", "sgst_account", "utgst_account"],
+            as_dict=True,
+        )
+        return dict(row) if row else None
+    except Exception:
+        return None
 
 
 def _resolve_warehouse(ee_row: dict) -> str | None:
