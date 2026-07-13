@@ -134,17 +134,23 @@ def mirror_si_from_ee_response(
     si.company = company
     si.currency = (ee_row.get("invoice_currency_code") or "INR").strip()
     si.posting_date = _parse_posting_date(ee_row)
-    # gh#161: also pin transaction_date to posting_date. Any Customer
-    # default payment_terms_template that resolves due_date FROM
-    # transaction_date would otherwise land due_date before posting_date
-    # (transaction_date defaults earlier) → validate throws "Due Date
-    # cannot be before Posting Date". Fires every polling cycle on
-    # ECS-B2B-SO-2610386.
+    # gh#161 v2 (2026-07-13, SI-2603815 root cause): pin
+    # set_posting_time=1 so ERPNext's set_posting_time_and_date()
+    # doesn't reset posting_date to today on every validate call.
+    # Without this flag, an SI created on day N and re-validated (via
+    # submit / re-save) on day N+M would have posting_date jump forward
+    # to day N+M while due_date stays at day N → validate refuses with
+    # "Due Date cannot be before Posting Date". Observed on SI-2603815
+    # created 2026-07-11 by initial mirror, submit re-attempted 2026-07-13.
+    si.set_posting_time = 1
+    # Also pin transaction_date to posting_date. Any Customer default
+    # payment_terms_template that resolves due_date FROM transaction_date
+    # would otherwise land due_date before posting_date.
     si.transaction_date = si.posting_date
     si.due_date = si.posting_date  # B2B can have terms, but default to posting
-    # gh#161: also clear any payment_terms_template that would reset
-    # payment_schedule to a date before posting_date. Mirror is
-    # invoice-first from an already-invoiced EE order; no terms apply.
+    # Clear any payment_terms_template that would reset payment_schedule
+    # to a date before posting_date. Mirror is invoice-first from an
+    # already-invoiced EE order; no terms apply.
     si.payment_terms_template = ""
     si.set_warehouse = _resolve_warehouse(ee_row)
     # gh#160: §11.5.1 Mode 1 is invoice-first — there is no separately-
