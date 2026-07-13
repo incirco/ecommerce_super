@@ -19,6 +19,10 @@ The `[Unreleased]` section holds anything on `main` that hasn't yet been deploye
 
 ## [2026-07-13]
 
+### Added
+
+- **GSP mode chip on EasyEcom Account form** — plain-English readout of the two mint toggles (`gsp_mint_einvoice`, `gsp_mint_ewaybill`) so FDEs see the effective mode at a glance instead of interpreting two checkboxes. Renders as an indicator badge inside the Custom GSP section: "Only ERP invoice" (grey), "ERP invoice + eway" (blue), "ERP invoice + IRN" (blue), or "ERP invoice + IRN + eway" (green, full compliance). Live-updates on toggle change, no save needed. [PR #174], [`37f874f`].
+
 ### Fixed
 
 - **Mirror SI submit fails days after insert** — added `si.set_posting_time = 1` to `invoice_mirror.py`. Without it, ERPNext resets `posting_date` to today on every validate, leaving `due_date` (pinned to original posting_date) earlier → "Due Date cannot be before Posting Date". Also added `_reassert_si_dates_for_submit()` in `gsp_handler.py` to heal pre-fix Draft SIs in-place before submit (uses `db_set` + `reload` so the fix works retroactively on already-created Drafts). Live root cause on SI-2603815 (drafted 2026-07-11, regenerate attempted 2026-07-13). [#161] v2, [PR #172], [`9d7e596`].
@@ -184,6 +188,7 @@ When adding new entries, append the corresponding reference here.
 [PR #167]: https://github.com/incirco/ecommerce_super/pull/167
 [PR #168]: https://github.com/incirco/ecommerce_super/pull/168
 [PR #172]: https://github.com/incirco/ecommerce_super/pull/172
+[PR #174]: https://github.com/incirco/ecommerce_super/pull/174
 
 [`1841623`]: https://github.com/incirco/ecommerce_super/commit/1841623
 [`1a1d81a`]: https://github.com/incirco/ecommerce_super/commit/1a1d81a
@@ -200,6 +205,7 @@ When adding new entries, append the corresponding reference here.
 [`8cdca09`]: https://github.com/incirco/ecommerce_super/commit/8cdca09
 [`9707d28`]: https://github.com/incirco/ecommerce_super/commit/9707d28
 [`9d7e596`]: https://github.com/incirco/ecommerce_super/commit/9d7e596
+[`37f874f`]: https://github.com/incirco/ecommerce_super/commit/37f874f
 [`a21b353`]: https://github.com/incirco/ecommerce_super/commit/a21b353
 [`a60b2c6`]: https://github.com/incirco/ecommerce_super/commit/a60b2c6
 [`a6d2eed`]: https://github.com/incirco/ecommerce_super/commit/a6d2eed
