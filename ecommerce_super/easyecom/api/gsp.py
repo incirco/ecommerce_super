@@ -408,8 +408,73 @@ def normalise_gsp_auth_header() -> None:
 import contextlib
 
 
+# gh#166 security hardening — least-privilege user for _elevated_session.
+# Created + role-permissioned by patches/v0_1/create_easyecom_integration_user.py
+# with narrowly-scoped permissions on the exact DocTypes the inbound
+# handler touches (Sales Invoice / DN / Customer Map / etc.). Falls
+# back to Administrator on sites where the patch hasn't run yet.
+_INTEGRATION_USER_EMAIL = "easyecom-integration@internal.local"
+
+
+def _enforce_gsp_rate_limit(
+    *,
+    endpoint: str,
+    invoice_id: str,
+    ee_account: str,
+) -> None:
+    """gh#166 rate limit — per (endpoint, invoice_id) per rolling 60s.
+    Reads the per-account limit from EasyEcom Account.gsp_rate_limit_per_min
+    (default 6 = one call per 10s). Zero / negative / unset = disabled.
+
+    Raises EasyEcomGSPRateLimited on breach. Caller shapes the 429
+    response.
+    """
+    try:
+        limit_raw = frappe.db.get_value(
+            "EasyEcom Account", ee_account, "gsp_rate_limit_per_min"
+        )
+    except Exception:
+        return  # field not migrated yet
+    try:
+        limit = int(limit_raw or 6)
+    except (TypeError, ValueError):
+        limit = 6
+    if limit <= 0:
+        return  # explicit disable
+    key = f"ecs:gsp:ratelimit:{endpoint}:{invoice_id}"
+    try:
+        # Use Frappe's Redis cache — incr is atomic, TTL is per-key.
+        cache = frappe.cache()
+        count = cache.get_value(key)
+        count = (int(count) if count else 0) + 1
+        cache.set_value(key, count, expires_in_sec=60)
+    except Exception:
+        return  # Redis blip — don't block, just skip enforcement
+    if count > limit:
+        raise EasyEcomGSPRateLimited(
+            f"Rate limit exceeded for {endpoint} on invoice_id "
+            f"{invoice_id} — {count} calls in the last 60s "
+            f"(limit {limit})."
+        )
+
+
+class EasyEcomGSPRateLimited(Exception):
+    """Raised by _enforce_gsp_rate_limit; caller returns HTTP 429."""
+
+
+def _resolve_elevation_target() -> str:
+    """Prefer the dedicated integration user; fall back to Administrator
+    only when the user hasn't been created yet (patch not run)."""
+    try:
+        if frappe.db.exists("User", _INTEGRATION_USER_EMAIL):
+            return _INTEGRATION_USER_EMAIL
+    except Exception:
+        pass
+    return "Administrator"
+
+
 @contextlib.contextmanager
-def _elevated_session(user: str = "Administrator"):
+def _elevated_session(user: str | None = None):
     """gh#166 — elevate the Frappe session for the duration of an
     inbound GSP handler.
 
@@ -445,13 +510,16 @@ def _elevated_session(user: str = "Administrator"):
       - No-op when the current session is already non-Guest (leaves
         real Frappe user sessions untouched — useful for smoke tests
         that run this handler as an API-key user).
-      - Prefer a dedicated integration user in follow-up work; the
-        Administrator default here is the minimum-risk stopgap.
+      - Uses the least-privilege 'EasyEcom Integration' user when
+        that user exists on this site (created by the
+        create_easyecom_integration_user patch); falls back to
+        Administrator only when the patch hasn't run yet.
     """
     original_user = frappe.session.user if frappe.session else "Guest"
     should_elevate = original_user == "Guest"
+    target_user = user or _resolve_elevation_target()
     if should_elevate:
-        frappe.set_user(user)
+        frappe.set_user(target_user)
     try:
         yield
     finally:
@@ -702,6 +770,18 @@ def einvoice_update() -> dict[str, Any]:
             ),
         }
 
+    # gh#166 rate limit — cheap check BEFORE we do any SI work.
+    invoice_id_str = str(ee_row.get("invoice_id") or "").strip() or "no-id"
+    try:
+        _enforce_gsp_rate_limit(
+            endpoint="/einvoice/update",
+            invoice_id=invoice_id_str,
+            ee_account=ee_account,
+        )
+    except EasyEcomGSPRateLimited as exc:
+        frappe.response.http_status_code = 429
+        return {"status": 429, "message": str(exc)}
+
     return _einvoice_handler(ee_row=ee_row, ee_account=ee_account)
 
 
@@ -767,6 +847,18 @@ def ewaybill_update() -> dict[str, Any]:
             "status": 422,
             "message": "Body must have orders as dict or non-empty array.",
         }
+
+    # gh#166 rate limit — same treatment as /einvoice/update.
+    invoice_id_str = str(ee_row.get("invoice_id") or "").strip() or "no-id"
+    try:
+        _enforce_gsp_rate_limit(
+            endpoint="/ewaybill/update",
+            invoice_id=invoice_id_str,
+            ee_account=ee_account,
+        )
+    except EasyEcomGSPRateLimited as exc:
+        frappe.response.http_status_code = 429
+        return {"status": 429, "message": str(exc)}
 
     return _ewaybill_handler(ee_row=ee_row, ee_account=ee_account)
 

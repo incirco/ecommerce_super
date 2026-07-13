@@ -37,8 +37,10 @@ from frappe.utils import add_to_date, get_datetime, now_datetime
 from frappe.utils.password import get_decrypted_password
 
 
-# Token TTL per EE's contract.
-TOKEN_TTL_SECONDS: int = 3600  # 1 hour
+# Token TTL. Reduced from 3600s to 900s (15 min) as part of gh#166
+# security hardening — shorter compromise window if a token leaks.
+# EE re-mints via /gettoken transparently on expiry.
+TOKEN_TTL_SECONDS: int = 900  # 15 minutes
 
 # Keep expired tokens this long for audit before cleanup.
 EXPIRED_RETENTION_DAYS: int = 7
@@ -193,6 +195,13 @@ def validate_bearer(auth_header: str | None) -> str:
     if get_datetime(row["expires_at"]) < now_datetime():
         raise EasyEcomGSPAuthError("Bearer token has expired.")
 
+    # gh#166 hardening — IP allowlist check on the token's owning
+    # Account. Empty allowlist = no restriction (backwards-compatible);
+    # populated allowlist = current request IP must match a listed
+    # entry (single IP or IPv4 CIDR). Populate with EE's outbound
+    # range on production accounts.
+    _enforce_ip_allowlist(row["easyecom_account"])
+
     # Bump last_used_at (best-effort — doesn't fail auth if it errors).
     try:
         frappe.db.set_value(
@@ -205,6 +214,62 @@ def validate_bearer(auth_header: str | None) -> str:
         pass
 
     return row["easyecom_account"]
+
+
+def _enforce_ip_allowlist(account_name: str) -> None:
+    """gh#166 — reject Bearer use from an IP not in the account's
+    gsp_ip_allowlist. Silent no-op when the allowlist field is empty
+    or the Custom Field hasn't been migrated yet.
+
+    Accepts single IPs (e.g. `54.203.10.5`) and IPv4 CIDR
+    (e.g. `54.203.0.0/16`), comma-separated. Whitespace-tolerant.
+    """
+    import ipaddress
+    try:
+        allowlist_raw = frappe.db.get_value(
+            "EasyEcom Account", account_name, "gsp_ip_allowlist"
+        )
+    except Exception:
+        # Field not migrated yet — treat as no restriction.
+        return
+    allowlist_raw = (allowlist_raw or "").strip()
+    if not allowlist_raw:
+        return
+
+    request_ip = getattr(frappe.local, "request_ip", None) or ""
+    if not request_ip:
+        raise EasyEcomGSPAuthError(
+            "Bearer usage rejected — no source IP resolvable, but "
+            f"account {account_name!r} has an IP allowlist configured."
+        )
+    try:
+        client_ip = ipaddress.ip_address(request_ip.strip())
+    except ValueError:
+        raise EasyEcomGSPAuthError(
+            f"Bearer usage rejected — source IP {request_ip!r} is not a "
+            "valid IPv4/IPv6 address."
+        )
+
+    for entry in allowlist_raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            if "/" in entry:
+                if client_ip in ipaddress.ip_network(entry, strict=False):
+                    return
+            else:
+                if client_ip == ipaddress.ip_address(entry):
+                    return
+        except ValueError:
+            # Malformed allowlist entry — skip and continue. FDE should
+            # see the audit trail via the failed request Error Log.
+            continue
+
+    raise EasyEcomGSPAuthError(
+        f"Bearer usage rejected — source IP {request_ip!r} is not in the "
+        f"gsp_ip_allowlist for account {account_name!r}."
+    )
 
 
 # ============================================================
