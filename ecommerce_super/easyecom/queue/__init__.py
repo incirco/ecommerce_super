@@ -118,13 +118,55 @@ def enqueue_easyecom_job(
     qj.insert(ignore_permissions=True)
     frappe.db.commit()
 
-    frappe.enqueue(
-        method="ecommerce_super.easyecom.queue.workers.execute_job",
-        queue=queue_tier,
-        job_name=qj.name,
-        timeout=timeout_seconds,
-        easyecom_queue_job=qj.name,
-    )
+    # gh#176 followup — surface enqueue failures at the moment they happen
+    # instead of letting the DocType row sit at state=Queued indefinitely.
+    # Before this guard, a transient Redis / RQ issue after the DocType
+    # commit would silently leave an orphan; the hourly reclaimer would
+    # catch it eventually but ops would look at a Queued row for ≤60 min
+    # with no clue whether the underlying work fired.
+    #
+    # Two changes:
+    #   1. try/except around frappe.enqueue → on failure, mark the row
+    #      Failed with a clear reason. Raise so the caller sees the error
+    #      (e.g. an on_submit hook surfaces to the user).
+    #   2. Persist the returned RQ job id on the DocType so the reclaim
+    #      path's _rq_job_alive check has something to correlate against.
+    try:
+        rq_job = frappe.enqueue(
+            method="ecommerce_super.easyecom.queue.workers.execute_job",
+            queue=queue_tier,
+            job_name=qj.name,
+            timeout=timeout_seconds,
+            easyecom_queue_job=qj.name,
+        )
+    except Exception as exc:
+        try:
+            qj.reload()
+            qj.transition_to_failed(
+                error=(
+                    f"frappe.enqueue failed after DocType insert: "
+                    f"{type(exc).__name__}: {exc}. The Queue Job row "
+                    "exists but no RQ task was created. Retry from the "
+                    "form via the standard retry action."
+                ),
+                translation_key="ECS_QJ_ENQUEUE_FAILED",
+            )
+        except Exception:
+            # If even the failure-transition write fails, the hourly
+            # reclaim will still pick it up on the Queued path (gh#176).
+            pass
+        raise
+
+    if rq_job is not None:
+        try:
+            rq_job_id = getattr(rq_job, "id", None)
+            if rq_job_id:
+                qj.db_set("rq_job_id", str(rq_job_id), update_modified=False)
+                frappe.db.commit()
+        except Exception:
+            # Best-effort — losing rq_job_id doesn't break the enqueue,
+            # it only degrades reclaim liveness detection.
+            pass
 
     return qj.name
 
@@ -162,11 +204,36 @@ def retry_job(job_id: str) -> str:
         commit=True,
     )
 
-    frappe.enqueue(
-        method="ecommerce_super.easyecom.queue.workers.execute_job",
-        queue=qj.queue_tier or queue_for(qj.job_type),
-        job_name=f"{qj.name}-retry-{frappe.utils.now()}",
-        timeout=timeout_for(qj.job_type),
-        easyecom_queue_job=qj.name,
-    )
+    # gh#176 followup — same enqueue-failure guard as enqueue_easyecom_job.
+    try:
+        rq_job = frappe.enqueue(
+            method="ecommerce_super.easyecom.queue.workers.execute_job",
+            queue=qj.queue_tier or queue_for(qj.job_type),
+            job_name=f"{qj.name}-retry-{frappe.utils.now()}",
+            timeout=timeout_for(qj.job_type),
+            easyecom_queue_job=qj.name,
+        )
+    except Exception as exc:
+        try:
+            qj.reload()
+            qj.transition_to_failed(
+                error=(
+                    f"retry_job: frappe.enqueue failed: "
+                    f"{type(exc).__name__}: {exc}. State reset to Queued "
+                    "but no RQ task was created. Retry again from the form."
+                ),
+                translation_key="ECS_QJ_ENQUEUE_FAILED",
+            )
+        except Exception:
+            pass
+        raise
+
+    if rq_job is not None:
+        try:
+            rq_job_id = getattr(rq_job, "id", None)
+            if rq_job_id:
+                qj.db_set("rq_job_id", str(rq_job_id), update_modified=False)
+                frappe.db.commit()
+        except Exception:
+            pass
     return qj.name

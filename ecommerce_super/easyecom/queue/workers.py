@@ -172,19 +172,46 @@ def execute_job(easyecom_queue_job: str) -> None:
 def _reenqueue(qj, *, delay_seconds: int) -> None:
     """Re-enqueue this Queue Job via frappe.enqueue with enqueue_after for
     back-off. The next attempt re-enters execute_job and goes through
-    transition_to_running again, which bumps `attempts`."""
-    frappe.enqueue(
-        method="ecommerce_super.easyecom.queue.workers.execute_job",
-        queue=qj.queue_tier or queue_for(qj.job_type),
-        job_name=f"{qj.name}-attempt-{(qj.attempts or 0) + 1}",
-        timeout=timeout_for(qj.job_type),
-        enqueue_after_commit=False,
-        at_front=False,
-        # Frappe's enqueue takes `enqueue_after` as a timedelta on some
-        # versions and as seconds on others; we pass seconds inside the
-        # job's kwargs and let RQ schedule it.
-        **{"enqueue_after": delay_seconds, "easyecom_queue_job": qj.name},
-    )
+    transition_to_running again, which bumps `attempts`.
+
+    gh#176 followup — surface enqueue failures instead of leaving the row
+    to sit at whatever state the caller set (Retrying, Queued, …).
+    """
+    try:
+        rq_job = frappe.enqueue(
+            method="ecommerce_super.easyecom.queue.workers.execute_job",
+            queue=qj.queue_tier or queue_for(qj.job_type),
+            job_name=f"{qj.name}-attempt-{(qj.attempts or 0) + 1}",
+            timeout=timeout_for(qj.job_type),
+            enqueue_after_commit=False,
+            at_front=False,
+            # Frappe's enqueue takes `enqueue_after` as a timedelta on some
+            # versions and as seconds on others; we pass seconds inside the
+            # job's kwargs and let RQ schedule it.
+            **{"enqueue_after": delay_seconds, "easyecom_queue_job": qj.name},
+        )
+    except Exception as exc:
+        try:
+            qj.reload()
+            qj.transition_to_failed(
+                error=(
+                    f"_reenqueue: frappe.enqueue failed: "
+                    f"{type(exc).__name__}: {exc}. The reclaim scheduler "
+                    "will pick this up on its next run."
+                ),
+                translation_key="ECS_QJ_ENQUEUE_FAILED",
+            )
+        except Exception:
+            pass
+        raise
+
+    if rq_job is not None:
+        try:
+            rq_job_id = getattr(rq_job, "id", None)
+            if rq_job_id:
+                qj.db_set("rq_job_id", str(rq_job_id), update_modified=False)
+        except Exception:
+            pass
 
 
 def reclaim_orphaned_jobs() -> int:
