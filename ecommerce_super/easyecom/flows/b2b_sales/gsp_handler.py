@@ -234,6 +234,20 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
     # IC requires submitted SI. Submit if Draft (whether or not we
     # then mint IRN — the GL impact happens either way).
     if si.docstatus == 0:
+        # gh#161 v2 heal path: existing Draft SIs created before the
+        # set_posting_time=1 fix landed carry set_posting_time=0. On
+        # submit, ERPNext resets posting_date to today, which lands
+        # due_date < posting_date if the SI was drafted on a prior day.
+        # Re-assert dates defensively before submit.
+        try:
+            _reassert_si_dates_for_submit(si)
+        except Exception as exc:  # noqa: BLE001
+            # Best-effort; if reassert fails, let the actual submit
+            # error surface below.
+            frappe.log_error(
+                title=f"gh#161 v2: date reassert failed for {si_name}",
+                message=f"{type(exc).__name__}: {exc}",
+            )
         try:
             si.flags.ignore_permissions = True
             si.submit()
@@ -277,6 +291,46 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
         )
 
     return _assemble_irn_response(si)
+
+
+def _reassert_si_dates_for_submit(si: Any) -> None:
+    """gh#161 v2 — heal pre-fix Draft SIs before submit.
+
+    Existing Drafts created before the set_posting_time=1 fix landed
+    (2026-07-13) have set_posting_time=0. On submit, ERPNext's
+    set_posting_time_and_date() resets posting_date to today, which
+    lands due_date < posting_date when the SI was drafted on a prior
+    day. Same root cause as gh#161 originally, exposed via a different
+    ERPNext validate path.
+
+    Fix in-place: set_posting_time=1 (freeze the date), pin
+    transaction_date, ensure due_date >= posting_date, clear any
+    payment_terms_template that would re-derive schedule.
+    """
+    from frappe.utils import getdate
+    changed = False
+    if si.get("set_posting_time") != 1:
+        si.set_posting_time = 1
+        changed = True
+    if si.transaction_date != si.posting_date:
+        si.transaction_date = si.posting_date
+        changed = True
+    if si.due_date and getdate(si.due_date) < getdate(si.posting_date):
+        si.due_date = si.posting_date
+        changed = True
+    if si.get("payment_terms_template"):
+        si.payment_terms_template = ""
+        si.payment_schedule = []
+        changed = True
+    if changed:
+        # Persist via db_set on the fields that don't need re-validate
+        # so submit's validate sees the sane values. Using db_set +
+        # reload rather than save() avoids nested-validate recursion.
+        si.db_set("set_posting_time", 1, update_modified=False)
+        si.db_set("transaction_date", si.posting_date, update_modified=False)
+        si.db_set("due_date", si.posting_date, update_modified=False)
+        si.db_set("payment_terms_template", "", update_modified=False)
+        si.reload()
 
 
 # ============================================================
