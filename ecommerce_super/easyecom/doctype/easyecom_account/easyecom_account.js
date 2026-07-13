@@ -642,6 +642,7 @@ if (!window.__ecs_discover_listener_attached) {
 frappe.ui.form.on("EasyEcom Account", {
     refresh(frm) {
         frm.trigger("update_connection_indicator");
+        refresh_gsp_mode_chip(frm);
 
         // Top-bar action groups. Skip on a new (unsaved) doc — the
         // _ensureSaved guards in the handlers also catch this, but
@@ -1596,4 +1597,103 @@ frappe.ui.form.on("EasyEcom Account", {
             `<span class="indicator ${color}">${__(status || "Unknown")}</span>`
         );
     },
+
+    // Live-update the GSP mode chip whenever the FDE flips either
+    // mint toggle. The chip is a plain-English readout of the two
+    // gsp_mint_* checkboxes so an FDE knows the effective mode at a
+    // glance without interpreting checkbox state.
+    gsp_mint_einvoice(frm) {
+        refresh_gsp_mode_chip(frm);
+    },
+    gsp_mint_ewaybill(frm) {
+        refresh_gsp_mode_chip(frm);
+    },
+    // If the account is not §11-configured (no ecs_b2b_module), the
+    // chip stays hidden. Update on that toggle too so flipping the
+    // module value doesn't leave a stale chip.
+    ecs_b2b_module(frm) {
+        refresh_gsp_mode_chip(frm);
+    },
 });
+
+
+// GSP mode chip — reads the two mint toggles and renders one of four
+// plain-English states. Only visible when the account is configured
+// for §11 B2B (ecs_b2b_module non-empty); otherwise cleared.
+//
+// The four combinations map to a fixed label + colour:
+//   A: einvoice=0, ewaybill=0  → "GSP: Only ERP invoice"           (grey)
+//   B: einvoice=0, ewaybill=1  → "GSP: ERP invoice + eway"         (blue)
+//   C: einvoice=1, ewaybill=0  → "GSP: ERP invoice + IRN"          (blue)
+//   D: einvoice=1, ewaybill=1  → "GSP: ERP invoice + IRN + eway"   (green — full compliance)
+function refresh_gsp_mode_chip(frm) {
+    // Not §11-configured — no chip.
+    if (!frm.doc.ecs_b2b_module) {
+        // The dashboard headline indicator we set from connection
+        // status covers the general account state. GSP chip is a
+        // separate custom-html render into the field description on
+        // gsp_basic_auth_secret so it sits next to the credential.
+        _clearGspChip(frm);
+        return;
+    }
+    const einvoice = !!frm.doc.gsp_mint_einvoice;
+    const ewaybill = !!frm.doc.gsp_mint_ewaybill;
+    let label;
+    let color;
+    let tooltip;
+    if (!einvoice && !ewaybill) {
+        label = __("GSP: Only ERP invoice");
+        color = "grey";
+        tooltip = __(
+            "Sales Invoice created + submitted on /einvoice/update. " +
+            "No IRN mint on NIC IRP. No e-way bill mint on NIC EWB. " +
+            "Base64 PDF returned to EasyEcom either way."
+        );
+    } else if (!einvoice && ewaybill) {
+        label = __("GSP: ERP invoice + eway");
+        color = "blue";
+        tooltip = __(
+            "SI + e-way bill (via India Compliance NIC EWB). No IRN mint."
+        );
+    } else if (einvoice && !ewaybill) {
+        label = __("GSP: ERP invoice + IRN");
+        color = "blue";
+        tooltip = __(
+            "SI + IRN (via India Compliance NIC IRP). No e-way bill mint."
+        );
+    } else {
+        label = __("GSP: ERP invoice + IRN + eway");
+        color = "green";
+        tooltip = __(
+            "Full compliance chain — SI + IRN + e-way bill via India Compliance."
+        );
+    }
+    _renderGspChip(frm, label, color, tooltip);
+}
+
+
+function _renderGspChip(frm, label, color, tooltip) {
+    // Render into the description of the gsp_basic_auth_secret field
+    // so the chip sits inside the Custom GSP section, next to the
+    // credential — the natural place an FDE looking at GSP config
+    // would notice it. Frappe descriptions accept HTML.
+    const fieldname = "gsp_basic_auth_secret";
+    if (!frm.fields_dict[fieldname]) {
+        return;
+    }
+    const html = `<span class="indicator ${color}" title="${frappe.utils.escape_html(
+        tooltip
+    )}" style="margin-right:6px;">${frappe.utils.escape_html(label)}</span>`;
+    frm.set_df_property(fieldname, "description", html);
+    frm.refresh_field(fieldname);
+}
+
+
+function _clearGspChip(frm) {
+    const fieldname = "gsp_basic_auth_secret";
+    if (!frm.fields_dict[fieldname]) {
+        return;
+    }
+    frm.set_df_property(fieldname, "description", "");
+    frm.refresh_field(fieldname);
+}
