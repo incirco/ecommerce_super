@@ -136,7 +136,9 @@ class TestValidateBasicAuth(unittest.TestCase):
 
 class TestIssueBearer(unittest.TestCase):
 
-    def test_returns_token_expires_in_one_hour(self):
+    def test_returns_token_expires_at_configured_ttl(self):
+        """gh#166: TTL is now 900s (was 3600s). Assert against the module
+        constant + the currently-documented value."""
         fake_doc = MagicMock()
         fake_doc.insert = MagicMock()
         with (
@@ -147,7 +149,9 @@ class TestIssueBearer(unittest.TestCase):
 
         self.assertIn("token", result)
         self.assertEqual(result["expires_in"], TOKEN_TTL_SECONDS)
-        self.assertEqual(result["expires_in"], 3600)
+        # Post-gh#166: TTL reduced from 3600s → 900s. A further change
+        # forces this test to be updated deliberately.
+        self.assertEqual(result["expires_in"], 900)
         # Token is 64-char hex
         self.assertEqual(len(result["token"]), 64)
 

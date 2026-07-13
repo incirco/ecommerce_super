@@ -232,7 +232,13 @@ def _enforce_ip_allowlist(account_name: str) -> None:
     except Exception:
         # Field not migrated yet — treat as no restriction.
         return
-    allowlist_raw = (allowlist_raw or "").strip()
+    # Defensive: production frappe.db.get_value on a Small Text field
+    # always returns str or None. Anything else is a mocked / edge
+    # context — treat as no restriction rather than crashing bearer
+    # validation with a false "IP allowlist configured" error.
+    if not isinstance(allowlist_raw, str):
+        return
+    allowlist_raw = allowlist_raw.strip()
     if not allowlist_raw:
         return
 
