@@ -139,3 +139,10 @@ ecommerce_super.patches.v0_1.add_address_ee_c_id_field
 # gh#147 — EasyEcom API Call gained a `direction` field (Outbound/Inbound).
 # Backfill legacy rows to Outbound so the reqd constraint holds.
 ecommerce_super.patches.v0_1.backfill_api_call_direction
+# gh#166 security hardening — dedicated least-privilege User + Role
+# that _elevated_session prefers over Administrator.
+ecommerce_super.patches.v0_1.create_easyecom_integration_user
+# gh#166 security hardening — gsp_ip_allowlist + gsp_rate_limit_per_min
+# fields on EasyEcom Account. Both optional (empty allowlist =
+# no restriction; rate limit defaults to 6/min per invoice_id).
+ecommerce_super.patches.v0_1.add_gsp_security_fields
