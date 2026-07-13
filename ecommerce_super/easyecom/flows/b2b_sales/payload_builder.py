@@ -85,26 +85,47 @@ def get_shipping_charge(so: Any) -> float:
     return total
 
 
+def _item_price_and_discount(so_item: Any) -> tuple[float, float]:
+    """gh#184: EE expects `Price` to be the LIST (pre-discount) per-unit
+    price and `itemDiscount` to be the per-unit discount amount that
+    EE will subtract. Reconstructs the pre-discount rate from ERPNext's
+    post-discount `rate` + `discount_amount`.
+
+    Before this fix, we sent `Price = rate` (already post-discount) AND
+    `itemDiscount = discount_amount` — EE subtracted the discount a
+    SECOND time and the invoice landed at wrong (usually zero) total.
+    Live symptom: SO-2610392 → EE invoice ₹0 for a ₹315 SO.
+    """
+    rate = float(so_item.rate or 0)
+    discount = float(so_item.discount_amount or 0)
+    # Reconstruct pre-discount list price. When discount == 0 this
+    # equals rate — same behavior as before for undiscounted items.
+    price = round(rate + discount, 2)
+    return price, discount
+
+
 def build_old_b2b_item(so: Any, so_item: Any) -> dict:
     """Old B2B line item — Quantity as STRING."""
+    price, discount = _item_price_and_discount(so_item)
     return {
         "OrderItemId": f"{so.name}-line-{so_item.idx}",
         "Sku": resolve_ee_sku_or_throw(so_item.item_code),
         "productName": so_item.item_name,
         "Quantity": str(so_item.qty),
-        "Price": so_item.rate,
-        "itemDiscount": so_item.discount_amount or 0,
+        "Price": price,
+        "itemDiscount": discount,
     }
 
 
 def build_new_b2b_item(so: Any, so_item: Any) -> dict:
     """New B2B line item — Quantity as INTEGER, no productName."""
+    price, discount = _item_price_and_discount(so_item)
     return {
         "OrderItemId": f"{so.name}-line-{so_item.idx}",
         "Sku": resolve_ee_sku_or_throw(so_item.item_code),
         "Quantity": int(so_item.qty),
-        "Price": so_item.rate,
-        "itemDiscount": so_item.discount_amount or 0,
+        "Price": price,
+        "itemDiscount": discount,
     }
 
 
