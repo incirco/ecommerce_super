@@ -85,28 +85,54 @@ def get_shipping_charge(so: Any) -> float:
     return total
 
 
-def _item_price_and_discount(so_item: Any) -> tuple[float, float]:
-    """gh#184: EE expects `Price` to be the LIST (pre-discount) per-unit
-    price and `itemDiscount` to be the per-unit discount amount that
-    EE will subtract. Reconstructs the pre-discount rate from ERPNext's
-    post-discount `rate` + `discount_amount`.
+def _item_price_and_discount(so_item: Any, so: Any) -> tuple[float, float]:
+    """gh#184 + gh#187: EE's `Price` and `itemDiscount` are TAX-INCLUSIVE
+    (EE backs the tax out at its own tax_rate to get net taxable_value).
+    ERPNext's `so_item.rate` and `discount_amount` are TAX-EXCLUSIVE.
 
-    Before this fix, we sent `Price = rate` (already post-discount) AND
-    `itemDiscount = discount_amount` — EE subtracted the discount a
-    SECOND time and the invoice landed at wrong (usually zero) total.
-    Live symptom: SO-2610392 → EE invoice ₹0 for a ₹315 SO.
+    Two corrections rolled together:
+      1. Reconstruct list price from post-discount rate + discount
+         (was: sending `rate` alone, which EE would treat as already
+         post-discount AND then subtract itemDiscount again → double
+         count. Symptom on SO-2610392: EE invoice ₹0 for a ₹315 SO.)
+      2. Gross up by the SO's tax multiplier so EE's back-out of tax
+         yields the correct net (was: EE received tax-exclusive
+         numbers, treated them as inclusive, and returned a total ₹15
+         short of SO grand_total. Symptom on SO-2610394: EE=₹300 vs
+         SO=₹315.)
+
+    Formula:
+        tax_multiplier = so.grand_total / so.net_total
+        Price          = (rate + discount) * tax_multiplier
+        itemDiscount   = discount * tax_multiplier
+
+    For SO-2610394 (rate=300, discount=300, tax_multiplier=1.05):
+        Price = 600 * 1.05 = 630
+        itemDiscount = 300 * 1.05 = 315
+        EE gross = 630 - 315 = 315  →  taxable = 300, tax = 15
+        Matches SO grand_total ₹315 exactly.
+
+    For a no-discount, zero-tax SO: tax_multiplier=1.0, discount=0 →
+    Price = rate, itemDiscount = 0. Same as before both fixes for that
+    edge case.
     """
     rate = float(so_item.rate or 0)
     discount = float(so_item.discount_amount or 0)
-    # Reconstruct pre-discount list price. When discount == 0 this
-    # equals rate — same behavior as before for undiscounted items.
-    price = round(rate + discount, 2)
-    return price, discount
+
+    net_total = float(getattr(so, "net_total", 0) or 0)
+    grand_total = float(getattr(so, "grand_total", 0) or 0)
+    tax_multiplier = (
+        grand_total / net_total if net_total > 0 else 1.0
+    )
+
+    price = round((rate + discount) * tax_multiplier, 2)
+    discount_incl_tax = round(discount * tax_multiplier, 2)
+    return price, discount_incl_tax
 
 
 def build_old_b2b_item(so: Any, so_item: Any) -> dict:
     """Old B2B line item — Quantity as STRING."""
-    price, discount = _item_price_and_discount(so_item)
+    price, discount = _item_price_and_discount(so_item, so)
     return {
         "OrderItemId": f"{so.name}-line-{so_item.idx}",
         "Sku": resolve_ee_sku_or_throw(so_item.item_code),
@@ -119,7 +145,7 @@ def build_old_b2b_item(so: Any, so_item: Any) -> dict:
 
 def build_new_b2b_item(so: Any, so_item: Any) -> dict:
     """New B2B line item — Quantity as INTEGER, no productName."""
-    price, discount = _item_price_and_discount(so_item)
+    price, discount = _item_price_and_discount(so_item, so)
     return {
         "OrderItemId": f"{so.name}-line-{so_item.idx}",
         "Sku": resolve_ee_sku_or_throw(so_item.item_code),
