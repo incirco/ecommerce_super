@@ -45,6 +45,26 @@ _PERMISSIONS: dict[str, dict[str, int]] = {
     "Contact": {"read": 1, "write": 1, "create": 1},
     # Company + GST fields — read only.
     "Company": {"read": 1},
+    # gh#166 followup (2026-07-14): SI insert needs to resolve tax
+    # account_heads (Output Tax IGST/CGST/SGST) and cost centers; IC's
+    # e-invoice / e-way generation touches Item Tax Templates and Tax
+    # Categories. All read-only — inbound flow never writes these.
+    "Account": {"read": 1},
+    "Cost Center": {"read": 1},
+    "Warehouse": {"read": 1},
+    "Item Tax Template": {"read": 1},
+    "Item Tax Template Detail": {"read": 1},
+    "Tax Category": {"read": 1},
+    "Sales Taxes and Charges Template": {"read": 1},
+    "Batch": {"read": 1},
+    "Stock Ledger Entry": {"read": 1},
+    # GL Entry — SI submit creates these; also read for reconciliation.
+    "GL Entry": {"read": 1, "create": 1},
+    # UOM — Item unit lookups.
+    "UOM": {"read": 1},
+    # Payment Terms / Schedule — SI payment_schedule computation.
+    "Payment Term": {"read": 1},
+    "Payment Terms Template": {"read": 1},
     # EE own DocTypes — full CRUD on operational rows, read on config.
     "EasyEcom B2B Order Map": {
         "read": 1, "write": 1, "create": 1,

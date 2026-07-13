@@ -146,3 +146,8 @@ ecommerce_super.patches.v0_1.create_easyecom_integration_user
 # fields on EasyEcom Account. Both optional (empty allowlist =
 # no restriction; rate limit defaults to 6/min per invoice_id).
 ecommerce_super.patches.v0_1.add_gsp_security_fields
+# gh#166 followup (2026-07-14): expand the EasyEcom Integration role
+# with Account/Cost Center/etc. reads so SI insert can resolve tax
+# account_heads. Symptom on SO-2610397: 'PermissionError: User don't
+# have permissions to select/read this account.'
+ecommerce_super.patches.v0_1.expand_integration_role_perms
