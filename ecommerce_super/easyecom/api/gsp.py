@@ -435,10 +435,16 @@ def _enforce_gsp_rate_limit(
         )
     except Exception:
         return  # field not migrated yet
-    try:
-        limit = int(limit_raw or 6)
-    except (TypeError, ValueError):
+    # Note: `limit_raw or 6` would coerce a legit 0 to 6, defeating the
+    # "set to 0 to disable" documented behavior. Guard on None
+    # explicitly.
+    if limit_raw is None:
         limit = 6
+    else:
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 6
     if limit <= 0:
         return  # explicit disable
     key = f"ecs:gsp:ratelimit:{endpoint}:{invoice_id}"
