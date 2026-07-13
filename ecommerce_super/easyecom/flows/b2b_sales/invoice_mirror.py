@@ -419,19 +419,26 @@ def _append_taxes_from_ee_row(si: Any, *, ee_row: dict, company: str) -> None:
         account_head = account_map.get(bucket)
         if not account_head:
             continue
-        # Derive display rate for the description — informational only,
-        # actual tax_amount is what's used for computation.
+        # Derive tax rate from EE's amounts. Using `On Net Total`
+        # charge_type (not `Actual`) so:
+        #   1. ERPNext auto-computes tax_amount = rate% * net_total
+        #      → grand_total updates correctly on validate.
+        #   2. Print formats read `rate` for display (e.g. "IGST @ 5%").
+        #      `Actual` sets rate=0 internally so the print shows 0%.
+        # On multi-item SOs with mixed rates this collapses to a
+        # weighted average — acceptable for the mirror since the
+        # per-item breakdown is preserved on each line's
+        # item_tax_template.
         rate_pct = (
             round((amount / taxable_total) * 100, 2)
             if taxable_total > 0
             else 0
         )
         si.append("taxes", {
-            "charge_type": "Actual",
+            "charge_type": "On Net Total",
             "account_head": account_head,
-            "description": f"{bucket.upper()} @ {rate_pct}% (mirrored from EE)",
-            "tax_amount": round(amount, 2),
-            "rate": 0,
+            "description": f"{bucket.upper()} @ {rate_pct}%",
+            "rate": rate_pct,
             "included_in_print_rate": 0,
         })
 
