@@ -25,6 +25,7 @@ The `[Unreleased]` section holds anything on `main` that hasn't yet been deploye
 
 ### Fixed
 
+- **Mirror SI totals didn't match EE on promo orders** — `_resolve_line_items` read `breakup_types["Item Amount Excluding Tax"]` (pre-discount) and ignored the sibling `breakup_types["Promotion Discount Excluding Tax"]` that cancels it out. Live delta on SO-2610392: EE ₹0 (100% promo), our SI ₹285.71. Fix: three-tier source priority — (1) EE's per-line `taxable_value` (already post-promo), (2) breakup_types sum, (3) selling_price fallback. Ships with 5 unit tests. Partial fix — populating SI.taxes child table is separate follow-up in the same issue (non-blocking for Combo A, blocking for Combo C/D). [#181] part 1, [PR #182], [`4e7ed2f`].
 - **Queue Jobs stuck at `state=Queued` indefinitely** — reactive fix via reclaim + proactive fix at enqueue time. **Reactive**: `reclaim_orphaned_jobs` only caught `state=Running` orphans. Added `_reclaim_queued_orphans` with an idempotency probe that marks jobs Success when the target artifact (B2B Map / Item Map / Customer Map) already exists, otherwise re-enqueues. Hourly scheduler drains backlog. **Proactive**: wrapped all three `frappe.enqueue` call sites (`enqueue_easyecom_job`, `retry_job`, `_reenqueue`) in try/except — on failure the row goes straight to Failed with a clear error and the caller sees the exception immediately; on success the returned rq_job_id is persisted for reliable reclaim liveness detection. [#176], [PR #177], [`2abc2b7`], [PR #179], [`991c3a9`].
 - **Mirror SI submit fails days after insert** — added `si.set_posting_time = 1` to `invoice_mirror.py`. Without it, ERPNext resets `posting_date` to today on every validate, leaving `due_date` (pinned to original posting_date) earlier → "Due Date cannot be before Posting Date". Also added `_reassert_si_dates_for_submit()` in `gsp_handler.py` to heal pre-fix Draft SIs in-place before submit (uses `db_set` + `reload` so the fix works retroactively on already-created Drafts). Live root cause on SI-2603815 (drafted 2026-07-11, regenerate attempted 2026-07-13). [#161] v2, [PR #172], [`9d7e596`].
 
@@ -168,6 +169,7 @@ When adding new entries, append the corresponding reference here.
 [#162]: https://github.com/incirco/ecommerce_super/issues/162
 [#166]: https://github.com/incirco/ecommerce_super/issues/166
 [#176]: https://github.com/incirco/ecommerce_super/issues/176
+[#181]: https://github.com/incirco/ecommerce_super/issues/181
 
 [PR #119]: https://github.com/incirco/ecommerce_super/pull/119
 [PR #132]: https://github.com/incirco/ecommerce_super/pull/132
@@ -193,6 +195,7 @@ When adding new entries, append the corresponding reference here.
 [PR #174]: https://github.com/incirco/ecommerce_super/pull/174
 [PR #177]: https://github.com/incirco/ecommerce_super/pull/177
 [PR #179]: https://github.com/incirco/ecommerce_super/pull/179
+[PR #182]: https://github.com/incirco/ecommerce_super/pull/182
 
 [`1841623`]: https://github.com/incirco/ecommerce_super/commit/1841623
 [`1a1d81a`]: https://github.com/incirco/ecommerce_super/commit/1a1d81a
@@ -212,6 +215,7 @@ When adding new entries, append the corresponding reference here.
 [`37f874f`]: https://github.com/incirco/ecommerce_super/commit/37f874f
 [`2abc2b7`]: https://github.com/incirco/ecommerce_super/commit/2abc2b7
 [`991c3a9`]: https://github.com/incirco/ecommerce_super/commit/991c3a9
+[`4e7ed2f`]: https://github.com/incirco/ecommerce_super/commit/4e7ed2f
 [`a21b353`]: https://github.com/incirco/ecommerce_super/commit/a21b353
 [`a60b2c6`]: https://github.com/incirco/ecommerce_super/commit/a60b2c6
 [`a6d2eed`]: https://github.com/incirco/ecommerce_super/commit/a6d2eed
