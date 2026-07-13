@@ -37,6 +37,7 @@ def _make_so(
     name="SAL-ORD-2026-001",
     customer="ACME",
     grand_total=10000.0,
+    net_total=None,
     transaction_date=None,
     delivery_date=None,
     terms="Net 30",
@@ -49,6 +50,12 @@ def _make_so(
     so.name = name
     so.customer = customer
     so.grand_total = grand_total
+    # gh#187: _item_price_and_discount reads net_total to compute the
+    # SO's tax multiplier. Default to grand_total so undiscounted +
+    # untaxed test fixtures see tax_multiplier=1.0 and behave as pre-
+    # gh#187. Callers that want to exercise the gross-up path pass
+    # both grand_total and net_total explicitly.
+    so.net_total = net_total if net_total is not None else grand_total
     so.transaction_date = transaction_date or date(2026, 6, 14)
     so.delivery_date = delivery_date or date(2026, 6, 20)
     so.terms = terms
@@ -66,6 +73,7 @@ def _make_so_item(
     rate=200.0,
     idx=1,
     discount_amount=0,
+    price_list_rate=None,
 ):
     it = MagicMock()
     it.item_code = item_code
@@ -74,6 +82,7 @@ def _make_so_item(
     it.rate = rate
     it.idx = idx
     it.discount_amount = discount_amount
+    it.price_list_rate = price_list_rate if price_list_rate is not None else rate
     return it
 
 
