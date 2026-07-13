@@ -288,17 +288,44 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
         if qty <= 0:
             continue  # skip zero-qty rows
 
-        # Per-unit net price from breakup_types (preferred over selling_price
-        # which is the gross amount for the whole line).
-        line_breakup = line.get("breakup_types") or {}
-        taxable_value = float(
-            line_breakup.get("Item Amount Excluding Tax") or 0
-        )
-        if taxable_value > 0:
-            rate = round(taxable_value / qty, 2)
-        else:
-            # Fallback — derive from selling_price + tax_rate. Coarser
-            # rounding but always lands a number.
+        # Per-unit net (post-promotion) price.
+        #
+        # gh#181: source priority — the item-level `taxable_value` field
+        # is EE's authoritative post-promotion net amount. It already
+        # nets out any `Promotion Discount` from the breakup. Using it
+        # directly makes the SI match EE's grand_total on promo orders
+        # (SO-2610392 was ₹0 on EE but ₹285.71 on our SI because we
+        # were reading pre-discount `Item Amount Excluding Tax` alone).
+        #
+        # Fall through to breakup_types math (net of promo) if
+        # taxable_value is absent, then to selling_price / (1 + rate/100).
+        rate = None
+        # 1. Preferred: EE's own post-promo net.
+        if "taxable_value" in line and line.get("taxable_value") is not None:
+            try:
+                tv = float(line.get("taxable_value") or 0)
+                rate = round(tv / qty, 2) if qty else 0.0
+            except (TypeError, ValueError):
+                rate = None
+        # 2. Fallback: sum the breakup_types entries — Item Amount
+        # Excluding Tax + Promotion Discount Excluding Tax (negative,
+        # so subtracts). Handles any future discount categories the
+        # same way — we just sum all "Excluding Tax" keys.
+        if rate is None:
+            line_breakup = line.get("breakup_types") or {}
+            net = 0.0
+            for k, v in line_breakup.items():
+                if k.endswith("Excluding Tax"):
+                    try:
+                        net += float(v or 0)
+                    except (TypeError, ValueError):
+                        continue
+            if net > 0:
+                rate = round(net / qty, 2)
+        # 3. Final fallback: derive from selling_price + tax_rate.
+        # Coarser rounding but always lands a number when EE omits both
+        # taxable_value and breakup_types.
+        if rate is None:
             selling_price = float(line.get("selling_price") or 0)
             tax_rate = float(line.get("tax_rate") or 0)
             gross_per_unit = selling_price / qty if qty else 0
