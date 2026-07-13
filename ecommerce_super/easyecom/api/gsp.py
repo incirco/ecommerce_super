@@ -405,6 +405,65 @@ def normalise_gsp_auth_header() -> None:
         return
 
 
+import contextlib
+
+
+@contextlib.contextmanager
+def _elevated_session(user: str = "Administrator"):
+    """gh#166 — elevate the Frappe session for the duration of an
+    inbound GSP handler.
+
+    Why this exists.
+
+      The three GSP endpoints (gettoken, einvoice_update, ewaybill_update)
+      are @whitelist(allow_guest=True) because EasyEcom is NOT a Frappe
+      user — they authenticate via our own Bearer token, not a Frappe
+      sid/api-key. Frappe's validate_auth() therefore has no user to
+      resolve and defaults session.user='Guest'.
+
+      When we then call `si.insert()`, our own `ignore_permissions=True`
+      flag skips Frappe's insert-time permission check on the SI —
+      BUT the validate() hook then fires, and validate hooks in other
+      installed apps (e.g. modernmarwar's `set_total_overdue_amount`
+      calling `frappe.get_list("Sales Invoice", ...)`) enforce SELECT
+      permission via the current session user. Guest has none → hard
+      PermissionError.
+
+      No amount of `ignore_permissions` on our end propagates into
+      third-party validate hooks. The only durable answer is to
+      temporarily run the whole SI insert/submit/mint chain under a
+      user that DOES have those permissions.
+
+    Semantics.
+
+      - Bearer auth has already succeeded upstream (validate_bearer
+        returned a real EasyEcom Account) — this is not a security
+        elevation from an unauthenticated caller; it's a role-swap
+        from Guest to Administrator AFTER trust is established.
+      - The elevation is scoped to a single request; the finally
+        clause restores the original user on ANY exit path.
+      - No-op when the current session is already non-Guest (leaves
+        real Frappe user sessions untouched — useful for smoke tests
+        that run this handler as an API-key user).
+      - Prefer a dedicated integration user in follow-up work; the
+        Administrator default here is the minimum-risk stopgap.
+    """
+    original_user = frappe.session.user if frappe.session else "Guest"
+    should_elevate = original_user == "Guest"
+    if should_elevate:
+        frappe.set_user(user)
+    try:
+        yield
+    finally:
+        if should_elevate:
+            try:
+                frappe.set_user(original_user)
+            except Exception:
+                # If restoration fails, the request is about to end
+                # anyway; the next request creates a fresh session.
+                pass
+
+
 def _get_gsp_auth_header() -> str | None:
     """Read the Authorization value for a GSP endpoint, preferring the
     stash environ key that `normalise_gsp_auth_header` populates. Falls
@@ -718,7 +777,19 @@ def ewaybill_update() -> dict[str, Any]:
 
 
 def _einvoice_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
-    """Find/create SI, submit + mint IRN, return EE-shape response."""
+    """Find/create SI, submit + mint IRN, return EE-shape response.
+
+    Delegates to _einvoice_handler_impl wrapped in _elevated_session
+    (gh#166) so third-party validate hooks (modernmarwar's
+    set_total_overdue_amount, IC, etc.) that call frappe.get_list
+    survive the Guest session that allow_guest=True imposes.
+    """
+    with _elevated_session():
+        return _einvoice_handler_impl(ee_row=ee_row, ee_account=ee_account)
+
+
+def _einvoice_handler_impl(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
+    """Actual find/create/submit/mint logic. Runs under elevated session."""
     from ecommerce_super.easyecom.flows.b2b_sales.gsp_handler import (
         find_or_create_si_for_gsp,
         GSPHandlerError,
@@ -789,7 +860,14 @@ def _einvoice_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
 
 
 def _ewaybill_handler(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
-    """Find SI (must already exist from einvoice call), mint eway."""
+    """Find SI + mint eway. Delegates to _impl under _elevated_session
+    (gh#166) — same rationale as _einvoice_handler."""
+    with _elevated_session():
+        return _ewaybill_handler_impl(ee_row=ee_row, ee_account=ee_account)
+
+
+def _ewaybill_handler_impl(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
+    """Actual find + eway-mint logic. Runs under elevated session."""
     from ecommerce_super.easyecom.flows.b2b_sales.gsp_handler import (
         find_si_by_invoice_id,
         GSPHandlerError,
