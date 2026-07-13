@@ -258,14 +258,15 @@ class TestMirrorSiFromEeResponse(unittest.TestCase):
             self.assertIn("ACC-SINV-2026-00002", str(ctx.exception))
 
     def test_raises_error_when_customer_map_missing(self):
+        """gh#144 followup: _resolve_customer now makes up to two
+        db.get_value calls (ee_c_id lookup + ee_customer_id fallback)
+        + accepts either merchant_c_id or customer_code from the
+        payload. Test uses a permissive mock that returns None for
+        every call so both lookup paths fail cleanly."""
         row = _ee_row()
         map_doc = _fake_map()
 
-        with patch("frappe.db.get_value") as gv:
-            gv.side_effect = [
-                None,   # no existing SI
-                None,   # customer NOT resolved
-            ]
+        with patch("frappe.db.get_value", return_value=None):
             with self.assertRaises(InvoiceMirrorError) as ctx:
                 mirror_si_from_ee_response(map_doc=map_doc, ee_row=row)
             self.assertIn("Customer Map", str(ctx.exception))

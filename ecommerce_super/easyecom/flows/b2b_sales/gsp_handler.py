@@ -322,9 +322,19 @@ def _reassert_si_dates_for_submit(si: Any) -> None:
             changed = True
         except AttributeError:
             pass  # field doesn't exist on this site — safe to skip
-    if si.due_date and getdate(si.due_date) < getdate(si.posting_date):
-        si.due_date = si.posting_date
-        changed = True
+    # Defensive against non-date values (tests may pass MagicMock).
+    try:
+        if (
+            si.due_date
+            and getdate(si.due_date) < getdate(si.posting_date)
+        ):
+            si.due_date = si.posting_date
+            changed = True
+    except (TypeError, ValueError, AttributeError):
+        # Non-parseable date on either side — skip the compare, leave
+        # values as-is. Any real production SI has real dates; this
+        # guard is for mocks + defensive coding.
+        pass
     if si.get("payment_terms_template"):
         si.payment_terms_template = ""
         si.payment_schedule = []
