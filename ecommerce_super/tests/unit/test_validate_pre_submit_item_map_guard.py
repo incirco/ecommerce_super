@@ -126,9 +126,14 @@ class TestPreSubmitItemMapGuard(unittest.TestCase):
         on validate (or, here, returns cleanly since we patched the
         downstream resolutions clean)."""
         dn = _fake_dn(line_items=["FG20077"])
-        # All Item Map lookups succeed.
+        # gh#93 reopener: helper now uses frappe.db.get_value with a dict
+        # result, checking status + ee_product_id. Return a healthy row.
         ctxs = self._patch_routing_resolution_clean() + [
-            patch("frappe.db.exists", return_value=True),
+            patch("frappe.db.get_value", return_value={
+                "name": "ECS-ITM-FG20077",
+                "status": "Mapped",
+                "ee_product_id": "EE-FG20077",
+            }),
         ]
         self._enter(ctxs)
         try:
@@ -163,18 +168,29 @@ class TestPreSubmitItemMapGuard(unittest.TestCase):
     def test_unsynced_helper_returns_list_of_item_codes(self) -> None:
         """Sanity test the shared helper directly. It should return
         a list of item_codes that have no EasyEcom Item Map row,
-        empty list when every line is mapped."""
+        empty list when every line is mapped.
+
+        gh#93 reopener: helper was widened to also flag `Flagged-Not-Created`,
+        `Disabled`, and map-row-without-ee_product_id cases. It now uses
+        `frappe.db.get_value` (not `frappe.db.exists`) with a dict result
+        so it can inspect status + ee_product_id. This test mocks the
+        right function accordingly."""
         dn = _fake_dn(line_items=["A", "B", "C"])
 
-        # B and C are mapped; A is not. side_effect returns True
-        # only for filters mentioning B or C.
-        def _exists_side_effect(doctype, filters=None, **_):
+        # B and C are mapped healthy; A is not.
+        def _get_value_side_effect(doctype, filters=None, *args, **_):
             if doctype != "EasyEcom Item Map":
-                return False
+                return None
             erpnext_name = (filters or {}).get("erpnext_name", "")
-            return erpnext_name in {"B", "C"}
+            if erpnext_name in {"B", "C"}:
+                return {
+                    "name": f"ECS-ITM-{erpnext_name}",
+                    "status": "Mapped",
+                    "ee_product_id": f"EE-{erpnext_name}",
+                }
+            return None  # A: no map row
 
-        with patch("frappe.db.exists", side_effect=_exists_side_effect):
+        with patch("frappe.db.get_value", side_effect=_get_value_side_effect):
             result = transfer_push._unmapped_items_for_dn(dn)
 
         self.assertEqual(result, ["A"])

@@ -97,6 +97,14 @@ class TestBuildPushPayloadHsnGate(unittest.TestCase):
             patch.object(item_push, "_ean_barcode", return_value=None),
             patch.object(item_push, "_resolve_tax_rate", return_value=18.0),
             patch.object(item_push, "_is_missing_or_zero", return_value=False),
+            # gh#158 flow addition: build_push_payload now looks up
+            # TaxRuleName from Item Tax Template → EasyEcom Tax Rule Map.
+            # This suite only exercises the HSN gate — stub the resolver
+            # to a non-None value so the TaxRuleName reason doesn't leak
+            # into the reasons list under test.
+            patch.object(
+                item_push, "_resolve_tax_rule_name", return_value="GST18",
+            ),
         ):
             return item_push.build_push_payload(
                 item, executor=executor, enabled_companies=["X"]
