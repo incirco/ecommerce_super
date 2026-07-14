@@ -14,12 +14,21 @@ from ecommerce_super.easyecom.field_mapping import sandbox
 
 
 class TestAllowedNamesSets(unittest.TestCase):
-    """The three role-specific allow-lists must match the spec exactly."""
+    """The three role-specific allow-lists must match the spec exactly.
+
+    Updated to include _SAFE_BUILTINS ({int, float, round}) — the sandbox
+    was widened to expose numeric-coercion builtins that safe_eval already
+    exposes at runtime. Without matching the compile-time allowlist to
+    the runtime surface, valid expressions like `int(round(x))` fail
+    to save.
+    """
+
+    _SAFE_BUILTINS = frozenset({"int", "float", "round"})
 
     def test_condition_role(self) -> None:
         self.assertEqual(
             sandbox.ALLOWED_NAMES_CONDITION,
-            frozenset({"source_doc", "source_payload"}),
+            frozenset({"source_doc", "source_payload"}) | self._SAFE_BUILTINS,
         )
 
     def test_computed_role(self) -> None:
@@ -33,7 +42,7 @@ class TestAllowedNamesSets(unittest.TestCase):
                     "sum_path",
                     "filter_path",
                 }
-            ),
+            ) | self._SAFE_BUILTINS,
         )
 
     def test_custom_python_role(self) -> None:
@@ -48,7 +57,7 @@ class TestAllowedNamesSets(unittest.TestCase):
                     "filter_path",
                     "value",
                 }
-            ),
+            ) | self._SAFE_BUILTINS,
         )
 
 

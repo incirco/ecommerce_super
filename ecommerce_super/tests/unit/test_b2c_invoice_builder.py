@@ -244,7 +244,13 @@ class TestGstinStateCode(unittest.TestCase):
 class TestResolveLineItems(unittest.TestCase):
 
     def test_resolves_via_item_map(self):
-        with patch("frappe.db.get_value", side_effect=["Item-A", "1001.99.00"]):
+        # First call: EasyEcom Item Map lookup → item_code string.
+        # Second call: Item metadata → dict with gst_hsn_code + batch/stock flags
+        # (production widened Item lookup to include has_batch_no + is_stock_item).
+        with patch("frappe.db.get_value", side_effect=[
+            "Item-A",
+            {"gst_hsn_code": "1001.99.00", "has_batch_no": 0, "is_stock_item": 1},
+        ]):
             result = _resolve_line_items(_order())
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["item_code"], "Item-A")
@@ -269,9 +275,13 @@ class TestResolveLineItems(unittest.TestCase):
             {"sku": "SKU-B", "item_quantity": 2,
              "breakup_types": {"Item Amount Excluding Tax": 200.00}},
         ]
+        # Item-A's Item Map lookup returns "Item-A" — but qty=0 short-
+        # circuits BEFORE the Item metadata lookup, so no second call
+        # for that line. Item-B: Map returns "Item-B", then Item meta.
         with patch("frappe.db.get_value", side_effect=[
             "Item-A",
-            "Item-B", "8517.12.00",
+            "Item-B",
+            {"gst_hsn_code": "8517.12.00", "has_batch_no": 0, "is_stock_item": 1},
         ]):
             result = _resolve_line_items(_order(items=items))
         self.assertEqual(len(result), 1)
@@ -293,7 +303,10 @@ class TestResolveLineItems(unittest.TestCase):
             "sku": "SKU-X", "item_quantity": 1,
             "selling_price": 118, "tax_rate": 18,
         }]
-        with patch("frappe.db.get_value", side_effect=["Item-X", "1001.99.00"]):
+        with patch("frappe.db.get_value", side_effect=[
+            "Item-X",
+            {"gst_hsn_code": "1001.99.00", "has_batch_no": 0, "is_stock_item": 1},
+        ]):
             result = _resolve_line_items(_order(items=items))
         self.assertEqual(result[0]["rate"], 100.00)
 
