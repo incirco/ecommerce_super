@@ -10,6 +10,7 @@ Live symptoms this suite locks:
 """
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,10 +19,10 @@ from unittest.mock import patch
 def _item(**kw):
     """Minimal Sales Order Item stand-in.
 
-    gh#201: `item_tax_rate` is None by default so tests that don't
-    care about per-line rates fall through to SO-level blend (preserves
-    original test intent). Set explicitly per-test to exercise the
-    per-line-rate primary path.
+    gh#201 (v2): the per-line tax rate now comes from the SO's applied
+    `item_wise_tax_detail` (see `_tax` / `_so`), NOT from the item. Keep
+    `item_tax_rate` (default None) only so a test can prove it is
+    ignored; it no longer influences the multiplier.
     """
     defaults = {
         "idx": 1,
@@ -36,10 +37,27 @@ def _item(**kw):
     return SimpleNamespace(**defaults)
 
 
-def _so(name="SO-TEST", net_total=0, grand_total=0):
+def _so(name="SO-TEST", net_total=0, grand_total=0, taxes=None):
+    """Minimal Sales Order stand-in.
+
+    gh#201: `taxes` holds Sales Taxes and Charges rows carrying
+    `item_wise_tax_detail` (see `_tax`). Empty by default so tests that
+    don't care about per-line rates fall through to the SO-level blend.
+    """
     return SimpleNamespace(
-        name=name, net_total=net_total, grand_total=grand_total
+        name=name, net_total=net_total, grand_total=grand_total,
+        taxes=taxes or [],
     )
+
+
+def _tax(item_wise):
+    """Sales Taxes and Charges row stand-in.
+
+    `item_wise` is a dict keyed by item_code with value [rate, amount],
+    exactly as ERPNext serializes `item_wise_tax_detail` (a JSON string).
+    Split GST is modelled as two rows (one CGST, one SGST).
+    """
+    return SimpleNamespace(item_wise_tax_detail=json.dumps(item_wise))
 
 
 def _run(builder_name, so_item, so=None):
@@ -326,137 +344,126 @@ class TestParametricSweepAllDimensions(unittest.TestCase):
         self._assert_ee_inversion_holds(p, item, so)
 
 
-class TestGh201MixedTaxRatePerLineFix(unittest.TestCase):
-    """gh#201 regression — `_item_price_and_discount` now reads the
-    LINE's own `item_tax_rate` (ERPNext-populated from Item Tax
-    Template + Sales Taxes and Charges) instead of the SO's blended
-    `grand_total / net_total`. This lets mixed-rate SOs (5% + 18%
-    lines in one order) round-trip correctly through EE, which backs
-    tax out at each item's own ProductTaxCode.
+class TestGh201PerLineTaxFromAppliedDetail(unittest.TestCase):
+    """gh#201 (v2) — `_line_tax_multiplier` reads the rate ACTUALLY
+    APPLIED to the line from the SO's `item_wise_tax_detail` (keyed by
+    item_code, value [rate, amount]), instead of summing the item's full
+    Item Tax Template (`item_tax_rate`).
 
-    Pre-#201 behavior (now inverted): both lines were grossed at the
-    blended 1.115 multiplier — low-rate over-grossed by ~6%, high-rate
-    under-grossed by ~5%. Post-#201: each line grosses at its own rate.
+    The first gh#201 fix summed `item_tax_rate`, which under India
+    Compliance lists every account head (output + input + RCM, intra +
+    inter) — e.g. 30% for a 5% item. That over-grossed every B2B line by
+    30/5. Live symptom SO-2610402: SI ₹2,080 vs SO ₹1,680, every line
+    inflated ×1.2381 (= 1.30 / 1.05). This suite locks the applied-rate
+    source, the CGST+SGST row summation, and the fallback.
     """
 
-    def _mixed_rate_so(self):
-        """SO with 2 lines: item A at 5% GST, item B at 18% GST.
-        Line totals: A=105, B=118. SO net=200, grand=223. Blended
-        mult would be 1.115 — but with gh#201 each line uses its own."""
-        return _so(net_total=200, grand_total=223)
-
-    def test_low_rate_line_grossed_at_own_5pct_not_blended(self):
-        """Line A (5% GST) now uses 1.05, not blended 1.115. EE backs
-        out cleanly to taxable=100."""
-        item_a = _item(
-            qty=1, rate=100, discount_amount=0,
-            item_tax_rate='{"Output Tax IGST - MMPL": 5.0}',
-        )
-        so = self._mixed_rate_so()
-        p = _run("build_new_b2b_item", item_a, so=so)
-        self.assertEqual(p["Price"], 105.0)  # 100 * 1.05, per-line
-        # EE inversion at 5%: 105.0 / 1.05 = 100.00 exactly.
+    def test_low_rate_line_grossed_at_own_5pct(self):
+        """Line A (5% GST) grosses at its own 1.05, not the SO blend."""
+        item = _item(item_code="ITEM-A", qty=1, rate=100, discount_amount=0)
+        so = _so(net_total=200, grand_total=223, taxes=[
+            _tax({"ITEM-A": [5.0, 5.0], "ITEM-B": [18.0, 18.0]})])
+        p = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p["Price"], 105.0)  # 100 * 1.05
         self.assertAlmostEqual(p["Price"] / 1.05, 100.0, places=2)
 
-    def test_high_rate_line_grossed_at_own_18pct_not_blended(self):
-        """Line B (18% GST) now uses 1.18, not blended 1.115. EE backs
-        out cleanly to taxable=100."""
-        item_b = _item(
-            qty=1, rate=100, discount_amount=0,
-            item_tax_rate='{"Output Tax IGST - MMPL": 18.0}',
-        )
-        so = self._mixed_rate_so()
-        p = _run("build_new_b2b_item", item_b, so=so)
-        self.assertEqual(p["Price"], 118.0)  # 100 * 1.18, per-line
-        # EE inversion at 18%: 118.0 / 1.18 = 100.00 exactly.
+    def test_high_rate_line_grossed_at_own_18pct(self):
+        """Line B (18% GST) grosses at its own 1.18 from the same SO."""
+        item = _item(item_code="ITEM-B", qty=1, rate=100, discount_amount=0)
+        so = _so(net_total=200, grand_total=223, taxes=[
+            _tax({"ITEM-A": [5.0, 5.0], "ITEM-B": [18.0, 18.0]})])
+        p = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p["Price"], 118.0)  # 100 * 1.18
         self.assertAlmostEqual(p["Price"] / 1.18, 100.0, places=2)
 
-    def test_cgst_sgst_split_sums_to_same_as_single_igst(self):
-        """CGST 9% + SGST 9% is arithmetically the same as IGST 18% —
-        the helper sums the rate dict, so both shapes yield identical
-        Price/discount output. This locks the sum-based approach."""
-        item_igst = _item(
-            qty=2, rate=100, discount_amount=20,
-            item_tax_rate='{"Output Tax IGST - MMPL": 18.0}',
-        )
-        item_split = _item(
-            qty=2, rate=100, discount_amount=20,
-            item_tax_rate=(
-                '{"Output Tax CGST - MMPL": 9.0, '
-                '"Output Tax SGST - MMPL": 9.0}'
-            ),
-        )
-        so = _so(net_total=200, grand_total=236)
-        p_igst = _run("build_new_b2b_item", item_igst, so=so)
-        p_split = _run("build_new_b2b_item", item_split, so=so)
+    def test_cgst_sgst_split_rows_sum_like_single_igst(self):
+        """Intra-state: a CGST 9% row + SGST 9% row sum to the same 18%
+        as a single IGST row. Rates sum ACROSS the applied tax rows for
+        the item."""
+        item_igst = _item(item_code="IG", qty=2, rate=100, discount_amount=20)
+        so_igst = _so(net_total=200, grand_total=236,
+                      taxes=[_tax({"IG": [18.0, 36.0]})])
+        item_split = _item(item_code="SP", qty=2, rate=100, discount_amount=20)
+        so_split = _so(net_total=200, grand_total=236, taxes=[
+            _tax({"SP": [9.0, 18.0]}), _tax({"SP": [9.0, 18.0]})])
+        p_igst = _run("build_new_b2b_item", item_igst, so=so_igst)
+        p_split = _run("build_new_b2b_item", item_split, so=so_split)
         self.assertEqual(p_igst["Price"], p_split["Price"])
         self.assertEqual(p_igst["itemDiscount"], p_split["itemDiscount"])
 
-    def test_falls_back_to_so_blend_when_item_tax_rate_empty(self):
-        """Backward-compat: items without `item_tax_rate` (older data,
-        stub items in tests) still hit the SO-level blended fallback.
+    def test_ignores_item_tax_rate_template_sum_uses_applied_rate(self):
+        """gh#201 live regression (SO-2610402 line 2, 01Test). The item's
+        Item Tax Template sums to 30% across account heads, but the tax
+        ACTUALLY applied is 5%. Must gross at 5% (Price 1050), NOT 30%
+        (Price 1300, the pre-fix bug)."""
+        item = _item(
+            item_code="FG20295", qty=1, rate=1000, discount_amount=0,
+            item_tax_rate=json.dumps({
+                "Output Tax CGST - MMPL": 2.5, "Output Tax SGST - MMPL": 2.5,
+                "Output Tax IGST - MMPL": 5.0, "Input Tax CGST - MMPL": 2.5,
+                "Input Tax SGST - MMPL": 2.5, "Input Tax IGST - MMPL": 5.0,
+                "Output Tax IGST RCM - MMPL": 5.0,
+                "Output Tax CGST RCM - MMPL": 2.5,
+                "Output Tax SGST RCM - MMPL": 2.5,
+            }),  # sums to 30
+        )
+        so = _so(net_total=1000, grand_total=1050,
+                 taxes=[_tax({"FG20295": [5.0, 50.0]})])
+        p = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p["Price"], 1050.0)  # 1000 * 1.05, NOT 1300
+        self.assertEqual(p["itemDiscount"], 0)
+
+    def test_so2610402_button_line_discounted(self):
+        """SO-2610402 line 1: BUTTON qty 2, rate 300, 50% disc, applied
+        5%. Pre-fix over-grossed at 30% → Price/itemDiscount 780; post-fix
+        grosses at the real 5%."""
+        item = _item(item_code="FG06476-CHOUHAN", qty=2, rate=300,
+                     discount_amount=300)
+        so = _so(net_total=600, grand_total=630,
+                 taxes=[_tax({"FG06476-CHOUHAN": [5.0, 30.0]})])
+        p = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p["Price"], 630.0)         # (300+300) * 1.05
+        self.assertEqual(p["itemDiscount"], 630.0)  # 300 * 2 * 1.05
+        # EE gross (630*2)-630 = 630 → taxable 600 at 5%. Matches SO.
+        self.assertAlmostEqual(
+            (p["Price"] * 2 - p["itemDiscount"]) / 1.05, 600.0, places=2)
+
+    def test_falls_back_to_so_blend_when_no_tax_rows(self):
+        """No Sales Taxes and Charges rows → SO-level blended fallback.
         Every pre-#201 test in this module relies on this path."""
-        item = _item(qty=1, rate=100, discount_amount=0, item_tax_rate=None)
-        so = _so(net_total=100, grand_total=118)  # 18% blended = 1.18
-        p = _run("build_new_b2b_item", item, so=so)
-        self.assertEqual(p["Price"], 118.0)  # matches SO-blend fallback
-
-    def test_falls_back_when_item_tax_rate_is_empty_string(self):
-        """ERPNext may serialize an empty dict as '{}' or ''. Both
-        should fall through to SO-level blend, not crash or return
-        multiplier=1.0."""
-        item = _item(qty=1, rate=100, discount_amount=0, item_tax_rate="")
-        so = _so(net_total=100, grand_total=118)
+        item = _item(item_code="X", qty=1, rate=100, discount_amount=0)
+        so = _so(net_total=100, grand_total=118)  # blend = 1.18
         p = _run("build_new_b2b_item", item, so=so)
         self.assertEqual(p["Price"], 118.0)
 
-    def test_falls_back_when_item_tax_rate_is_empty_dict_string(self):
-        item = _item(qty=1, rate=100, discount_amount=0, item_tax_rate="{}")
-        so = _so(net_total=100, grand_total=118)
+    def test_falls_back_when_item_not_in_tax_detail(self):
+        """Tax rows exist but none reference this item_code → fallback,
+        not a silent 0% (which would send Price=rate ungrossed)."""
+        item = _item(item_code="X", qty=1, rate=100, discount_amount=0)
+        so = _so(net_total=100, grand_total=118,
+                 taxes=[_tax({"OTHER-ITEM": [5.0, 5.0]})])
+        p = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p["Price"], 118.0)  # blend, not 1.05
+
+    def test_falls_back_when_tax_detail_malformed(self):
+        """Malformed JSON in a tax row must not crash the push; skip the
+        row and fall through to the SO-level blend."""
+        item = _item(item_code="X", qty=1, rate=100, discount_amount=0)
+        bad = SimpleNamespace(item_wise_tax_detail="{not valid json")
+        so = _so(net_total=100, grand_total=118, taxes=[bad])
         p = _run("build_new_b2b_item", item, so=so)
         self.assertEqual(p["Price"], 118.0)
-
-    def test_falls_back_when_item_tax_rate_is_malformed(self):
-        """Malformed JSON in item_tax_rate must not crash the push;
-        fall through to SO-level blend."""
-        item = _item(
-            qty=1, rate=100, discount_amount=0,
-            item_tax_rate="{not valid json",
-        )
-        so = _so(net_total=100, grand_total=118)
-        p = _run("build_new_b2b_item", item, so=so)
-        self.assertEqual(p["Price"], 118.0)
-
-    def test_dict_type_item_tax_rate_supported_not_only_json_string(self):
-        """ERPNext sometimes passes the field as a dict directly (in
-        memory, not just serialized). The helper must handle both."""
-        item = _item(
-            qty=1, rate=100, discount_amount=0,
-            item_tax_rate={"Output Tax IGST - MMPL": 12.0},
-        )
-        # SO blend would be 1.0 (uniform 0-tax) — proves per-line took precedence.
-        so = _so(net_total=100, grand_total=100)
-        p = _run("build_new_b2b_item", item, so=so)
-        self.assertEqual(p["Price"], 112.0)  # 100 * 1.12, from dict
 
     def test_mixed_so_discount_grossed_at_own_line_rate(self):
-        """gh#197 + gh#201 interaction: discounted line on mixed-rate
-        SO should apply BOTH the per-line multiplier AND the qty
-        multiplier to the discount."""
-        item = _item(
-            qty=4, rate=200, discount_amount=50,
-            item_tax_rate='{"Output Tax IGST - MMPL": 18.0}',
-        )
-        # SO is mixed-rate (won't match line B's 18% blended) —
-        # exact SO totals irrelevant since per-line kicks in.
-        so = _so(net_total=1000, grand_total=1200)
+        """gh#197 + gh#201 interaction: a discounted line on a mixed-rate
+        SO applies BOTH the per-line multiplier AND the qty multiplier."""
+        item = _item(item_code="B18", qty=4, rate=200, discount_amount=50)
+        # SO blend (1200/1000 = 1.20) deliberately != the line's own 18%.
+        so = _so(net_total=1000, grand_total=1200,
+                 taxes=[_tax({"B18": [18.0, 144.0]})])
         p = _run("build_new_b2b_item", item, so=so)
-        # Price = (200 + 50) * 1.18 = 295 per-unit (line rate, NOT blend 1.2)
-        self.assertEqual(p["Price"], 295.0)
-        # itemDiscount = 50 * 4 * 1.18 = 236 per-line (also at line rate)
-        self.assertEqual(p["itemDiscount"], 236.0)
-        # EE gross: (295 * 4) - 236 = 944; backs out at 18% → taxable 800
-        # (which equals 4 * 200 = 800, the SO line's taxable). Correct.
+        self.assertEqual(p["Price"], 295.0)         # (200+50) * 1.18
+        self.assertEqual(p["itemDiscount"], 236.0)  # 50 * 4 * 1.18
+        # EE gross (295*4)-236 = 944; backs out at 18% → taxable 800.
         self.assertAlmostEqual(
-            (p["Price"] * 4 - p["itemDiscount"]) / 1.18, 800.0, places=2,
-        )
+            (p["Price"] * 4 - p["itemDiscount"]) / 1.18, 800.0, places=2)
