@@ -327,5 +327,121 @@ class TestRefusal9ShippingAddressMissing(unittest.TestCase):
         )
 
 
+class TestRefusal10FractionalQuantity(unittest.TestCase):
+    """Post-#197/#201 addition: EE contract does not support fractional
+    B2B quantities on either module. Rather than silently truncating
+    (2.5 → 2, under-shipping the customer), gate at submit time so the
+    FDE gets a clear message pointing at the offending row + item."""
+
+    def _patched_context(self, so, customer=None):
+        """The same patch-cluster the other refusal tests use."""
+        return [
+            patch.object(frappe, "get_doc", return_value=customer or _make_customer()),
+            patch.object(
+                frappe, "get_cached_doc", return_value=_make_item_doc()
+            ),
+            patch(
+                "ecommerce_super.easyecom.flows.b2b_sales.gating.resolve_ee_customer_id",
+                return_value="EE-CUST",
+            ),
+            patch(
+                "ecommerce_super.easyecom.flows.b2b_sales.gating.resolve_ee_sku",
+                return_value="EE-SKU",
+            ),
+        ]
+
+    def test_throws_with_actionable_message_naming_row_and_item(self) -> None:
+        so = _make_so(items=[
+            _make_so_item(item_code="FG06476-CHOUHAN", qty=2.5, idx=1),
+        ])
+        ctxs = self._patched_context(so)
+        for c in ctxs:
+            c.__enter__()
+        try:
+            with self.assertRaises(frappe.ValidationError) as exc_ctx:
+                validate_preconditions(so, _make_account(ecs_b2b_module="New B2B"))
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+        msg = str(exc_ctx.exception)
+        # Message must name the item, row, and qty for actionable debugging.
+        self.assertIn("FG06476-CHOUHAN", msg)
+        self.assertIn("2.5", msg)
+        self.assertIn("row 1", msg.lower().replace("row ", "row ").replace("(row ", "row ")
+                     if "row " in msg.lower() else msg)  # tolerant of formatting
+        self.assertIn("EasyEcom does not support fractional", msg)
+        # Actionable next step: mention UOM change or splitting.
+        self.assertTrue(
+            "UOM" in msg or "split" in msg.lower(),
+            f"Expected actionable guidance (UOM or split), got: {msg}",
+        )
+
+    def test_whole_number_qty_passes(self) -> None:
+        """Regression guard: whole-number qty must not trip the gate."""
+        so = _make_so(items=[_make_so_item(qty=5)])
+        ctxs = self._patched_context(so)
+        for c in ctxs:
+            c.__enter__()
+        try:
+            validate_preconditions(so, _make_account(ecs_b2b_module="New B2B"))
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+    def test_whole_number_float_qty_passes(self) -> None:
+        """Common ERPNext shape: qty stored as float 5.0. Must pass —
+        `5.0 != int(5.0)` is False, so gate lets it through."""
+        so = _make_so(items=[_make_so_item(qty=5.0)])
+        ctxs = self._patched_context(so)
+        for c in ctxs:
+            c.__enter__()
+        try:
+            validate_preconditions(so, _make_account(ecs_b2b_module="New B2B"))
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+
+    def test_fractional_qty_on_second_line_names_correct_row(self) -> None:
+        """Multi-line SO where only line 2 is fractional — throw must
+        point at line 2, not line 1 or a generic 'some line'."""
+        so = _make_so(items=[
+            _make_so_item(item_code="A", qty=1, idx=1),
+            _make_so_item(item_code="B", qty=1.75, idx=2),
+        ])
+        ctxs = self._patched_context(so)
+        for c in ctxs:
+            c.__enter__()
+        try:
+            with self.assertRaises(frappe.ValidationError) as exc_ctx:
+                validate_preconditions(so, _make_account(ecs_b2b_module="New B2B"))
+        finally:
+            for c in ctxs:
+                c.__exit__(None, None, None)
+        msg = str(exc_ctx.exception)
+        self.assertIn("B", msg)
+        self.assertIn("1.75", msg)
+        # Line 1 (item A) must NOT be named — it's fine.
+        # Match a standalone 'A' surrounded by quote/space, not e.g. "SO-1A".
+        self.assertNotIn("'A'", msg)
+
+    def test_new_b2b_and_old_b2b_both_gated(self) -> None:
+        """Both B2B modules share the EE fractional-qty constraint —
+        gate must fire regardless of ecs_b2b_module value."""
+        for module in ("New B2B", "Old B2B"):
+            with self.subTest(module=module):
+                so = _make_so(items=[_make_so_item(qty=3.3)])
+                ctxs = self._patched_context(so)
+                for c in ctxs:
+                    c.__enter__()
+                try:
+                    with self.assertRaises(frappe.ValidationError):
+                        validate_preconditions(
+                            so, _make_account(ecs_b2b_module=module),
+                        )
+                finally:
+                    for c in ctxs:
+                        c.__exit__(None, None, None)
+
+
 if __name__ == "__main__":
     unittest.main()
