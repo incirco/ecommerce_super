@@ -17,6 +17,37 @@ The `[Unreleased]` section holds anything on `main` that hasn't yet been deploye
 
 ---
 
+## [2026-07-15]
+
+### Fixed
+
+- **§11 B2B outbound: `itemDiscount` sent per-unit but EE applies it per-LINE** — EE multiplies `Price` by Quantity but subtracts `itemDiscount` once (not multiplied). Our `_item_price_and_discount()` was emitting both per-unit, so any qty>1 discounted line was under-discounted by `(qty-1) * discount` → EE invoice > SO grand_total. Live symptom on SO-2610401 line 2 (qty=5, rate=300, 50% off, 5% IGST): EE returned taxable ₹2,700 (expected ₹1,500); SI grand_total ₹5,984 vs SO ₹4,724. Undiscounted lines in the same SO reconciled exactly, isolating the defect. Fix: multiply `discount * qty * tax_multiplier`. Ships with 4 new regression tests including the exact live scenario; `test_qty1_discounted_line_unchanged_by_gh197` proves prior qty=1 cases still hold. Blast radius: every B2B order pushed with a qty>1 discounted line since [PR #185] shipped is affected — audit `EasyEcom B2B Order Map` where EE total ≠ SO grand_total. [#197], [PR #198], [`9b09ac5`].
+
+### Why this slipped past the recent testing sweep
+
+Every prior test used qty=1, where per-unit and per-line are numerically identical. `test_old_b2b_variant_same_pricing_math` used qty=2 but its assertion baked the buggy formula in. Root discipline gap: tests audited code paths, not input dimensions — a parametric sweep over qty ∈ {0, 1, 2, 5} on discounted lines would have caught this immediately. Adopted as a testing rule going forward: for any per-line arithmetic, cover both qty=1 and qty>1 with a value that would expose an off-by-multiplier bug.
+
+---
+
+## [2026-07-14]
+
+### Added
+
+- **60+ new B2B unit tests across two comprehensive testing rounds** — after live-order deploy-test-fix cycles proved slow, added a proactive test sweep to lock every §11 code path shipped since the B2B rollout. Round 1 (25 tests, [PR #194]): `test_invoice_mirror_gh181_discount` (5), `test_payload_builder_gh184_discount` (5), `test_item_push_sparse_update_gh158` (4), `test_gh181_part2_append_taxes` (8), plus assorted GSP handler date/session tests. Round 2 (24 tests, [PR #195]): `test_manual_repush` (5), `test_gh166_ip_allowlist_ratelimit` (13, including the qty-0 disable case), `test_gh176_queued_orphan_reclaim` (11). Total B2B module coverage: 244 tests. [PR #194], [`7474382`], [PR #195], [`45c2001`].
+- **Round-2 tests uncovered live latent bugs and shipped fixes for them** — writing `test_gh166_ip_allowlist_ratelimit` exposed that `int(limit_raw or 6)` coerced a legitimate `0` (documented as "set to 0 to disable") to `6`, defeating the disable path. Fixed with explicit `None` check. Same suite exposed `_enforce_ip_allowlist` crashing on non-string values from `frappe.db.get_value` (dict fallback path); added `isinstance(str)` guard. `_reassert_si_dates_for_submit` crashed when `getdate` received a MagicMock in tests; wrapped in `try/except (TypeError, ValueError, AttributeError)`. All three now covered by explicit regression tests. [PR #195], [`45c2001`].
+- **4 pre-existing stale test modules restored to green** — after adopting the new comprehensive testing discipline, 4 test modules failing since before the B2B rollout got proper root-cause fixes (not skips): `test_field_mapping_sandbox` (allowlist assertions didn't include the `_SAFE_BUILTINS` frozenset added when the sandbox was widened to expose `int/float/round`), `test_item_push_candidate_sweep` (`TaxRuleName` reason leaked into HSN-gate tests after [#158] shipped — added `patch.object(_resolve_tax_rule_name)`), `test_validate_pre_submit_item_map_guard` ([#93] reopener widened helper from `frappe.db.exists` to `frappe.db.get_value` with a dict result — tests still mocked `exists`), `test_b2c_invoice_builder` (mock returned string not dict). Test suite is now fully green with no skips. [PR #196], [`e5167e3`].
+
+### Fixed
+
+- **§11.5.1 comprehensive perms audit for the `EasyEcom Integration` role** — after [#166] hardening shipped, a series of `PermissionError` throws on live `/einvoice/update` requests surfaced additional DocTypes the role couldn't read/write during the SI insert → submit → mint chain (SO-2610397: "User don't have permissions to select/read this account"). Expanded `_PERMISSIONS` in the `create_easyecom_integration_user` patch to cover ~50 DocTypes: `Account`, `Cost Center`, `Warehouse`, `GST Settings`, `Item Tax Template`, `Serial and Batch Bundle`, `GL Entry`, `Payment Ledger Entry`, `Print Format`, etc. Also added a re-run patch (`expand_integration_role_perms`) that reapplies `_ensure_role_permissions()` on already-deployed sites so live sites pick up the expanded set without re-running the whole user-creation patch. [#166] followup, [PR #192], [`790a1a9`], [PR #193], [`71f9559`].
+- **§11.5.1 mirror SI taxes: `charge_type='Actual'` displayed rate=0 on invoice PDFs** — [PR #189] populated `SI.taxes` from EE's per-item breakdown using `charge_type='Actual'` which set a fixed `tax_amount` but left `rate` at 0 → grand_total was correct but the printed invoice showed "IGST @ 0.00%". Reworked to `charge_type='On Net Total'` with derived rate, so both grand_total and the print format now show the correct GST %. Also fixed the GST account lookup: prior code used `frappe.db.get_value` filtered on the child DocType which silently returned `None` even when the row existed. Rewrote to iterate `GST Settings.gst_accounts` child table directly. [#181] part 2 followup #2, [PR #190], [`a1e66cf`], [PR #191], [`ba8baac`].
+
+### Discipline change
+
+- **Testing methodology now includes parametric input sweeps** — surfacing multiple regressions during Round 2 that Round 1 didn't catch highlighted a gap: exhaustive code-path coverage doesn't guarantee input-dimension coverage. Going forward, per-line arithmetic tests must sweep at least `qty ∈ {1, N>1}` and boundary values must include documented sentinels (e.g. `0` for "disabled" flags). This rule surfaced #197 next-day when SO-2610401 shipped with qty>1, so the change is already paying back.
+
+---
+
 ## [2026-07-13]
 
 ### Added
@@ -172,6 +203,7 @@ When adding new entries, append the corresponding reference here.
 [#176]: https://github.com/incirco/ecommerce_super/issues/176
 [#181]: https://github.com/incirco/ecommerce_super/issues/181
 [#184]: https://github.com/incirco/ecommerce_super/issues/184
+[#197]: https://github.com/incirco/ecommerce_super/issues/197
 
 [PR #119]: https://github.com/incirco/ecommerce_super/pull/119
 [PR #132]: https://github.com/incirco/ecommerce_super/pull/132
@@ -199,6 +231,15 @@ When adding new entries, append the corresponding reference here.
 [PR #179]: https://github.com/incirco/ecommerce_super/pull/179
 [PR #182]: https://github.com/incirco/ecommerce_super/pull/182
 [PR #185]: https://github.com/incirco/ecommerce_super/pull/185
+[PR #189]: https://github.com/incirco/ecommerce_super/pull/189
+[PR #190]: https://github.com/incirco/ecommerce_super/pull/190
+[PR #191]: https://github.com/incirco/ecommerce_super/pull/191
+[PR #192]: https://github.com/incirco/ecommerce_super/pull/192
+[PR #193]: https://github.com/incirco/ecommerce_super/pull/193
+[PR #194]: https://github.com/incirco/ecommerce_super/pull/194
+[PR #195]: https://github.com/incirco/ecommerce_super/pull/195
+[PR #196]: https://github.com/incirco/ecommerce_super/pull/196
+[PR #198]: https://github.com/incirco/ecommerce_super/pull/198
 
 [`1841623`]: https://github.com/incirco/ecommerce_super/commit/1841623
 [`1a1d81a`]: https://github.com/incirco/ecommerce_super/commit/1a1d81a
@@ -220,6 +261,14 @@ When adding new entries, append the corresponding reference here.
 [`991c3a9`]: https://github.com/incirco/ecommerce_super/commit/991c3a9
 [`4e7ed2f`]: https://github.com/incirco/ecommerce_super/commit/4e7ed2f
 [`d69a44e`]: https://github.com/incirco/ecommerce_super/commit/d69a44e
+[`790a1a9`]: https://github.com/incirco/ecommerce_super/commit/790a1a9
+[`71f9559`]: https://github.com/incirco/ecommerce_super/commit/71f9559
+[`7474382`]: https://github.com/incirco/ecommerce_super/commit/7474382
+[`45c2001`]: https://github.com/incirco/ecommerce_super/commit/45c2001
+[`e5167e3`]: https://github.com/incirco/ecommerce_super/commit/e5167e3
+[`a1e66cf`]: https://github.com/incirco/ecommerce_super/commit/a1e66cf
+[`ba8baac`]: https://github.com/incirco/ecommerce_super/commit/ba8baac
+[`9b09ac5`]: https://github.com/incirco/ecommerce_super/commit/9b09ac5
 [`a21b353`]: https://github.com/incirco/ecommerce_super/commit/a21b353
 [`a60b2c6`]: https://github.com/incirco/ecommerce_super/commit/a60b2c6
 [`a6d2eed`]: https://github.com/incirco/ecommerce_super/commit/a6d2eed
