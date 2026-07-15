@@ -158,3 +158,21 @@ def validate_preconditions(so: Any, ee_account: Any) -> None:
             ).format(so.name),
             title=_("Shipping Address Missing"),
         )
+
+    # 10. Whole-number qty on every line (EE contract: fractional
+    #     quantities are not supported on either B2B module). Silently
+    #     truncating (2.5 → 2) under-ships the customer, so throw at
+    #     submit time and let the FDE fix the SO before push.
+    for item in so.items or []:
+        qty = float(item.qty or 0)
+        if qty != int(qty):
+            frappe.throw(
+                _(
+                    "Item {0} (row {1}) has fractional quantity {2}. "
+                    "EasyEcom does not support fractional B2B quantities. "
+                    "Change the item's UOM to a whole-number one, or "
+                    "split the line into whole-number qty rows before "
+                    "submitting."
+                ).format(item.item_code, item.idx, qty),
+                title=_("Fractional Quantity Not Supported"),
+            )
