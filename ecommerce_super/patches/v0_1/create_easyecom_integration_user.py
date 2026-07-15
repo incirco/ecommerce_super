@@ -166,31 +166,79 @@ def _ensure_role() -> None:
 
 
 def _ensure_role_permissions() -> None:
+    """Grant `EasyEcom Integration` role perms via Frappe's safe API.
+
+    gh#200 fix — the previous implementation inserted `Custom DocPerm`
+    rows directly via `frappe.new_doc("Custom DocPerm")`. Frappe's
+    permission-resolution rule is: **if ANY Custom DocPerm exists for
+    a DocType, ALL standard DocPerms are ignored**. On doctypes that
+    had no Custom DocPerm rows before our patch (Territory, Customer
+    Group, Print Format, Country, UOM, Fiscal Year, and every core
+    master), our raw insert became the ONLY permission row, wiping
+    every other role's access when Permission Manager next resolved.
+
+    Fix: use `setup_custom_perms(doctype)` first, which copies all
+    standard DocPerms into Custom DocPerms (preserving every other
+    role's rules). Then add our row via `add_permission()` + set
+    each flag via `update_permission_property()`. This is what
+    Permission Manager itself does when a human first customizes a
+    doctype.
+
+    The `if_owner=0` filter is required — Frappe uniques Custom DocPerm
+    on `(parent, role, permlevel, if_owner)`, so leaving it out will
+    match if-owner rows too and mis-report the "already exists" state.
+    """
+    from frappe.permissions import (
+        add_permission,
+        setup_custom_perms,
+        update_permission_property,
+    )
+
+    # All possible Custom DocPerm flags. Perms not in the dict for a
+    # given doctype are explicitly set to 0 so re-runs converge on the
+    # exact allowlist (idempotent narrowing as well as widening).
+    _ALL_FLAGS = (
+        "read", "write", "create", "delete", "submit", "cancel",
+        "amend", "report", "export", "import", "email", "print",
+        "share", "select",
+    )
+
     for doctype, perms in _PERMISSIONS.items():
         if not frappe.db.exists("DocType", doctype):
             continue
+
+        # Step 1: if this doctype has NO Custom DocPerm rows yet, copy
+        # every standard DocPerm into Custom DocPerm FIRST. This is
+        # the critical guard: without it, our insert would be the only
+        # Custom row and shadow the standard set. setup_custom_perms
+        # is idempotent and a no-op when Custom rows already exist.
+        setup_custom_perms(doctype)
+
+        # Step 2: ensure a Custom DocPerm exists for our role at
+        # permlevel=0. add_permission creates it with `read=1` by
+        # default; subsequent flags get set via update_permission_property.
         existing = frappe.db.get_value(
             "Custom DocPerm",
-            {"parent": doctype, "role": ROLE_NAME, "permlevel": 0},
+            {"parent": doctype, "role": ROLE_NAME, "permlevel": 0, "if_owner": 0},
             "name",
         )
-        if existing:
-            # Update to align with the current allowlist — new fields
-            # we grant later flow to existing perm rows.
-            frappe.db.set_value(
-                "Custom DocPerm", existing, perms, update_modified=True
+        if not existing:
+            add_permission(doctype, ROLE_NAME, permlevel=0)
+
+        # Step 3: reconcile every flag to what the allowlist specifies.
+        # validate=False skips per-doctype re-validation on each call
+        # (the final state is consistent; validate at the end would be
+        # nicer but not necessary — Frappe validates on next read).
+        for flag in _ALL_FLAGS:
+            desired = 1 if perms.get(flag) else 0
+            update_permission_property(
+                doctype, ROLE_NAME, permlevel=0,
+                ptype=flag, value=desired, validate=False,
             )
-            continue
-        row = frappe.new_doc("Custom DocPerm")
-        row.parent = doctype
-        row.parenttype = "DocType"
-        row.parentfield = "permissions"
-        row.role = ROLE_NAME
-        row.permlevel = 0
-        for k, v in perms.items():
-            row.set(k, v)
-        row.flags.ignore_permissions = True
-        row.insert()
+
+        # Nudge meta cache so downstream reads in the same request see
+        # the freshly-inserted rows.
+        frappe.clear_cache(doctype=doctype)
 
 
 def _ensure_user() -> None:

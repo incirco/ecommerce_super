@@ -151,3 +151,11 @@ ecommerce_super.patches.v0_1.add_gsp_security_fields
 # account_heads. Symptom on SO-2610397: 'PermissionError: User don't
 # have permissions to select/read this account.'
 ecommerce_super.patches.v0_1.expand_integration_role_perms
+# gh#200 REPAIR (2026-07-15): undo the shadow damage caused by the
+# two patches above. Prior _ensure_role_permissions inserted Custom
+# DocPerm rows without first copying standard DocPerms — that shadowed
+# every other role's access on Territory, Customer Group, Print Format,
+# and every core master. Repair deletes our rows to restore standard
+# perms, then re-adds via the FIXED path (setup_custom_perms first).
+# Reported by @garv999 on live16version.frappe.cloud (MMPL prod).
+ecommerce_super.patches.v0_1.repair_gh200_unshadow_standard_perms
