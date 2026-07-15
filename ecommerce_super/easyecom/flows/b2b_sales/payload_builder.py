@@ -86,38 +86,36 @@ def get_shipping_charge(so: Any) -> float:
 
 
 def _item_price_and_discount(so_item: Any, so: Any) -> tuple[float, float]:
-    """gh#184 + gh#187: EE's `Price` and `itemDiscount` are TAX-INCLUSIVE
-    (EE backs the tax out at its own tax_rate to get net taxable_value).
-    ERPNext's `so_item.rate` and `discount_amount` are TAX-EXCLUSIVE.
+    """gh#184 + gh#187 + gh#197: EE's `Price` is applied PER-UNIT
+    (multiplied by Quantity) but `itemDiscount` is applied PER-LINE
+    (subtracted once, not multiplied). Both are TAX-INCLUSIVE.
 
-    Two corrections rolled together:
-      1. Reconstruct list price from post-discount rate + discount
-         (was: sending `rate` alone, which EE would treat as already
-         post-discount AND then subtract itemDiscount again → double
-         count. Symptom on SO-2610392: EE invoice ₹0 for a ₹315 SO.)
-      2. Gross up by the SO's tax multiplier so EE's back-out of tax
-         yields the correct net (was: EE received tax-exclusive
-         numbers, treated them as inclusive, and returned a total ₹15
-         short of SO grand_total. Symptom on SO-2610394: EE=₹300 vs
-         SO=₹315.)
+    Three corrections rolled into this helper:
+      1. gh#184 — reconstruct list price from post-discount rate +
+         discount (was: sending `rate` alone → double count).
+      2. gh#187 — gross up by SO tax multiplier so EE's back-out
+         yields the correct net.
+      3. gh#197 — multiply `itemDiscount` by qty so a qty>1 discounted
+         line is discounted correctly. EE math for a discounted line
+         is `(Price * qty) - itemDiscount`; sending itemDiscount per-
+         unit under-discounts by (qty-1)*discount. Live symptom on
+         SO-2610401 line 2 (qty=5, 50% discount): EE returned
+         taxable=2700 instead of 1500 → SI = ₹5,984 vs SO = ₹4,724.
 
     Formula:
         tax_multiplier = so.grand_total / so.net_total
-        Price          = (rate + discount) * tax_multiplier
-        itemDiscount   = discount * tax_multiplier
+        Price          = (rate + discount) * tax_multiplier   # per-unit
+        itemDiscount   = discount * qty * tax_multiplier      # per-line
 
-    For SO-2610394 (rate=300, discount=300, tax_multiplier=1.05):
-        Price = 600 * 1.05 = 630
-        itemDiscount = 300 * 1.05 = 315
-        EE gross = 630 - 315 = 315  →  taxable = 300, tax = 15
-        Matches SO grand_total ₹315 exactly.
-
-    For a no-discount, zero-tax SO: tax_multiplier=1.0, discount=0 →
-    Price = rate, itemDiscount = 0. Same as before both fixes for that
-    edge case.
+    For SO-2610401 line 2 (rate=300, discount=300, qty=5, tax=5%):
+        Price        = (300 + 300) * 1.05 = 630
+        itemDiscount = 300 * 5 * 1.05     = 1575
+        EE gross     = (630 * 5) - 1575   = 1575
+        Backs out to taxable=1500, tax=75. Matches SO's ₹1,575 line total.
     """
     rate = float(so_item.rate or 0)
     discount = float(so_item.discount_amount or 0)
+    qty = float(so_item.qty or 0)
 
     net_total = float(getattr(so, "net_total", 0) or 0)
     grand_total = float(getattr(so, "grand_total", 0) or 0)
@@ -126,7 +124,10 @@ def _item_price_and_discount(so_item: Any, so: Any) -> tuple[float, float]:
     )
 
     price = round((rate + discount) * tax_multiplier, 2)
-    discount_incl_tax = round(discount * tax_multiplier, 2)
+    # gh#197: EE applies itemDiscount ONCE per line (not per unit),
+    # so we pre-multiply by qty here to hand EE the correct line-total
+    # discount. Zero-discount lines are unaffected (0 * anything = 0).
+    discount_incl_tax = round(discount * qty * tax_multiplier, 2)
     return price, discount_incl_tax
 
 
