@@ -170,13 +170,22 @@ def _item_price_and_discount(so_item: Any, so: Any) -> tuple[float, float]:
 
 
 def build_old_b2b_item(so: Any, so_item: Any) -> dict:
-    """Old B2B line item — Quantity as STRING."""
+    """Old B2B line item — Quantity as STRING.
+
+    EE contract: fractional quantities are not supported on either
+    B2B module. New B2B builder coerces `int(qty)`; this builder
+    stringifies the same int (not `so_item.qty` directly) so a
+    fractional ERPNext qty like 2.5kg gets a consistent str("2"),
+    NOT "2.5" which EE would reject. Matches New B2B truncation
+    intent; a "throw at push time" gate for fractional-qty SOs is
+    the next iteration and would let the FDE know earlier.
+    """
     price, discount = _item_price_and_discount(so_item, so)
     return {
         "OrderItemId": f"{so.name}-line-{so_item.idx}",
         "Sku": resolve_ee_sku_or_throw(so_item.item_code),
         "productName": so_item.item_name,
-        "Quantity": str(so_item.qty),
+        "Quantity": str(int(float(so_item.qty or 0))),
         "Price": price,
         "itemDiscount": discount,
     }

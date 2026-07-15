@@ -236,30 +236,43 @@ class TestParametricSweepAllDimensions(unittest.TestCase):
 
     # --- Sweep 2: fractional qty (kg/L B2B items) ----------------------
 
-    def test_fractional_qty_2point5_no_discount(self):
-        """MMPL sells industrial goods in kg/L — qty=2.5 must not
-        break the multiply-then-round. Old B2B preserves via str(qty);
-        New B2B truncates to int (see KNOWN_LOSS test below)."""
+    def test_fractional_qty_price_math_still_works_at_float_precision(self):
+        """qty=2.5 in the arithmetic (rate * qty * mult) must not
+        introduce paise noise even though EE won't accept the
+        fractional Quantity itself (see qty-coercion test below).
+        Locks the math side; qty coercion is a separate contract."""
         item = _item(qty=2.5, rate=100, discount_amount=0)
         so = _so(net_total=250, grand_total=262.5)  # 5% on 250
         p = _run("build_new_b2b_item", item, so=so)
         self._assert_ee_inversion_holds(p, item, so)
 
-    def test_fractional_qty_new_b2b_truncates_to_int_KNOWN_LOSS(self):
-        """New B2B builder does `int(so_item.qty)` — 2.5 becomes 2.
-        This test locks that CURRENT behavior; a fractional-qty SO will
-        under-report Quantity to EE. Flagging as a data-loss risk for
-        MMPL onboarding review. Not a bug in _item_price_and_discount
-        itself, but a bug in build_new_b2b_item's qty coercion that
-        arithmetic-based tests here would miss."""
+    def test_ee_contract_both_builders_coerce_fractional_qty_to_int(self):
+        """EE contract: fractional quantities are NOT supported on
+        either B2B module. Both builders must coerce to int, else
+        Old B2B would send "2.5" and be rejected by EE.
+
+        Pre-#197 followup: Old B2B used `str(so_item.qty)` which sent
+        "2.5" literally — a real bug. Now uses `str(int(qty))` for
+        parity with New B2B's `int(qty)`.
+        """
         item = _item(qty=2.5, rate=100, discount_amount=0)
         so = _so(net_total=250, grand_total=262.5)
-        p = _run("build_new_b2b_item", item, so=so)
-        # This is the DEFECT: EE receives qty=2, not 2.5.
-        self.assertEqual(p["Quantity"], 2)
-        # Old B2B uses str(so_item.qty) which preserves "2.5" — verify.
+
+        p_new = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p_new["Quantity"], 2)  # int, matches EE contract
+
         p_old = _run("build_old_b2b_item", item, so=so)
-        self.assertEqual(p_old["Quantity"], "2.5")
+        self.assertEqual(p_old["Quantity"], "2")  # str-of-int, NOT "2.5"
+
+    def test_ee_contract_whole_number_qty_unaffected_by_coercion(self):
+        """Regression guard: whole-number qty must survive the int()
+        coercion without any change on either builder."""
+        item = _item(qty=5, rate=100, discount_amount=0)
+        so = _so(net_total=500, grand_total=525)
+        p_new = _run("build_new_b2b_item", item, so=so)
+        self.assertEqual(p_new["Quantity"], 5)
+        p_old = _run("build_old_b2b_item", item, so=so)
+        self.assertEqual(p_old["Quantity"], "5")
 
     # --- Sweep 3: high qty (bulk B2B) ----------------------------------
 
