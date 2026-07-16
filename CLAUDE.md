@@ -271,6 +271,40 @@ Where Frappe ships a primitive that fits, **use it**. Don't reinvent. The integr
 
 **Direct calls to Redis, RQ, the Frappe socket layer, or any Frappe-internal primitive bypassing the public API are not permitted in this codebase.** If a feature needs something Frappe doesn't expose, surface to the user before implementing — it's likely either available through a public API you missed, or genuinely needs the methodology team to bless an exception.
 
+### The rule extends up the stack: ERPNext + India Compliance
+
+The Frappe-primitives rule applies with equal force one level up. **On the ERP side we follow standard ERPNext and India Compliance behaviors; we never touch, patch, or reimplement them. Translation happens only at the marketplace-integration boundary (the EE payload builder, the mirror handler, etc.).**
+
+Concretely, when the answer to "what number goes here?" is already computed by ERPNext or India Compliance, **read it** — do not recompute. When the answer to "what side-effect should fire?" is already wired into ERPNext's document lifecycle, **let it fire** — do not simulate.
+
+| Need | ERPNext / India Compliance primitive | Our integration's layer |
+| --- | --- | --- |
+| Applied tax rate per SO/SI line | `so.taxes[].item_wise_tax_detail[item_code]` (JSON: `[rate, amount]`, populated by `calculate_taxes_and_totals.py`) | Read at the EE boundary. Do NOT sum `so_item.item_tax_rate` — that dict lists template rates across every account_head (Output + Input + RCM) and sums to ~30% for a genuinely 5% item. See `#201` → `#204`. |
+| Tax amount per line | Same JSON, `[1]` position | Read at boundary |
+| Tax-inclusive line total | `si_item.amount + Σ(item's tax_amount across si.taxes rows)` | Read at boundary. Do NOT reconstruct from `rate * qty * multiplier`. |
+| Pre-discount list rate | `si_item.price_list_rate` | Read |
+| SO / SI totals | `net_total`, `grand_total`, `total_taxes_and_charges` | Read |
+| Populate `SI.taxes` child table | `si.taxes_and_charges = "<Template Name>"` + per-line `si_item.item_tax_template = "GST 5%"` → ERPNext computes rows via `set_missing_values()` | Set the template + `item_tax_template`; DO NOT hand-append rows with `charge_type="Actual"` or `"On Net Total"` and a manually-derived rate. See `#206`. |
+| SI dates | `set_posting_time = 1` + `posting_date`; `payment_terms_template = ""` to disable term-driven `due_date` recomputation | Set at insert. DO NOT invent shadow fields like `transaction_date` on SI (not native — it belongs to Sales Order). See `#205`. |
+| Freeze `posting_date` across re-validates | `set_posting_time = 1` at insert | Set once; do NOT `db_set` after the fact to "heal" drift — the flag prevents the drift. |
+| IRN / e-invoice payload | India Compliance's `generate_e_invoice.py` + `E Invoice Log` DocType | Trigger via IC's public entrypoint. DO NOT build the GSTN JSON payload ourselves. |
+| E-way bill payload | India Compliance's `generate_e_waybill_json.py` + `E Waybill Log` DocType | Trigger via IC's public entrypoint. DO NOT rebuild. |
+| GL entries on SI submit | ERPNext's `make_gl_entries()` fires automatically on `si.submit()` | Let it fire. DO NOT insert rows into `tabGL Entry` directly. |
+| Stock ledger on SI with `update_stock=1` | ERPNext auto-creates Stock Ledger Entries | Let it happen. DO NOT bypass the flag by inserting SLEs directly. |
+| Custom DocPerm on framework doctypes | `frappe.permissions.add_permission()` + `setup_custom_perms()` + `update_permission_property()` | Use the API. DO NOT `frappe.new_doc("Custom DocPerm").insert()` — Frappe's rule is "if ANY Custom DocPerm exists, ALL standard DocPerms are ignored," so a raw insert shadows every other role's access. See `#200`. |
+
+**Never touch the standard code path.** No monkeypatches of `frappe.model`, `frappe.core`, `erpnext.controllers`, `erpnext.accounts`, or India Compliance modules. No direct SQL against standard tables (`tabSales Invoice`, `tabGL Entry`, `tabTax Rule`, etc.) to bypass validation. No `frappe.db.set_value` on doctype fields whose `on_change` side-effects matter. If a standard behavior is wrong for us, either (a) subclass with `hooks.override_doctype_class`, (b) attach a `doc_events` hook, or (c) file with the ERPNext / India Compliance project. **Never patch, never silently work around.**
+
+**Before writing any tax / pricing / discount / GL / e-invoice / permission code:** grep the ERPNext or India Compliance source for whether the number / row / behavior is already produced by their code. If it is, use it. If you're unsure, ask the user before writing your own — the answer is almost always "there's a primitive; find it."
+
+**Why this rule exists** (evidence from July 2026, all live-money incidents):
+
+- `#200` — we reinvented `frappe.permissions.add_permission()` by inserting `Custom DocPerm` rows directly. Wiped Territory / Customer Group / Print Format permissions on MMPL prod (`live16version.frappe.cloud`) on the next `bench migrate`. Fixed in `#202`.
+- `#201` — we reinvented tax-rate lookup by summing `so_item.item_tax_rate` (Item Tax Template dict listing every account_head). Over-billed SO-2610402 by ~24%. Fixed by @garv999 in `#204` using ERPNext's own `item_wise_tax_detail`.
+- `#205`, `#206`, `#207` — audit follow-ups documenting three more reinventions in the invoice mirror: a fake `transaction_date` on SI (belongs to SO, not SI); hand-built `SI.taxes` rows instead of `Sales Taxes and Charges Template` + per-item `item_tax_template` (visibly wrong on any mixed-rate SO); dead-code fallback tiers in `_resolve_line_items`.
+
+Each reinvention cost real money on live orders and days of forensic work. The rule pays for itself the first time it prevents an incident.
+
 ---
 
 ## Conventions and style
