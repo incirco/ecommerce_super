@@ -21,11 +21,32 @@ The `[Unreleased]` section holds anything on `main` that hasn't yet been deploye
 
 ### Fixed
 
-- **§11 B2B outbound: `itemDiscount` sent per-unit but EE applies it per-LINE** — EE multiplies `Price` by Quantity but subtracts `itemDiscount` once (not multiplied). Our `_item_price_and_discount()` was emitting both per-unit, so any qty>1 discounted line was under-discounted by `(qty-1) * discount` → EE invoice > SO grand_total. Live symptom on SO-2610401 line 2 (qty=5, rate=300, 50% off, 5% IGST): EE returned taxable ₹2,700 (expected ₹1,500); SI grand_total ₹5,984 vs SO ₹4,724. Undiscounted lines in the same SO reconciled exactly, isolating the defect. Fix: multiply `discount * qty * tax_multiplier`. Ships with 4 new regression tests including the exact live scenario; `test_qty1_discounted_line_unchanged_by_gh197` proves prior qty=1 cases still hold. Blast radius: every B2B order pushed with a qty>1 discounted line since [PR #185] shipped is affected — audit `EasyEcom B2B Order Map` where EE total ≠ SO grand_total. [#197], [PR #198], [`9b09ac5`].
+- **§11 B2B outbound: `itemDiscount` sent per-unit but EE applies it per-LINE** — EE multiplies `Price` by Quantity but subtracts `itemDiscount` once (not multiplied). Our `_item_price_and_discount()` was emitting both per-unit, so any qty>1 discounted line was under-discounted by `(qty-1) * discount` → EE invoice > SO grand_total. Live symptom on SO-2610401 line 2 (qty=5, rate=300, 50% off, 5% IGST): EE returned taxable ₹2,700 (expected ₹1,500); SI grand_total ₹5,984 vs SO ₹4,724. Undiscounted lines in the same SO reconciled exactly, isolating the defect. Fix: multiply `discount * qty * tax_multiplier`. Ships with 4 new regression tests including the exact live scenario; `test_qty1_discounted_line_unchanged_by_gh197` proves prior qty=1 cases still hold. Blast radius: every B2B order pushed with a qty>1 discounted line since [PR #185] shipped is affected — audit `EasyEcom B2B Order Map` where EE total ≠ SO grand_total. [#197], [PR #198], [`91dc575`].
+- **§11 B2B outbound: mixed-GST-rate SOs used SO-level blended tax multiplier** — uncovered by the post-#197 parametric input sweep. `_item_price_and_discount()` computed `tax_multiplier = so.grand_total / so.net_total` — correct only when every line has the same GST rate. On a mixed-rate SO (5% + 18% together), low-rate items were over-grossed by ~6% and high-rate items under-grossed by ~5%. EE backs tax out at each item's own ProductTaxCode, so a blend-based Price would not round-trip. Not seen in MMPL production yet (uniform-rate luck); pure prevention. Fix: new `_line_tax_multiplier()` reads `so_item.item_tax_rate` (ERPNext-populated JSON from Item Tax Template + Sales Taxes and Charges); sums the rate dict → per-line %. Handles single IGST and CGST+SGST split identically. Falls back to SO-level blend when `item_tax_rate` is empty/malformed (backward compat). Ships with 9 unit tests. [#201], [PR #198], [`91dc575`].
+- **§11.5.1 gh#166 regression: `_ensure_role_permissions` shadowed standard perms on Territory, Customer Group, Print Format** — the [#166] user + role patch inserted `Custom DocPerm` rows via `frappe.new_doc()` directly. Frappe's rule: if ANY Custom DocPerm exists for a DocType, ALL standard DocPerms are ignored. On doctypes with no prior Custom rows (Territory, Customer Group, Print Format, and every core master in `_PERMISSIONS`), our raw insert became the ONLY perm row — wiping every other role's access after Permission Manager next resolved. Live symptom on `live16version.frappe.cloud` (MMPL prod): normal users lost visibility of Territory, Customer Group, Print Format immediately after `bench migrate`. Fix: rewrote `_ensure_role_permissions()` to use `setup_custom_perms(doctype)` FIRST (copies standard DocPerms into Custom DocPerms, preserving every other role's rules), then `add_permission()` + `update_permission_property()` per flag. Also added `if_owner=0` to the existence check so if-owner rows don't false-match. Ships with 9 unit tests locking every safety invariant (setup-before-add ordering, idempotent narrowing including zeros, security-sensitive doctype allowlist regression guard). Reported by @garv999. [#200], [PR #202], [`715d16f`].
 
-### Why this slipped past the recent testing sweep
+### Added
 
-Every prior test used qty=1, where per-unit and per-line are numerically identical. `test_old_b2b_variant_same_pricing_math` used qty=2 but its assertion baked the buggy formula in. Root discipline gap: tests audited code paths, not input dimensions — a parametric sweep over qty ∈ {0, 1, 2, 5} on discounted lines would have caught this immediately. Adopted as a testing rule going forward: for any per-line arithmetic, cover both qty=1 and qty>1 with a value that would expose an off-by-multiplier bug.
+- **§11 B2B outbound: submit-time gate rejecting fractional qty lines** — EE contract: fractional quantities are not supported on either B2B module. Prior code silently truncated (2.5 → 2) inside the payload builders, under-shipping the customer without warning. New precondition #10 in `validate_preconditions()` throws with an actionable message naming the item, row, and qty, and pointing to two remediation paths (change UOM to whole-number, or split the line). Fires for both Old B2B and New B2B; the constraint is EE-side, not module-side. Ships with 5 unit tests. The `int()` coercion in the payload builders remains as defense-in-depth for any historical Draft SOs that predate this gate. [PR #198], [`91dc575`].
+- **§11 B2B outbound: Old B2B builder now coerces fractional qty consistently with New B2B** — prior code sent `str(so_item.qty)` which for qty=2.5 would emit "2.5" and be hard-rejected by EE. Fixed to `str(int(float(qty)))` matching New B2B's `int()` behavior. Defense-in-depth for any historical Draft SO that predates the fractional-qty gate. [PR #198], [`91dc575`].
+- **Repair patch for [#200] on live sites** — `repair_gh200_unshadow_standard_perms.py` runs on next `bench migrate`. Per affected doctype: (1) delete our Custom DocPerm rows (standard perms auto-restore on freshly-shadowed doctypes), (2) clear meta cache, (3) commit, (4) call the FIXED `_ensure_role_permissions()` to re-add our perms via the safe path. Delete filter scoped to `role="EasyEcom Integration"` only — pre-existing site customizations on other roles are never touched. Mid-run crash leaves site in "standard perms restored, integration missing" state (safer failure mode than the reverse). [PR #202], [`715d16f`].
+
+### Discipline changes (from today's discoveries)
+
+- **Parametric input sweep is the discipline change from #197** — every prior test used qty=1, where per-unit and per-line arithmetic are numerically identical. `test_old_b2b_variant_same_pricing_math` used qty=2 but its assertion baked the buggy formula in. Root gap: tests audited code paths, not input dimensions. Sweep discipline (qty ∈ {0, 1, 2, 5} × all 5 GST rates × value edges) added to the same PR as #197 — and it immediately surfaced [#201] mixed-rate blend bug + the Old B2B `str("2.5")` bug in the same sitting.
+- **Frappe framework primitives always > direct DocType inserts** — [#200] is the second regression this month caused by reaching for `frappe.new_doc(...)` on framework doctypes instead of the documented public API. The public API exists precisely to handle side-effects (like copying standard DocPerms before adding Custom ones) that direct inserts skip. Rule adopted: before writing a `frappe.new_doc(...)` on any core framework doctype (User, Role, Custom DocPerm, Property Setter, Custom Field, etc.), search `frappe/permissions.py` / `frappe/core/doctype/<x>/<x>.py` for a helper function first. If a helper exists, use it.
+
+### Deploy actions
+
+- `bench migrate` on any deployed site (MMPL first) — runs `repair_gh200_unshadow_standard_perms` and restores Territory / Customer Group / Print Format visibility for all non-integration users.
+
+### Verification
+
+- On MMPL after migrate: Permission Manager on Territory shows Territory Manager + System Manager + All + EasyEcom Integration (not just EasyEcom Integration alone).
+- Sales User account can list Customer Group and see Print Formats again.
+- Post-migrate integration smoke test: `/einvoice/update` still succeeds for a live SO (integration user still has its own perms via the re-add step).
+- Push a fresh qty>1 discounted B2B SO → EE invoice total = SO grand_total = mirrored SI grand_total.
+- Attempt to submit a B2B SO with a fractional-qty line → refused at submit time with actionable message.
 
 ---
 
@@ -204,6 +225,8 @@ When adding new entries, append the corresponding reference here.
 [#181]: https://github.com/incirco/ecommerce_super/issues/181
 [#184]: https://github.com/incirco/ecommerce_super/issues/184
 [#197]: https://github.com/incirco/ecommerce_super/issues/197
+[#200]: https://github.com/incirco/ecommerce_super/issues/200
+[#201]: https://github.com/incirco/ecommerce_super/issues/201
 
 [PR #119]: https://github.com/incirco/ecommerce_super/pull/119
 [PR #132]: https://github.com/incirco/ecommerce_super/pull/132
@@ -240,6 +263,7 @@ When adding new entries, append the corresponding reference here.
 [PR #195]: https://github.com/incirco/ecommerce_super/pull/195
 [PR #196]: https://github.com/incirco/ecommerce_super/pull/196
 [PR #198]: https://github.com/incirco/ecommerce_super/pull/198
+[PR #202]: https://github.com/incirco/ecommerce_super/pull/202
 
 [`1841623`]: https://github.com/incirco/ecommerce_super/commit/1841623
 [`1a1d81a`]: https://github.com/incirco/ecommerce_super/commit/1a1d81a
@@ -269,6 +293,8 @@ When adding new entries, append the corresponding reference here.
 [`a1e66cf`]: https://github.com/incirco/ecommerce_super/commit/a1e66cf
 [`ba8baac`]: https://github.com/incirco/ecommerce_super/commit/ba8baac
 [`9b09ac5`]: https://github.com/incirco/ecommerce_super/commit/9b09ac5
+[`91dc575`]: https://github.com/incirco/ecommerce_super/commit/91dc575
+[`715d16f`]: https://github.com/incirco/ecommerce_super/commit/715d16f
 [`a21b353`]: https://github.com/incirco/ecommerce_super/commit/a21b353
 [`a60b2c6`]: https://github.com/incirco/ecommerce_super/commit/a60b2c6
 [`a6d2eed`]: https://github.com/incirco/ecommerce_super/commit/a6d2eed
