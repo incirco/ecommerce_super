@@ -257,6 +257,13 @@ class EasyEcomClient:
                 headers["X-Idempotency-Key"] = idempotency_key
             if method != "GET":
                 headers["Content-Type"] = "application/json"
+            # gh#153 — send the correlation ID as an HTTP header so EE
+            # can persist + echo it back on the inbound /einvoice/update
+            # call. Closes the leg 1 → leg 3 traceability gap.
+            # (EE persistence is coordinated separately; this is the
+            # our-side half.)
+            if correlation_id:
+                headers["X-ECS-Correlation-Id"] = correlation_id
 
             try:
                 resp = requests.request(

@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "captured_from": "SO-2610392 (2026-07-12)",
+    "captures_incident": "gh#181 — 100% promo discount → taxable_value=0. Mirror must produce SI with rate=0 (not NULL, not skip the line). Preserved as a fixture so the zero-taxable-value edge case is always exercised.",
+    "endpoint": "/einvoice/update",
+    "http_method": "POST",
+    "bearer_redacted": true
+  },
+  "orders": {
+    "invoice_id": 176306012,
+    "invoice_number": "BMH1-2526-24",
+    "invoice_date": "2026-07-05",
+    "invoice_currency_code": "INR",
+    "reference_code": "SO-2610392",
+    "merchant_c_id": 342,
+    "warehouse_id": 53313,
+    "total_amount": 0,
+    "total_tax": 0,
+    "order_items": [
+      {
+        "sku": "FG06476-CHOUHAN",
+        "item_quantity": 1,
+        "taxable_value": 0,
+        "tax_rate": 5,
+        "igst": 0,
+        "cgst": 0,
+        "sgst": 0,
+        "utgst": 0,
+        "breakup_types": {
+          "Item Amount Excluding Tax": 285.7143,
+          "Promotion Discount Excluding Tax": -285.7143,
+          "Item Amount IGST": 14.2857,
+          "Promotion Discount IGST": -14.2857
+        }
+      }
+    ]
+  }
+}

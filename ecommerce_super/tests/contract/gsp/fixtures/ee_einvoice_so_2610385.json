@@ -1,0 +1,32 @@
+{
+  "_meta": {
+    "captured_from": "SO-2610385 (2026-07-11)",
+    "captures_incident": "gh#144 — post-fix Customer Map ee_c_id persistence. Payload uses merchant_c_id=342 which the fix ensured maps to the correct ERPNext Customer. Kept as a fixture so any future regression in the buyer-resolution path fails contract tests.",
+    "endpoint": "/einvoice/update",
+    "http_method": "POST",
+    "bearer_redacted": true
+  },
+  "orders": {
+    "invoice_id": 176305901,
+    "invoice_number": "BMH1-2526-15",
+    "invoice_date": "2026-07-01",
+    "invoice_currency_code": "INR",
+    "reference_code": "SO-2610385",
+    "merchant_c_id": 342,
+    "warehouse_id": 53313,
+    "total_amount": 315,
+    "total_tax": 15,
+    "order_items": [
+      {
+        "sku": "FG06476-CHOUHAN",
+        "item_quantity": 1,
+        "taxable_value": 300,
+        "tax_rate": 5,
+        "igst": 15,
+        "cgst": 0,
+        "sgst": 0,
+        "utgst": 0
+      }
+    ]
+  }
+}

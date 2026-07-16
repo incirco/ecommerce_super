@@ -287,6 +287,12 @@ def _handle_old_b2b_response(
             "request_payload": frappe.as_json(payload),
             "response_payload": frappe.as_json(response),
             "last_error": None,
+            # gh#153 — stamp the correlation ID that was sent on the
+            # outbound HTTP request as X-ECS-Correlation-Id. When EE
+            # echoes it back on inbound /einvoice/update, we can link
+            # the 3 legs of the flow. Fallback lookup via reference_code
+            # → this field when EE hasn't echoed.
+            "ecs_correlation_id": correlation_id,
         }
     )
     map_doc.insert(ignore_permissions=True)
@@ -386,6 +392,12 @@ def _handle_new_b2b_response(
             "request_payload": frappe.as_json(payload),
             "response_payload": frappe.as_json(response),
             "last_error": None,
+            # gh#153 — stamp the correlation ID that was sent on the
+            # outbound HTTP request as X-ECS-Correlation-Id. When EE
+            # echoes it back on inbound /einvoice/update, we can link
+            # the 3 legs of the flow. Fallback lookup via reference_code
+            # → this field when EE hasn't echoed.
+            "ecs_correlation_id": correlation_id,
         }
     )
     map_doc.insert(ignore_permissions=True)
