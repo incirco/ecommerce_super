@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "captured_from": "SO-2610382 (Garv, 2026-07-10)",
+    "captures_incident": "Same object-vs-array defensiveness as gh#142. /ewaybill/update uses the same envelope; contract tests exercise both shapes.",
+    "endpoint": "/ewaybill/update",
+    "http_method": "POST",
+    "bearer_redacted": true
+  },
+  "orders": {
+    "invoice_id": 176305783,
+    "reference_code": "SO-2610382",
+    "transporter_id": "29AABCU9603R1ZN",
+    "transporter_name": "ACME Transport Pvt Ltd",
+    "vehicle_number": "KA01AB1234",
+    "mode_of_transport": "Road",
+    "distance": 425
+  }
+}

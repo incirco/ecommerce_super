@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "captured_from": "EE contract doc §3 — the ORIGINAL specified shape",
+    "captures_incident": "Preserved as a regression fixture. Even though EE live-fires the object shape (gh#142), we must accept the array shape too — some EE modules may still send it, and any regression that breaks the array path is a compat regression.",
+    "endpoint": "/einvoice/update",
+    "http_method": "POST",
+    "bearer_redacted": true
+  },
+  "orders": [
+    {
+      "invoice_id": 176305783,
+      "invoice_number": "BMH1-2526-8",
+      "invoice_date": "2026-06-28",
+      "invoice_currency_code": "INR",
+      "reference_code": "SO-2610382",
+      "merchant_c_id": 342,
+      "warehouse_id": 53313,
+      "total_amount": 1304.73,
+      "total_tax": 199.03,
+      "order_items": [
+        {
+          "sku": "FG20077",
+          "item_quantity": 3,
+          "taxable_value": 1105.7034,
+          "tax_rate": 18,
+          "igst": 0,
+          "cgst": 99.5133,
+          "sgst": 99.5133,
+          "utgst": 0
+        }
+      ]
+    }
+  ]
+}
