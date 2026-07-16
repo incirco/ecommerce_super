@@ -304,48 +304,42 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
 
         # Per-unit net (post-promotion) price.
         #
-        # gh#181: source priority — the item-level `taxable_value` field
-        # is EE's authoritative post-promotion net amount. It already
-        # nets out any `Promotion Discount` from the breakup. Using it
-        # directly makes the SI match EE's grand_total on promo orders
+        # gh#181: the item-level `taxable_value` field is EE's
+        # authoritative post-promotion net amount. Using it directly
+        # makes the SI match EE's grand_total on promo orders
         # (SO-2610392 was ₹0 on EE but ₹285.71 on our SI because we
         # were reading pre-discount `Item Amount Excluding Tax` alone).
         #
-        # Fall through to breakup_types math (net of promo) if
-        # taxable_value is absent, then to selling_price / (1 + rate/100).
-        rate = None
-        # 1. Preferred: EE's own post-promo net.
-        if "taxable_value" in line and line.get("taxable_value") is not None:
-            try:
-                tv = float(line.get("taxable_value") or 0)
-                rate = round(tv / qty, 2) if qty else 0.0
-            except (TypeError, ValueError):
-                rate = None
-        # 2. Fallback: sum the breakup_types entries — Item Amount
-        # Excluding Tax + Promotion Discount Excluding Tax (negative,
-        # so subtracts). Handles any future discount categories the
-        # same way — we just sum all "Excluding Tax" keys.
-        if rate is None:
-            line_breakup = line.get("breakup_types") or {}
-            net = 0.0
-            for k, v in line_breakup.items():
-                if k.endswith("Excluding Tax"):
-                    try:
-                        net += float(v or 0)
-                    except (TypeError, ValueError):
-                        continue
-            if net > 0:
-                rate = round(net / qty, 2)
-        # 3. Final fallback: derive from selling_price + tax_rate.
-        # Coarser rounding but always lands a number when EE omits both
-        # taxable_value and breakup_types.
-        if rate is None:
-            selling_price = float(line.get("selling_price") or 0)
-            tax_rate = float(line.get("tax_rate") or 0)
-            gross_per_unit = selling_price / qty if qty else 0
-            rate = round(
-                gross_per_unit / (1 + tax_rate / 100), 2
-            ) if (1 + tax_rate / 100) else gross_per_unit
+        # gh#207: deleted two speculative fallback tiers (breakup_types
+        # sum, selling_price gross-to-net back-out). Both were added in
+        # gh#181 as defensive hedges against EE ever omitting
+        # `taxable_value`, but every observed MMPL payload has included
+        # it. Silent fallbacks with hand-rolled math violated the
+        # ERPNext-primitives-first rule (see CLAUDE.md): they were
+        # reinventing tax arithmetic that only exists because we
+        # speculated about a failure mode we've never observed. If EE
+        # ever does send a payload without `taxable_value`, this now
+        # fails loudly with the payload shape logged — MMPL ops sees
+        # the specific SO that broke, and we add a locked-behavior
+        # test for that observed shape (not for hypothetical ones).
+        raw_tv = line.get("taxable_value")
+        if raw_tv is None:
+            raise InvoiceMirrorError(
+                f"EE response line for sku={sku!r} (item_quantity={qty}) "
+                f"has no `taxable_value` — cannot mirror rate. "
+                f"Payload keys: {sorted(line.keys())!r}. "
+                f"Report this SO's EE response payload — the mirror was "
+                f"simplified in gh#207 to require taxable_value; if you "
+                f"see this, a real payload shape needs a test added."
+            )
+        try:
+            tv = float(raw_tv or 0)
+        except (TypeError, ValueError) as exc:
+            raise InvoiceMirrorError(
+                f"EE response line for sku={sku!r} has unparseable "
+                f"`taxable_value`={raw_tv!r}: {exc}"
+            ) from exc
+        rate = round(tv / qty, 2) if qty else 0.0
 
         hsn = frappe.db.get_value("Item", item_code, "gst_hsn_code")
 
