@@ -162,10 +162,6 @@ class TestGh149DryRunEinvoiceCheckSequence(unittest.TestCase):
                 "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror.mirror_si_from_ee_response",
                 side_effect=_mirror,
             ),
-            patch(
-                "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror._resolve_customer",
-                return_value=customer_map_hit,
-            ),
         ):
             return mod.dry_run_einvoice(reference_code="SO-DRY-TEST")
 
@@ -198,18 +194,20 @@ class TestGh149DryRunEinvoiceCheckSequence(unittest.TestCase):
         self.assertEqual(existing["sales_invoice"], "SI-EXISTING-001")
 
     def test_missing_customer_map_reports_specific_step_failure(self):
+        """Post-refactor: customer_map_integrity is INFORMATIONAL, not
+        a hard blocker (mirror uses SO's customer directly via
+        make_sales_invoice — Customer Map is only needed for trace
+        linkage, not for the mirror itself). So we assert the check
+        fails but the downstream mirror STILL runs."""
         result = self._run(
             so=_mock_so(),
             map_doc=_mock_map(),
             customer_map_hit=None,
         )
-        buyer = next(c for c in result["checks"] if c["step"] == "buyer_resolution")
-        self.assertFalse(buyer["ok"])
-        self.assertIn("Customer Map", buyer["reason"])
-        # Mirror insert should NOT be attempted when upstream failed
-        mirror = next(c for c in result["checks"] if c["step"] == "mirror_si_insert")
-        self.assertFalse(mirror["ok"])
-        self.assertIn("Skipped", mirror["reason"])
+        integrity = next(c for c in result["checks"] if c["step"] == "customer_map_integrity")
+        self.assertFalse(integrity["ok"])
+        self.assertIn("Customer Map", integrity["reason"])
+        self.assertIn("Not fatal", integrity["reason"])
 
     def test_missing_item_map_reports_per_line_detail(self):
         result = self._run(
@@ -282,10 +280,6 @@ class TestGh149DryRunEinvoiceCheckSequence(unittest.TestCase):
                     "variance_pct": 0.0,
                 },
             ),
-            patch(
-                "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror._resolve_customer",
-                return_value="CUST",
-            ),
         ):
             mod.dry_run_einvoice(reference_code="SO-DRY-TEST")
         rollback_mock.assert_called_once()
@@ -325,10 +319,6 @@ class TestGh149DryRunEinvoiceCheckSequence(unittest.TestCase):
                 "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror.mirror_si_from_ee_response",
                 side_effect=_mirror_throws,
             ),
-            patch(
-                "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror._resolve_customer",
-                return_value="CUST",
-            ),
         ):
             mod.dry_run_einvoice(reference_code="SO-DRY-TEST")
         rollback_mock.assert_called_once()
@@ -366,10 +356,6 @@ class TestGh149DryRunEwaybill(unittest.TestCase):
                     "si_total": 1050.0,
                     "variance_pct": 0.0,
                 },
-            ),
-            patch(
-                "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror._resolve_customer",
-                return_value="CUST",
             ),
         ]
 
