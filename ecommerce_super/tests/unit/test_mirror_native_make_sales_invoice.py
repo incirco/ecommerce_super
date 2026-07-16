@@ -24,7 +24,9 @@ Post-refactor invariants (what these tests lock):
   5. Idempotency — same EE invoice_id → same SI, no duplicates.
 
   6. Variance check — SI (from SO) vs EE.total_amount → throw
-     InvoiceMirrorVariance if divergence >1%.
+     InvoiceMirrorVariance if divergence > VARIANCE_THRESHOLD_PCT
+     (0.01% — tightened post-refactor from the historical 1% ceiling
+     per user decision that ANY real divergence needs human review).
 
   7. Missing prerequisites throw InvoiceMirrorError (no SO, no
      invoice_id, stale SO reference).
@@ -287,7 +289,8 @@ class TestPerItemQtyOverride(unittest.TestCase):
 
 
 class TestVarianceCheck(unittest.TestCase):
-    """SI (built from SO) vs EE.total_amount — throw if divergence >1%."""
+    """SI (built from SO) vs EE.total_amount — throw if divergence >
+    VARIANCE_THRESHOLD_PCT (0.01%)."""
 
     def _run(self, si_grand_total, ee_total):
         si = _si_stub(grand_total=si_grand_total)

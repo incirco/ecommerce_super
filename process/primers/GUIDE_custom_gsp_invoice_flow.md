@@ -354,7 +354,7 @@ Toggles (§4.4) **never disable idempotency** — they only gate whether NIC IRP
 | `ecommerce_super/patches/v0_1/add_gsp_basic_auth_secret_field.py` | Installs the Custom Field on EE Account |
 | `ecommerce_super/patches/v0_1/add_b2b_mode2_sales_invoice_fields.py` | Installs the Custom Fields on Sales Invoice |
 | `ecommerce_super/tests/unit/test_gsp_auth.py` | 19 unit tests for auth helpers |
-| `ecommerce_super/tests/unit/test_b2b_invoice_mirror.py` | 30 unit tests for the SI find/create substrate |
+| `ecommerce_super/tests/unit/test_mirror_native_make_sales_invoice.py` | 53 unit tests for the SI find/create substrate (post-refactor: mirror uses ERPNext's `make_sales_invoice(so.name)` primitive; replaces the old `test_b2b_invoice_mirror.py` + 3 sibling files) |
 
 ---
 
@@ -676,7 +676,7 @@ You'd end up with two SIs (the Mode 1 submitted one with IRN, the Mode 2 draft o
 | File | Tests | Coverage |
 |---|---|---|
 | `ecommerce_super/tests/unit/test_gsp_auth.py` | 19 | Basic auth verifier (incl. multi-account, blank secret), Bearer mint (hash storage, TTL), Bearer validate (valid/expired/unknown) |
-| `ecommerce_super/tests/unit/test_b2b_invoice_mirror.py` | 30 | SI find/create substrate, IRN field extraction, variance checks |
+| `ecommerce_super/tests/unit/test_mirror_native_make_sales_invoice.py` | 53 | SI find/create substrate (via ERPNext `make_sales_invoice(so.name)`), IRN passthrough, variance checks (0.01% threshold), per-item qty override, multi-currency, warehouse resolution, payment terms copy. Replaces the pre-refactor `test_b2b_invoice_mirror.py` + `test_invoice_mirror_gh181_discount.py` + `test_gh206_mirror_uses_erpnext_tax_template.py` + `test_gh214_mirror_gst_context.py`. |
 | `ecommerce_super/tests/unit/test_b2b_polling_id_backfill.py` | 6 | Polling ID backfill (shared with §11 Phase 1) |
 | `ecommerce_super/tests/unit/test_b2b_fast_confirm.py` | 6 | Fast-confirm queue check |
 | `ecommerce_super/tests/unit/test_b2b_polling_derivation.py` | 19 | Polling status derivation |

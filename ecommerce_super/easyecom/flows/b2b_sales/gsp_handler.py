@@ -165,10 +165,10 @@ def find_or_create_si_for_gsp(
         # receive an error response and the SI stays in Draft awaiting
         # review — better than silently shipping wrong money.
         #
-        # Small-variance case (≤ VARIANCE_THRESHOLD_PCT, currently 1%)
-        # still returns silently: the mirror never raises for those,
-        # so this except doesn't fire. Only >1% drift lands here, and
-        # that's exactly the case we want to surface.
+        # Small-variance case (≤ VARIANCE_THRESHOLD_PCT, currently
+        # 0.01%) still returns silently: the mirror never raises for
+        # those, so this except doesn't fire. Only >0.01% drift lands
+        # here, and that's exactly the case we want to surface.
         si_name = frappe.db.get_value(
             "Sales Invoice",
             {"ecs_easyecom_invoice_id": ee_invoice_id},

@@ -88,7 +88,7 @@ class TestVarianceNoLongerSwallowed(unittest.TestCase):
                 "mirror_si_from_ee_response",
                 side_effect=InvoiceMirrorVariance(
                     "SI SI-DRAFT-XYZ total ₹1200 vs EE total ₹1000 — +20.0% "
-                    "variance exceeds 1% threshold."
+                    "variance exceeds 0.01% threshold."
                 ),
             ),
             patch.object(mod, "_post_variance_comment_on_si"),

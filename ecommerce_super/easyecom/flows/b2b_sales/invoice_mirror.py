@@ -32,7 +32,9 @@ the primary construction primitive:
   5. `si.insert()` — IC's chain runs on the fully-copied SO context,
      producing correct tax computation without any hand-picked fields.
   6. Variance check — SI grand_total (from SO) vs EE total_amount
-     (from EE) — throw `InvoiceMirrorVariance` if divergence >1%.
+     (from EE) — throw `InvoiceMirrorVariance` if divergence >
+     `VARIANCE_THRESHOLD_PCT` (0.01% — tightened post-refactor from
+     the historical 1% ceiling per user decision).
      Post-gh#218, gsp_handler catches + logs a Comment on Draft SI +
      surfaces HTTP error to EE. The SO wins for building; EE-side
      disagreement is a signal that surfaces loudly for human review.
