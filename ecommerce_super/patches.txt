@@ -159,3 +159,9 @@ ecommerce_super.patches.v0_1.expand_integration_role_perms
 # perms, then re-adds via the FIXED path (setup_custom_perms first).
 # Reported by @garv999 on live16version.frappe.cloud (MMPL prod).
 ecommerce_super.patches.v0_1.repair_gh200_unshadow_standard_perms
+# gh#205 part 2 (2026-07-16): heal any remaining pre-fix Draft SIs
+# (set_posting_time=0 with EE invoice_id back-ref) so the runtime
+# _reassert_si_dates_for_submit healer in gsp_handler.py can be safely
+# deleted. Idempotent — a no-op on fresh installs and sites that have
+# already been healed.
+ecommerce_super.patches.v0_1.heal_gh205_pre_fix_draft_si_dates
