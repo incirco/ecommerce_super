@@ -7,8 +7,10 @@ handlers. The lifecycle:
   2. find_or_create_si_for_gsp:
      - Look up SI by ecs_easyecom_invoice_id (idempotency)
      - Else look up via B2B Order Map.sales_invoice link
-     - Else look up via reference_code → Map → SO → create new SI from
-       payload using invoice_mirror's resolution logic
+     - Else look up via reference_code → Map → SO → create new SI by
+       calling `invoice_mirror.mirror_si_from_ee_response`, which
+       delegates to ERPNext's native `make_sales_invoice(so.name)`
+       (see PR #226 — the mirror no longer hand-copies fields).
   3. Submit the SI if Draft (IC requires submitted SI for generate_e_invoice)
   4. mint_irn_for_si:
      - If SI.irn already populated → return cached (idempotent)
@@ -112,7 +114,8 @@ def find_or_create_si_for_gsp(
                 frappe.db.commit()
             return si_name
 
-    # 3. Create new SI from EE payload via invoice_mirror's resolution.
+    # 3. Create new SI from the source SO via invoice_mirror
+    #    (which delegates to ERPNext's make_sales_invoice).
     if not reference_code:
         raise GSPHandlerError(
             "EE payload missing reference_code — cannot create new SI "
@@ -358,7 +361,8 @@ def _post_variance_comment_on_si(
 # migration patch `heal_gh205_pre_fix_draft_si_dates` (v0_1) runs the same
 # heal at migrate time; after that runs, no pre-fix Drafts remain and the
 # runtime healer is dead code. Fresh SIs from the current mirror insert
-# path (invoice_mirror.py:159) already carry set_posting_time=1, so the
+# path (invoice_mirror.py — see `si.set_posting_time = 1` in
+# `mirror_si_from_ee_response`) already carry the flag, so the
 # ERPNext-native date freeze works without our intervention.
 
 

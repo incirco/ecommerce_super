@@ -4,7 +4,7 @@ When EE generates the GST invoice (Mode 2 polling) or fires
 /einvoice/update (Mode 1 Custom GSP), this module creates the
 corresponding ERPNext Sales Invoice.
 
-**Architecture (gh#new, 2026-07-16):**
+**Architecture (PR #226, 2026-07-16):**
 
 Previously we hand-built the SI field-by-field from EE's response.
 That produced a long tail of "we forgot to copy field X" bugs — gh#201
@@ -181,7 +181,7 @@ def mirror_si_from_ee_response(
     # --- Copy payment_terms_template from SO ---
     # ERPNext's make_sales_invoice deliberately excludes this in its
     # `field_no_map` (line 1454 of sales_order.py). Per user decision
-    # (gh#new #4) we WANT the SO's payment terms flowed through to
+    # (PR #226, design Q4) we WANT the SO's payment terms flowed through to
     # the SI so the customer sees the same 90-day / net-30 / whatever
     # they agreed to on the SO. Override after the mapping.
     source_terms = frappe.db.get_value(

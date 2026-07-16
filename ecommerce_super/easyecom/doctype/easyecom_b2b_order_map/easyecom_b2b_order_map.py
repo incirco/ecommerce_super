@@ -11,12 +11,14 @@ actual push / cancel / polling flows.
 Status lifecycle:
   Pushed             — Old B2B successful sync push.
   Queued             — New B2B successful queue acknowledgement.
-  Invoice Pending    — polling detected EE invoice generation
-                       (Phase 1 marker; Phase 2 SI mirror NYI).
-  Invoice Generated  — Phase 2 SI mirror complete (NOT used in
-                       Phase 1; defined for forward compatibility).
-  Cancelled          — explicit cancel (ERPNext-initiated in
-                       Phase 1; EE-initiated webhook in Phase 2).
+  Invoice Pending    — polling detected EE invoice generation; the
+                       SI mirror has not yet run (or ran and raised
+                       a Discrepancy). Next §11.5.2 tick retries.
+  Invoice Generated  — SI mirror complete; `sales_invoice` link is
+                       populated on this Map. Set by §11.5.2 Mode 2
+                       polling + by /einvoice/update in Mode 1.
+  Cancelled          — explicit cancel (ERPNext-initiated or
+                       EE-initiated via inbound webhook).
 """
 
 from __future__ import annotations
