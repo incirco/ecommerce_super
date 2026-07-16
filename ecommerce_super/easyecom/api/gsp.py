@@ -363,6 +363,22 @@ def _log_inbound_gsp_call(
         })
         doc.insert(ignore_permissions=True)
         frappe.db.commit()
+        # gh#152 — record inbound outcome to the per-account circuit
+        # breaker. Only meaningful when an account resolved (skip the
+        # pre-auth /gettoken failures where account_name is None or
+        # a fallback that didn't identify the real caller).
+        if account_name:
+            try:
+                from ecommerce_super.easyecom.api.gsp_circuit import (
+                    record_inbound_result,
+                )
+                record_inbound_result(
+                    account_name, success=(200 <= http_status < 300),
+                )
+            except Exception:  # noqa: BLE001
+                # Circuit breaker faults must never propagate out of
+                # the inbound log path.
+                pass
     except Exception:
         try:
             frappe.log_error(
