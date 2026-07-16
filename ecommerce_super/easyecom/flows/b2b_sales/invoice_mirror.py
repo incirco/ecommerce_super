@@ -43,7 +43,7 @@ from __future__ import annotations
 from typing import Any
 
 import frappe
-from frappe.utils import getdate, today
+from frappe.utils import flt, getdate, today
 
 
 # Variance threshold per packet. If ERPNext SI total differs from
@@ -213,6 +213,26 @@ def mirror_si_from_ee_response(
     # applied per CLAUDE.md: never hand-build tax arithmetic.
     if getattr(source_so, "taxes_and_charges", None):
         si.taxes_and_charges = source_so.taxes_and_charges
+    # gh#214: the template NAME alone is not enough. India Compliance
+    # recomputes item-wise GST on si.insert() from the SI's GST context
+    # — place_of_supply + tax_category + company GSTIN — NOT from the
+    # taxes_and_charges name. gh#206 copied only the template + per-line
+    # item_tax_template, so with no place_of_supply / tax_category to key
+    # on, IC recomputed 0% GST and the SI came back net-only (live:
+    # SO-2610405 → SI ₹3,600 vs SO ₹3,780, the ₹180 IGST dropped).
+    # Copy the source SO's GST-determination fields so the native
+    # recompute reproduces the SO's (EE-reconciled) tax. Still
+    # primitives-first: we set context and let ERPNext + India
+    # Compliance compute; we never hand-build tax arithmetic.
+    for _gst_field in (
+        "tax_category",
+        "place_of_supply",
+        "company_gstin",
+        "billing_address_gstin",
+    ):
+        _val = getattr(source_so, _gst_field, None)
+        if _val:
+            setattr(si, _gst_field, _val)
     # Build a per-item map from source SO so we can copy the exact
     # item_tax_template that produced each SO line's tax. When a mirror
     # line has no matching SO line (defensive — shouldn't happen for a
@@ -234,6 +254,23 @@ def mirror_si_from_ee_response(
 
     si.flags.ignore_permissions = True
     si.insert()
+
+    # gh#214 fail-loud guard: if EE billed tax but the SI's native
+    # recompute produced (near) zero, the GST context above did not take
+    # and this SI is an under-taxed invoice. Raise InvoiceMirrorError —
+    # which the GSP handler surfaces as a hard failure and does NOT
+    # swallow (unlike InvoiceMirrorVariance, which it catches and
+    # returns) — so the SI is left in Draft for review instead of
+    # shipping a 0%-GST invoice to EE.
+    ee_total_tax = flt(ee_row.get("total_tax"))
+    si_tax = flt(getattr(si, "total_taxes_and_charges", 0))
+    if ee_total_tax > 0.01 and si_tax < 0.01:
+        raise InvoiceMirrorError(
+            f"SI {si.name} computed ₹0 tax but EE billed "
+            f"₹{ee_total_tax:.2f} in tax — GST did not apply. Check "
+            f"place_of_supply / tax_category / item_tax_template on "
+            f"source SO {source_so.name}. SI left in Draft; not shipped."
+        )
 
     # --- Variance check ---
     ee_total = float(ee_row.get("total_amount") or 0)
