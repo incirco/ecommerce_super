@@ -111,6 +111,22 @@ def mirror_si_from_ee_response(
         }
 
     # --- Resolve required prerequisites ---
+    # gh#206: load the source SO first — everything downstream (company,
+    # taxes_and_charges template, per-line item_tax_template) depends
+    # on it. Every B2B Order Map has a sales_order in the §11 flow.
+    if not (map_doc.sales_order or "").strip():
+        raise InvoiceMirrorError(
+            f"B2B Order Map {map_doc.name!r} has no sales_order — cannot "
+            f"mirror without a source Sales Order."
+        )
+    try:
+        source_so = frappe.get_doc("Sales Order", map_doc.sales_order)
+    except frappe.DoesNotExistError as exc:
+        raise InvoiceMirrorError(
+            f"Source Sales Order {map_doc.sales_order!r} not found — "
+            f"cannot mirror SI for Map {map_doc.name!r}."
+        ) from exc
+
     customer = _resolve_customer(ee_row)
     if not customer:
         raise InvoiceMirrorError(
@@ -120,9 +136,7 @@ def mirror_si_from_ee_response(
 
     line_items = _resolve_line_items(ee_row)
 
-    company = map_doc.company or frappe.db.get_value(
-        "Sales Order", map_doc.sales_order, "company"
-    )
+    company = map_doc.company or source_so.company
     if not company:
         raise InvoiceMirrorError(
             f"Cannot resolve Company for Map {map_doc.name}."
@@ -181,18 +195,42 @@ def mirror_si_from_ee_response(
         if value:
             setattr(si, field, value)
 
+    # gh#206 — use ERPNext-native tax computation instead of hand-
+    # building SI.taxes rows from EE's per-item breakdown.
+    #
+    # The prior approach (_append_taxes_from_ee_row) summed EE's
+    # per-bucket amounts, derived a weighted-average rate, and
+    # appended rows with charge_type='On Net Total'. That collapsed
+    # mixed-rate SOs to a single blended rate on the SI (visibly
+    # wrong on the print format for any 5%+18% invoice).
+    #
+    # Post-#206: copy the source SO's taxes_and_charges template and
+    # each SO line's item_tax_template. On si.insert(), ERPNext's
+    # set_missing_values() + calculate_taxes_and_totals() populates
+    # the correct rows using the SAME primitives that computed the
+    # SO's totals (which we already verified match EE via the variance
+    # check below). This is the ERPNext-primitives-first rule
+    # applied per CLAUDE.md: never hand-build tax arithmetic.
+    if getattr(source_so, "taxes_and_charges", None):
+        si.taxes_and_charges = source_so.taxes_and_charges
+    # Build a per-item map from source SO so we can copy the exact
+    # item_tax_template that produced each SO line's tax. When a mirror
+    # line has no matching SO line (defensive — shouldn't happen for a
+    # real B2B mirror), we leave item_tax_template empty and let the
+    # template + item defaults handle it.
+    so_item_tax_map: dict[str, str] = {}
+    for so_item in (source_so.items or []):
+        code = getattr(so_item, "item_code", None)
+        tmpl = getattr(so_item, "item_tax_template", None)
+        if code and tmpl:
+            so_item_tax_map[code] = tmpl
+
     # Lines
     for line in line_items:
+        template = so_item_tax_map.get(line["item_code"])
+        if template:
+            line["item_tax_template"] = template
         si.append("items", line)
-
-    # gh#181 part 2 — populate SI.taxes from EE's per-item tax breakdown.
-    # Pre-fix the taxes child table was left empty because we didn't set
-    # a taxes_and_charges template — ERPNext then reported IGST 0% on
-    # the SI even though the item had item_tax_template=GST5. Result:
-    # SI grand_total = net_total, missing the actual tax amount.
-    _append_taxes_from_ee_row(
-        si, ee_row=ee_row, company=company
-    )
 
     si.flags.ignore_permissions = True
     si.insert()
@@ -358,122 +396,6 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
         )
 
     return out
-
-
-def _append_taxes_from_ee_row(si: Any, *, ee_row: dict, company: str) -> None:
-    """gh#181 part 2 — populate SI.taxes from EE's per-item tax breakdown.
-
-    Sums EE's per-item `igst` / `cgst` / `sgst` / `utgst` across all
-    order_items, looks up the company's Output GST account heads via
-    India Compliance's GST Settings, and appends one Sales Taxes and
-    Charges row per non-zero tax bucket. Uses charge_type=\"Actual\"
-    with the exact tax_amount from EE — no re-computation, no
-    rounding drift.
-
-    Skips silently when:
-      - No GST Settings gst_accounts row exists for this company + Output
-      - All tax buckets sum to zero
-    """
-    order_items = ee_row.get("order_items") or []
-    if not isinstance(order_items, list) or not order_items:
-        return
-
-    taxable_total = 0.0
-    tax_totals: dict[str, float] = {"igst": 0.0, "cgst": 0.0, "sgst": 0.0, "utgst": 0.0}
-    for it in order_items:
-        try:
-            taxable_total += float(it.get("taxable_value") or 0)
-            for k in tax_totals:
-                tax_totals[k] += float(it.get(k) or 0)
-        except (TypeError, ValueError):
-            continue
-
-    if all(v == 0 for v in tax_totals.values()):
-        return  # zero-tax order — leave taxes empty
-
-    gst_accounts = _lookup_output_gst_accounts(company)
-    if not gst_accounts:
-        # No account map on this company — surface via Comment on the
-        # SI so FDE knows why taxes are missing; don't break the mirror.
-        frappe.log_error(
-            title=(
-                f"gh#181: no Output GST accounts on GST Settings for "
-                f"{company!r}; SI {si.get('name') or '(unsaved)'} left "
-                "without tax rows."
-            ),
-            message=f"tax_totals: {tax_totals}",
-        )
-        return
-
-    account_map = {
-        "igst": gst_accounts.get("igst_account"),
-        "cgst": gst_accounts.get("cgst_account"),
-        "sgst": gst_accounts.get("sgst_account"),
-        "utgst": gst_accounts.get("utgst_account"),
-    }
-
-    for bucket, amount in tax_totals.items():
-        if amount <= 0:
-            continue
-        account_head = account_map.get(bucket)
-        if not account_head:
-            continue
-        # Derive tax rate from EE's amounts. Using `On Net Total`
-        # charge_type (not `Actual`) so:
-        #   1. ERPNext auto-computes tax_amount = rate% * net_total
-        #      → grand_total updates correctly on validate.
-        #   2. Print formats read `rate` for display (e.g. "IGST @ 5%").
-        #      `Actual` sets rate=0 internally so the print shows 0%.
-        # On multi-item SOs with mixed rates this collapses to a
-        # weighted average — acceptable for the mirror since the
-        # per-item breakdown is preserved on each line's
-        # item_tax_template.
-        rate_pct = (
-            round((amount / taxable_total) * 100, 2)
-            if taxable_total > 0
-            else 0
-        )
-        si.append("taxes", {
-            "charge_type": "On Net Total",
-            "account_head": account_head,
-            "description": f"{bucket.upper()} @ {rate_pct}%",
-            "rate": rate_pct,
-            "included_in_print_rate": 0,
-        })
-
-
-def _lookup_output_gst_accounts(company: str) -> dict | None:
-    """Return the {igst_account, cgst_account, sgst_account,
-    utgst_account} row from GST Settings for this company's Output.
-
-    gh#181 part 2 followup (2026-07-13): the previous version used
-    `frappe.db.get_value("GST Account", {parent: ..., company: ..., ...})`
-    which returned None on mmpl16 even though the row existed and matched
-    all filters (verified by direct REST API query). Frappe's ORM query
-    on a child DocType via dict filters is unreliable. Rewritten to
-    load the parent GST Settings Single doc and iterate its child
-    table — same result, no ORM quirk.
-    """
-    try:
-        gst_settings = frappe.get_cached_doc("GST Settings")
-    except Exception as exc:
-        frappe.log_error(
-            title=f"gh#181: GST Settings load failed for {company!r}",
-            message=f"{type(exc).__name__}: {exc}",
-        )
-        return None
-    for row in gst_settings.get("gst_accounts") or []:
-        if (
-            getattr(row, "company", None) == company
-            and getattr(row, "account_type", None) == "Output"
-        ):
-            return {
-                "igst_account": getattr(row, "igst_account", None),
-                "cgst_account": getattr(row, "cgst_account", None),
-                "sgst_account": getattr(row, "sgst_account", None),
-                "utgst_account": getattr(row, "utgst_account", None),
-            }
-    return None
 
 
 def _resolve_warehouse(ee_row: dict) -> str | None:

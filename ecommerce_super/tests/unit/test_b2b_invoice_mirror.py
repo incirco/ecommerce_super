@@ -203,9 +203,18 @@ class TestMirrorSiFromEeResponse(unittest.TestCase):
         fake_si.name = "ACC-SINV-2026-00001"
         fake_si.grand_total = 1304.73  # exact match, no variance
 
+        # gh#206: mirror now loads source SO up-front for template
+        # copy. Stub it as an empty-items SO with no taxes template so
+        # this test doesn't need to reason about mixed rates.
+        fake_source_so = MagicMock()
+        fake_source_so.company = "Smoke Test Co"
+        fake_source_so.taxes_and_charges = None
+        fake_source_so.items = []
+
         with (
             patch("frappe.db.get_value") as gv,
             patch("frappe.new_doc", return_value=fake_si),
+            patch("frappe.get_doc", return_value=fake_source_so),
         ):
             # get_value calls: existing SI check (None), customer lookup,
             # then in _resolve_line_items: item_code, hsn, then warehouse
@@ -252,9 +261,16 @@ class TestMirrorSiFromEeResponse(unittest.TestCase):
         fake_si.name = "ACC-SINV-2026-00002"
         fake_si.grand_total = 1500.0  # +15% variance
 
+        # gh#206: mirror loads source SO — stub as no-template.
+        fake_source_so = MagicMock()
+        fake_source_so.company = "Smoke Test Co"
+        fake_source_so.taxes_and_charges = None
+        fake_source_so.items = []
+
         with (
             patch("frappe.db.get_value") as gv,
             patch("frappe.new_doc", return_value=fake_si),
+            patch("frappe.get_doc", return_value=fake_source_so),
         ):
             gv.side_effect = [
                 None, "Customer Acme Ltd",
@@ -271,11 +287,22 @@ class TestMirrorSiFromEeResponse(unittest.TestCase):
         db.get_value calls (ee_c_id lookup + ee_customer_id fallback)
         + accepts either merchant_c_id or customer_code from the
         payload. Test uses a permissive mock that returns None for
-        every call so both lookup paths fail cleanly."""
+        every call so both lookup paths fail cleanly.
+
+        gh#206: also stubs source SO load — that check runs first
+        in the mirror body now."""
         row = _ee_row()
         map_doc = _fake_map()
 
-        with patch("frappe.db.get_value", return_value=None):
+        fake_source_so = MagicMock()
+        fake_source_so.company = "Smoke Test Co"
+        fake_source_so.taxes_and_charges = None
+        fake_source_so.items = []
+
+        with (
+            patch("frappe.db.get_value", return_value=None),
+            patch("frappe.get_doc", return_value=fake_source_so),
+        ):
             with self.assertRaises(InvoiceMirrorError) as ctx:
                 mirror_si_from_ee_response(map_doc=map_doc, ee_row=row)
             self.assertIn("Customer Map", str(ctx.exception))
