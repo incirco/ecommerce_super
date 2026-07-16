@@ -305,6 +305,22 @@ Concretely, when the answer to "what number goes here?" is already computed by E
 
 Each reinvention cost real money on live orders and days of forensic work. The rule pays for itself the first time it prevents an incident.
 
+### Custom GSP contract: any behavior change requires a doc update in the same PR
+
+Our three whitelisted endpoints (`/gettoken`, `/einvoice/update`, `/ewaybill/update`) have a public reference doc at `docs/custom_gsp_contract.md`. It's the canonical source of truth for what EasyEcom, partners, and the next maintainer see from our side.
+
+**Any behavior change to those endpoints MUST update this doc in the same PR.** Concretely:
+
+- Adding a new request field → document it in the field table
+- Adding a new response field → document it + example
+- Adding a new failure message → document it in §3 (Failure modes reference)
+- Changing the Bearer TTL, rate limit default, or auth requirement → update the relevant subsection
+- Adding a new endpoint → add a new §2.X subsection with the full shape
+
+This rule exists because gh#130 (root paths) and gh#142 (`orders` shape) were both spec-vs-live drift bugs — our code did one thing, our external-facing "contract" claimed another. Live code shipped without a corresponding doc update; production incidents were the tell. Requiring the doc update in the same PR closes that gap at review time.
+
+**Reviewers** on any PR touching `ecommerce_super/easyecom/api/gsp.py` or `ecommerce_super/easyecom/flows/b2b_sales/gsp_handler.py` should reject the PR if `docs/custom_gsp_contract.md` isn't updated in the same commit set.
+
 ---
 
 ## Conventions and style

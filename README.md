@@ -6,6 +6,7 @@ ERPNext-native integration between ERPNext (v16) and **EasyEcom**, with marketpl
 
 - **FDEs (testing / onboarding):** start at **[`process/primers/START_HERE_FDE.md`](process/primers/START_HERE_FDE.md)**. It walks you through the primers, the test scripts, and the build status board, in order.
 - **Developers / build context:** read `CLAUDE.md` (working agreement and the single-writer rule), then `SPEC.md` (the full specification). `BRD.md` and `PRD.md` give the business and product context.
+- **Custom GSP contract (EE / partner devs, next maintainer):** **[`docs/custom_gsp_contract.md`](docs/custom_gsp_contract.md)** — public reference for our three whitelisted endpoints (`/gettoken`, `/einvoice/update`, `/ewaybill/update`). Request/response schemas, failure modes, curl playbook, change policy. Canonical source of truth.
 
 ## Layout
 
