@@ -169,3 +169,7 @@ ecommerce_super.patches.v0_1.heal_gh205_pre_fix_draft_si_dates
 # EasyEcom B2B Order Map — persists the outbound X-ECS-Correlation-Id
 # header value so we can cross-reference on inbound /einvoice/update.
 ecommerce_super.patches.v0_1.add_ecs_correlation_id_to_b2b_order_map
+# gh#152 (2026-07-16): add circuit-breaker state fields to
+# EasyEcom Account — pauses outbound polling per-account when
+# inbound is 5xxing (defends EE + our own recovery).
+ecommerce_super.patches.v0_1.add_gsp_circuit_breaker_fields

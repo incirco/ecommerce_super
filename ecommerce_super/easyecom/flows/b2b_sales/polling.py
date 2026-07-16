@@ -119,6 +119,22 @@ def reconcile_all_pending_b2b_orders() -> dict:
         ],
     )
     for acc in accounts:
+        # gh#152 circuit breaker — skip polling for accounts whose
+        # inbound side is 5xxing. Prevents amplifying pressure on EE
+        # while our own outage plays out. Import inside loop so a
+        # missing module (fresh install pre-patch) can't break the
+        # scheduler entirely.
+        try:
+            from ecommerce_super.easyecom.api.gsp_circuit import (
+                should_allow_poll,
+            )
+            if not should_allow_poll(acc["name"]):
+                summary.setdefault("circuit_open_skips", []).append(acc["name"])
+                summary["accounts_processed"] += 1
+                continue
+        except Exception:  # noqa: BLE001
+            pass  # breaker fault must not itself block polling
+
         cadence = int(acc.get("ecs_polling_cadence_minutes") or 15)
         eligible = _find_eligible_maps(
             easyecom_account=acc["name"], cadence_minutes=cadence
