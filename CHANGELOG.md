@@ -17,6 +17,35 @@ The `[Unreleased]` section holds anything on `main` that hasn't yet been deploye
 
 ---
 
+## [2026-07-16]
+
+### Fixed
+
+- **§11 B2B outbound: `_line_tax_multiplier` summed the wrong dict** — the [#201] fix that shipped yesterday in [PR #198] read `so_item.item_tax_rate` and summed its values. Under India Compliance, that dict lists rates for EVERY relevant account_head — Output + Input + RCM across CGST/SGST/IGST — so it sums to ~30% for a genuinely 5% item. Every B2B SO pushed after [PR #198] merged was grossed by the wrong multiplier: EE received `Price` inflated by ~24% (1.30/1.05), and EE's back-out at each item's real ProductTaxCode landed the excess in `taxable_value`. Live symptom on SO-2610402: SO ₹1,680 → EE `total_amount` and mirrored SI ₹2,080. Fix by @garv999: read the rate ACTUALLY applied to each line from `so.taxes[].item_wise_tax_detail[item_code][0]` — ERPNext-populated during tax calculation, correctly reflects intra-state CGST+SGST split (2.5 + 2.5 = 5) or inter-state single IGST (5). Falls back to SO-level blend when per-line detail is absent. `so_item.item_tax_rate` is no longer read anywhere. Rewrote the gh#201 test class to drive rate through `item_wise_tax_detail`. 53 unit tests pass. [#201], [PR #204], [`93288c7`].
+
+### Added
+
+- **CLAUDE.md rule: extend Frappe-primitives-first discipline to ERPNext + India Compliance** — new sub-section codifying the operating rule surfaced by three consecutive live-money incidents ([#200], [#201], [#204]): *"on the ERP side we follow standard ERPNext and India Compliance behaviors; we never touch, patch, or reimplement them. Translation happens only at the marketplace-integration boundary."* Adds a primitive-mapping table (applied tax rate → `item_wise_tax_detail`; taxes child table → `Sales Taxes and Charges Template` + per-item `item_tax_template`; SI dates → `set_posting_time = 1`; GL entries → let submit fire; Custom DocPerm → `frappe.permissions.add_permission()`; IRN + e-way bill → India Compliance's public entrypoints). Includes a hard "never touch the standard code path" clause listing the three sanctioned escape hatches (`hooks.override_doctype_class`, `doc_events`, or filing upstream). [PR #208], [`57c58d7`].
+
+### Filed for later (audit follow-ups from the ERPNext-primitives rule)
+
+Three post-#201 audit findings filed so we don't lose track. Prioritized by risk × live-impact.
+
+- **[#205]** (MEDIUM priority, LOW risk) — Remove non-native `si.transaction_date` setter from `invoice_mirror.py` and `gsp_handler._reassert_si_dates_for_submit` (field belongs to Sales Order, not SI). Audit + retire the `_reassert_si_dates_for_submit` healer once pre-fix Draft SIs clear from live sites.
+- **[#206]** (MEDIUM–HIGH priority, HIGH risk) — Replace hand-built `_append_taxes_from_ee_row` (which collapses to a weighted-average rate on mixed-rate SIs) with `si.taxes_and_charges = "<Output GST Template>"` + per-line `si_item.item_tax_template = "GST 5%"`. Let ERPNext's `calculate_taxes_and_totals.py` compute the taxes child table natively. Needs a staged rollout via feature flag + variance safety net; the mirror is on MMPL's critical path.
+- **[#207]** (LOW priority, MINIMAL risk) — Audit whether `_resolve_line_items` fallback tiers 2 and 3 (`breakup_types` sum, `selling_price / (1 + tax_rate/100)`) have ever fired against real MMPL payloads. If not, delete as dead code.
+
+### Deploy actions
+
+- `bench migrate` on MMPL / any deployed site — same command handles yesterday's [#200] repair patch and today's [#204] code fix.
+
+### Verification
+
+- Push a fresh B2B SO → EE `total_amount` = SO `grand_total` = mirrored SI `grand_total` (within 0.5% variance). If the SO is uniform-rate (all lines at 5% or all at 18%), the totals should match to the paise; on any qty>1 line the [#197] fix keeps holding.
+- Permission Manager on Territory shows Territory Manager + System Manager + All + EasyEcom Integration (not just EasyEcom Integration alone) — proves [#200] repair fired.
+
+---
+
 ## [2026-07-15]
 
 ### Fixed
@@ -227,6 +256,10 @@ When adding new entries, append the corresponding reference here.
 [#197]: https://github.com/incirco/ecommerce_super/issues/197
 [#200]: https://github.com/incirco/ecommerce_super/issues/200
 [#201]: https://github.com/incirco/ecommerce_super/issues/201
+[#204]: https://github.com/incirco/ecommerce_super/pull/204
+[#205]: https://github.com/incirco/ecommerce_super/issues/205
+[#206]: https://github.com/incirco/ecommerce_super/issues/206
+[#207]: https://github.com/incirco/ecommerce_super/issues/207
 
 [PR #119]: https://github.com/incirco/ecommerce_super/pull/119
 [PR #132]: https://github.com/incirco/ecommerce_super/pull/132
@@ -264,6 +297,8 @@ When adding new entries, append the corresponding reference here.
 [PR #196]: https://github.com/incirco/ecommerce_super/pull/196
 [PR #198]: https://github.com/incirco/ecommerce_super/pull/198
 [PR #202]: https://github.com/incirco/ecommerce_super/pull/202
+[PR #204]: https://github.com/incirco/ecommerce_super/pull/204
+[PR #208]: https://github.com/incirco/ecommerce_super/pull/208
 
 [`1841623`]: https://github.com/incirco/ecommerce_super/commit/1841623
 [`1a1d81a`]: https://github.com/incirco/ecommerce_super/commit/1a1d81a
@@ -295,6 +330,8 @@ When adding new entries, append the corresponding reference here.
 [`9b09ac5`]: https://github.com/incirco/ecommerce_super/commit/9b09ac5
 [`91dc575`]: https://github.com/incirco/ecommerce_super/commit/91dc575
 [`715d16f`]: https://github.com/incirco/ecommerce_super/commit/715d16f
+[`93288c7`]: https://github.com/incirco/ecommerce_super/commit/93288c7
+[`57c58d7`]: https://github.com/incirco/ecommerce_super/commit/57c58d7
 [`a21b353`]: https://github.com/incirco/ecommerce_super/commit/a21b353
 [`a60b2c6`]: https://github.com/incirco/ecommerce_super/commit/a60b2c6
 [`a6d2eed`]: https://github.com/incirco/ecommerce_super/commit/a6d2eed
