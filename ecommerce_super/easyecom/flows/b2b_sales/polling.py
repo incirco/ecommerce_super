@@ -545,7 +545,8 @@ def _apply_decision(
     if decision == "transition_to" and payload == "Invoice Pending":
         # §11.5.2 Mode 2 — EE generated the invoice on its own side.
         # Mirror it to an ERPNext Sales Invoice (Draft) and link via
-        # Map.sales_invoice. The 1% variance check raises a
+        # Map.sales_invoice. The variance check (0.01% threshold —
+        # see invoice_mirror.VARIANCE_THRESHOLD_PCT) raises a
         # Discrepancy if our SI total diverges from EE's total.
         # Capture EE's invoice_number on the Map too.
         from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
@@ -585,8 +586,9 @@ def _apply_decision(
                 updates["sales_invoice_mirrored_at"] = now_datetime()
                 updates["status"] = "Invoice Generated"
             except InvoiceMirrorVariance as exc:
-                # SI WAS created — it's in Draft. Variance > 1%; raise
-                # Discrepancy for FDE review but persist the link.
+                # SI WAS created — it's in Draft. Variance exceeded
+                # VARIANCE_THRESHOLD_PCT (0.01%); raise Discrepancy
+                # for FDE review but persist the link.
                 # Re-derive the SI name from the exception's inner
                 # state: the mirror function already wrote the SI before
                 # the raise. Pull from the Map's existing sales_invoice
@@ -634,17 +636,21 @@ def _apply_decision(
 
         if variance_warning:
             _raise_discrepancy(
-                kind="B2B Mode 2 SI mirror — variance exceeds 1%",
+                kind="B2B Mode 2 SI mirror — variance exceeds threshold",
                 reference_doctype="EasyEcom B2B Order Map",
                 reference_name=map_doc.name,
                 company=company or "",
                 reason=(
                     f"§11.5.2 Mode 2 SI mirror created Draft SI for "
                     f"reference_code={map_doc.sales_order!r} but the "
-                    f"computed totals diverge >1%. {variance_warning} "
-                    "FDE: review the Item Tax Templates configured on "
-                    "the source items vs EE's tax_rate, then either "
-                    "amend or accept the Draft SI."
+                    f"computed totals diverge beyond "
+                    f"VARIANCE_THRESHOLD_PCT (0.01%). "
+                    f"{variance_warning} "
+                    "FDE: SO built the SI natively via ERPNext's "
+                    "make_sales_invoice; EE's total disagrees. Review "
+                    "the SO's line rates + tax template vs EE's "
+                    "invoice payload, then either amend or accept "
+                    "the Draft SI."
                 ),
             )
 

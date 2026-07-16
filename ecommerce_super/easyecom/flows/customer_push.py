@@ -545,10 +545,14 @@ def _upsert_map_row_after_create(
         # updated ee_customer_id — so an existing Flagged-Not-Created
         # row that had `ee_c_id = "flagged-<docname>"` as a
         # unique-constraint placeholder kept the placeholder forever,
-        # and the inbound resolver (invoice_mirror._resolve_customer)
-        # queries by ee_c_id → never matched. Both ids are the SAME
-        # value on EE (per the 2026-05-27 verification comment near
-        # customer_id extraction above), so overwriting is safe.
+        # and the (then-existing) inbound customer resolver queried by
+        # ee_c_id → never matched. That resolver was deleted in the
+        # mirror-uses-make_sales_invoice refactor (2026-07-16); the
+        # invariant it depended on (ee_c_id → ERPNext Customer map)
+        # still matters for §11 trace linkage and §8e re-pulls, so
+        # keep this overwrite. Both ids are the SAME value on EE (per
+        # the 2026-05-27 verification comment near customer_id
+        # extraction above), so overwriting is safe.
         frappe.db.set_value(
             "EasyEcom Customer Map",
             existing_map["name"],

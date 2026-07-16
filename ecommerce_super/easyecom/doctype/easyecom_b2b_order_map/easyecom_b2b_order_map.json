@@ -80,7 +80,7 @@
    "reqd": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
-   "description": "Status lifecycle: Pushed (Old B2B sync OK) | Queued (New B2B queued OK) | Invoice Pending (Phase 1 marker — polling detected EE invoice; Phase 2 SI mirror NYI) | Invoice Generated (Phase 2 — defined for forward compat) | Cancelled."
+   "description": "Status lifecycle: Pushed (Old B2B sync OK) | Queued (New B2B queued OK) | Invoice Pending (polling detected EE invoice; §11.5.2 SI mirror has not yet run or raised a Discrepancy — next polling tick retries) | Invoice Generated (SI mirror complete; sales_invoice link populated) | Cancelled."
   },
   {
    "fieldname": "ee_references_section",
@@ -107,7 +107,7 @@
    "fieldtype": "Data",
    "label": "EE Invoice ID",
    "read_only": 1,
-   "description": "EE's invoice identifier returned at order creation (Old B2B). This is EE's internal ID, NOT the ERPNext Sales Invoice docname — that mirror lands in Phase 2."
+   "description": "EE's invoice identifier returned at order creation (Old B2B). This is EE's internal ID, NOT the ERPNext Sales Invoice docname. The mirrored ERPNext SI (created by §11.5.2 Mode 2) is linked via the `sales_invoice` field below."
   },
   {
    "fieldname": "ee_queue_id",

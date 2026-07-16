@@ -136,19 +136,36 @@ def _dry_run(*, reference_code: str, include_eway: bool) -> dict:
         line_count=len(ee_row["order_items"]),
     ))
 
-    # Step 5 — Customer resolution (mirror uses merchant_c_id)
-    from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
-        _resolve_customer,
+    # Step 5 — Customer Map integrity check.
+    # Post-refactor the mirror uses ERPNext's make_sales_invoice(so.name)
+    # so the SI's Customer comes directly from the SO — we don't strictly
+    # NEED to resolve EE's merchant_c_id. But we surface the mapping
+    # anyway so an FDE sees whether ee_c_id → ERPNext Customer is wired,
+    # since a mismatch here is an integrity signal (the customer on the
+    # SO and the customer EE says invoiced should be the same entity).
+    ee_c_id = ee_row.get("merchant_c_id")
+    mapped_customer = (
+        frappe.db.get_value(
+            "EasyEcom Customer Map",
+            {"ee_c_id": ee_c_id},
+            "erpnext_customer",
+        ) if ee_c_id else None
     )
-    customer = _resolve_customer(ee_row)
-    if not customer:
+    if not mapped_customer:
         checks.append(_fail(
-            "buyer_resolution",
-            f"No EasyEcom Customer Map for ee_c_id {ee_row.get('merchant_c_id')!r}. "
-            "Run §8e Customer Pull or fix the Map row before pushing.",
+            "customer_map_integrity",
+            f"No EasyEcom Customer Map for ee_c_id {ee_c_id!r}. "
+            "Not fatal (mirror uses the SO's customer directly), but "
+            "run §8e Customer Pull to wire the mapping so trace links work.",
         ))
     else:
-        checks.append(_ok("buyer_resolution", resolved_to=customer))
+        checks.append(_ok(
+            "customer_map_integrity",
+            ee_c_id=ee_c_id,
+            mapped_customer=mapped_customer,
+            so_customer=so.customer,
+            match=(mapped_customer == so.customer),
+        ))
 
     # Step 6 — Item resolution per SO line
     item_checks = []
@@ -212,9 +229,11 @@ def _dry_run(*, reference_code: str, include_eway: bool) -> dict:
         checks.append(_ok("item_tax_template", count=count))
 
     # If any hard blocker up to this point, skip the SI insert simulation.
+    # customer_map_integrity is no longer a hard blocker (mirror uses
+    # SO's customer directly), so item_map is the only remaining gate.
     hard_failed = any(
         not c["ok"] for c in checks
-        if c["step"] in {"buyer_resolution", "item_map"}
+        if c["step"] in {"item_map"}
     )
     if hard_failed:
         checks.append({
