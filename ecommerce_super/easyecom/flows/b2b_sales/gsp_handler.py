@@ -303,25 +303,25 @@ def _reassert_si_dates_for_submit(si: Any) -> None:
     day. Same root cause as gh#161 originally, exposed via a different
     ERPNext validate path.
 
-    Fix in-place: set_posting_time=1 (freeze the date), pin
-    transaction_date, ensure due_date >= posting_date, clear any
-    payment_terms_template that would re-derive schedule.
+    Fix in-place: set_posting_time=1 (freeze the date), ensure
+    due_date >= posting_date, clear any payment_terms_template that
+    would re-derive schedule.
+
+    gh#205 removed the transaction_date handling — that field is
+    native to Sales Order, not Sales Invoice. Setting it on SI was
+    either a silent no-op or a shadow field with no ERPNext-level
+    effect. See gh#205 for the audit.
+
+    Follow-up (gh#205): once no Draft SIs with set_posting_time=0
+    remain on live sites (query in the issue), delete this function
+    and its call sites. Pre-fix drafts should have all been submitted
+    or cancelled by then.
     """
     from frappe.utils import getdate
     changed = False
     if si.get("set_posting_time") != 1:
         si.set_posting_time = 1
         changed = True
-    # Sales Invoice doesn't natively have transaction_date; it might be
-    # a Custom Field on some sites. Use getattr so a missing attribute
-    # doesn't throw — sites without it just skip this heal step.
-    current_td = getattr(si, "transaction_date", None)
-    if current_td != si.posting_date and hasattr(si, "transaction_date"):
-        try:
-            si.transaction_date = si.posting_date
-            changed = True
-        except AttributeError:
-            pass  # field doesn't exist on this site — safe to skip
     # Defensive against non-date values (tests may pass MagicMock).
     try:
         if (
@@ -344,7 +344,6 @@ def _reassert_si_dates_for_submit(si: Any) -> None:
         # so submit's validate sees the sane values. Using db_set +
         # reload rather than save() avoids nested-validate recursion.
         si.db_set("set_posting_time", 1, update_modified=False)
-        si.db_set("transaction_date", si.posting_date, update_modified=False)
         si.db_set("due_date", si.posting_date, update_modified=False)
         si.db_set("payment_terms_template", "", update_modified=False)
         si.reload()

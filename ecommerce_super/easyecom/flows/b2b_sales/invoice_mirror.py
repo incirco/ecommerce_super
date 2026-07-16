@@ -143,10 +143,15 @@ def mirror_si_from_ee_response(
     # "Due Date cannot be before Posting Date". Observed on SI-2603815
     # created 2026-07-11 by initial mirror, submit re-attempted 2026-07-13.
     si.set_posting_time = 1
-    # Also pin transaction_date to posting_date. Any Customer default
-    # payment_terms_template that resolves due_date FROM transaction_date
-    # would otherwise land due_date before posting_date.
-    si.transaction_date = si.posting_date
+    # NOTE: do NOT set `si.transaction_date` here. Sales Invoice does
+    # not have a native `transaction_date` field — that's a Sales Order
+    # field. Setting it here is a silent no-op on sites without the
+    # custom field, and on sites with it (via app copy-paste) creates
+    # a shadow date that has zero effect on ERPNext's own date
+    # validation. See gh#205 for the audit + removal. Standard ERPNext
+    # primitive for freezing dates is `set_posting_time = 1` (above)
+    # plus `payment_terms_template = ""` (below) — that's the whole
+    # rule; no invented fields required.
     si.due_date = si.posting_date  # B2B can have terms, but default to posting
     # Clear any payment_terms_template that would reset payment_schedule
     # to a date before posting_date. Mirror is invoice-first from an
