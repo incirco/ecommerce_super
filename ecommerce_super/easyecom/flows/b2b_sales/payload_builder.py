@@ -86,36 +86,49 @@ def get_shipping_charge(so: Any) -> float:
 
 
 def _line_tax_multiplier(so_item: Any, so: Any) -> float:
-    """gh#201: return the tax multiplier for a SINGLE SO line, not
-    the SO-level blend.
+    """gh#201 (v2): return the tax multiplier for a SINGLE SO line,
+    taken from the tax rate ACTUALLY APPLIED to that line on the SO.
 
     EE backs tax out of `Price` at each item's own `ProductTaxCode`, so
-    the multiplier we gross by must match that item's actual GST rate.
-    On a mixed-rate SO (5% + 18%), using the SO-level blend over-grosses
-    low-rate lines and under-grosses high-rate lines — proven by the
-    post-#197 parametric sweep (see gh#201 for the exact numbers).
+    the multiplier we gross by must equal the line's real GST rate. Read
+    it from the SO's Sales Taxes and Charges `item_wise_tax_detail` — a
+    JSON string keyed by `item_code` with value `[rate, tax_amount]` —
+    and sum the per-row rates for this item. That reflects only the tax
+    rows applied to THIS transaction:
+      - inter-state → one IGST row (e.g. 5)
+      - intra-state → CGST + SGST rows (2.5 + 2.5 = 5)
+      - genuinely mixed-rate SOs → each line grosses at its own rate.
 
-    Priority:
-      1. `so_item.item_tax_rate` — ERPNext auto-populates this JSON
-         from Item Tax Template + Sales Taxes and Charges. Sum the
-         rates in the dict → line %. Handles both single-row IGST
-         (`{"IGST - MMPL": 18.0}`) and CGST+SGST split
-         (`{"CGST - MMPL": 9.0, "SGST - MMPL": 9.0}` → 18.0 total).
-      2. SO-level blend (`grand_total / net_total`) — fallback for
-         older data or stub items in tests. Correct when the SO is
-         uniform-rate (which is the current MMPL norm).
+    Do NOT read `so_item.item_tax_rate`: that is the item's full Item
+    Tax Template, which under India Compliance lists every account head
+    (output + input + RCM, intra + inter) and can sum to e.g. 30% for a
+    5% item. gh#201's first attempt summed it and over-grossed every
+    B2B line by 30/5 (live symptom SO-2610402: SI ₹2,080 vs SO ₹1,680).
 
+    Fallback to the SO-level blend (`grand_total / net_total`) when no
+    per-line detail is available (older data, zero-tax SOs, test stubs);
+    correct for uniform-rate SOs, which is the current MMPL norm.
     Returns 1.0 for zero-value SOs to keep Price=rate degenerate case.
     """
-    raw = getattr(so_item, "item_tax_rate", None)
-    if raw:
-        try:
-            tax_map = json.loads(raw) if isinstance(raw, str) else raw
-            if isinstance(tax_map, dict) and tax_map:
-                total_pct = sum(float(v or 0) for v in tax_map.values())
-                return 1.0 + (total_pct / 100.0)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass  # malformed → fall through to SO-level blend
+    item_code = getattr(so_item, "item_code", None)
+    if item_code:
+        total_rate = 0.0
+        matched = False
+        for tax in (getattr(so, "taxes", None) or []):
+            raw = getattr(tax, "item_wise_tax_detail", None)
+            if not isinstance(raw, str) or not raw:
+                continue
+            try:
+                detail = json.loads(raw)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                continue  # malformed row — skip, try the next tax row
+            entry = detail.get(item_code) if isinstance(detail, dict) else None
+            # ERPNext stores [rate, tax_amount]; be defensive about shape.
+            if isinstance(entry, (list, tuple)) and entry:
+                total_rate += float(entry[0] or 0)
+                matched = True
+        if matched:
+            return 1.0 + (total_rate / 100.0)
 
     net_total = float(getattr(so, "net_total", 0) or 0)
     grand_total = float(getattr(so, "grand_total", 0) or 0)
@@ -139,8 +152,8 @@ def _item_price_and_discount(so_item: Any, so: Any) -> tuple[float, float]:
          `(Price * qty) - itemDiscount`; sending itemDiscount per-unit
          under-discounts by (qty-1)*discount. Live symptom on
          SO-2610401 line 2: SI grand_total ₹5,984 vs SO ₹4,724.
-      4. gh#201 — use PER-LINE tax multiplier (from
-         `so_item.item_tax_rate`) instead of the SO-level blend, so
+      4. gh#201 — use a PER-LINE tax multiplier (from the SO's applied
+         `item_wise_tax_detail`) instead of the SO-level blend, so
          mixed-rate SOs (5% + 18% lines together) gross each line at
          its own rate. See `_line_tax_multiplier` docstring.
 
@@ -150,7 +163,7 @@ def _item_price_and_discount(so_item: Any, so: Any) -> tuple[float, float]:
         itemDiscount = discount * qty * mult               # per-line, gh#197
 
     For SO-2610401 line 2 (rate=300, discount=300, qty=5, IGST 5%):
-        mult         = 1.05 (from item_tax_rate={"IGST - MMPL": 5.0})
+        mult         = 1.05 (applied IGST 5% from item_wise_tax_detail)
         Price        = (300 + 300) * 1.05 = 630
         itemDiscount = 300 * 5 * 1.05     = 1575
         EE gross     = (630 * 5) - 1575   = 1575  → matches SO line total.
