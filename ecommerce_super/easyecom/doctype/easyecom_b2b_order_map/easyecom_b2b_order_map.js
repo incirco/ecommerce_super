@@ -12,7 +12,7 @@ frappe.ui.form.on("EasyEcom B2B Order Map", {
             return;
         }
         if (!frm.doc.sales_order) {
-            return;  // dry-run needs a source SO
+            return;  // dry-run + lifecycle both need a source SO
         }
         frm.add_custom_button(
             __("Dry-Run /einvoice/update"),
@@ -24,6 +24,8 @@ frappe.ui.form.on("EasyEcom B2B Order Map", {
             () => _runDryRun(frm, "dry_run_ewaybill"),
             __("Diagnostics")
         );
+        // Render the "one place, whole story" lifecycle view.
+        _renderLifecycle(frm);
     },
 });
 
@@ -78,6 +80,63 @@ function _renderDryRunResult(result, method_name) {
         indicator: result.ok ? "green" : "red",
         wide: true,
     });
+}
+
+// Lifecycle view — quick foundation for the #150 dashboard. Renders a
+// compact stage table above the field grid so an FDE can see the whole
+// story of one B2B SO (SO → Push → EE ID → SI → IRN/Eway → API Calls)
+// at a glance instead of clicking across 4-6 pages.
+function _renderLifecycle(frm) {
+    frappe.call({
+        method: "ecommerce_super.easyecom.doctype.easyecom_b2b_order_map.easyecom_b2b_order_map.get_lifecycle",
+        args: { map_name: frm.doc.name },
+        callback(r) {
+            const stages = r.message || [];
+            if (!stages.length) return;
+            const html = _lifecycleHtml(stages);
+            frm.dashboard.add_section(html, __("Lifecycle"));
+        },
+    });
+}
+
+function _lifecycleHtml(stages) {
+    const rows = stages.map((s) => {
+        const status = s.ok
+            ? "<span style='color:green;font-weight:bold;'>✓</span>"
+            : "<span style='color:#c00;font-weight:bold;'>—</span>";
+        const stage = frappe.utils.escape_html(s.stage);
+        const when = s.timestamp
+            ? `<small style='color:#666;'>${frappe.datetime.prettyDate(s.timestamp)}</small>`
+            : "<small style='color:#999;'>—</small>";
+        let detail = frappe.utils.escape_html(s.detail || "");
+        if (s.link_doctype && s.link_name) {
+            const url = `/app/${frappe.router.slug(s.link_doctype)}/${encodeURIComponent(s.link_name)}`;
+            detail += ` &nbsp; <a href="${url}" target="_blank">${frappe.utils.escape_html(s.link_name)}</a>`;
+        }
+        return `
+            <tr>
+                <td style='padding:6px;vertical-align:top;width:32px;text-align:center;'>${status}</td>
+                <td style='padding:6px;vertical-align:top;width:210px;font-weight:500;'>${stage}</td>
+                <td style='padding:6px;vertical-align:top;width:120px;'>${when}</td>
+                <td style='padding:6px;vertical-align:top;'>${detail}</td>
+            </tr>
+        `;
+    }).join("");
+    return `
+        <div style='margin-bottom:12px;'>
+            <table style='width:100%;border-collapse:collapse;font-size:13px;'>
+                <thead>
+                    <tr style='border-bottom:1px solid #eee;color:#666;'>
+                        <th style='padding:4px;text-align:center;'></th>
+                        <th style='padding:4px;text-align:left;'>Stage</th>
+                        <th style='padding:4px;text-align:left;'>When</th>
+                        <th style='padding:4px;text-align:left;'>Detail</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `;
 }
 
 function _formatOkDetail(check) {
