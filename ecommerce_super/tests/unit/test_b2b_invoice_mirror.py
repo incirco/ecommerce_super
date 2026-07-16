@@ -123,6 +123,18 @@ class TestParsePostingDate(unittest.TestCase):
 
 
 class TestResolveLineItems(unittest.TestCase):
+    def setUp(self):
+        # gh#207 instrumentation: mirror now calls frappe.log_error on
+        # fallback-tier fires. Stub it here so tests using tier 2/3
+        # payloads don't try to actually write an Error Log row (which
+        # requires DocType metadata not loaded in this test context).
+        patcher = patch(
+            "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror."
+            "frappe.log_error"
+        )
+        self.log_error_mock = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_resolves_sku_via_item_map(self):
         row = _ee_row()
         with patch("frappe.db.get_value") as gv:
@@ -185,6 +197,17 @@ class TestResolveWarehouse(unittest.TestCase):
 
 class TestMirrorSiFromEeResponse(unittest.TestCase):
     """The headline integration of resolution + insertion + variance."""
+
+    def setUp(self):
+        # gh#207 instrumentation: same reasoning as TestResolveLineItems.
+        # Full mirror path exercises _resolve_line_items which may hit
+        # tier 2 / 3 fallbacks on payloads without taxable_value.
+        patcher = patch(
+            "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror."
+            "frappe.log_error"
+        )
+        self.log_error_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_creates_si_when_not_already_mirrored(self):
         row = _ee_row()

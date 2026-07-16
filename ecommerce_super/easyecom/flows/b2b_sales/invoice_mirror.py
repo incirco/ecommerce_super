@@ -311,8 +311,13 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
         # (SO-2610392 was ₹0 on EE but ₹285.71 on our SI because we
         # were reading pre-discount `Item Amount Excluding Tax` alone).
         #
-        # Fall through to breakup_types math (net of promo) if
-        # taxable_value is absent, then to selling_price / (1 + rate/100).
+        # gh#207: tiers 2 and 3 below are defensive fallbacks added in
+        # case EE ever omits `taxable_value`. In practice (as of 2026-07),
+        # every observed EE response has included `taxable_value` on
+        # every line. Both fallback tiers now emit an Error Log entry
+        # when they fire so we can catch any live production hit and
+        # either add a locked-behavior test for that shape or delete
+        # the tier as dead code. See gh#207 for the audit plan.
         rate = None
         # 1. Preferred: EE's own post-promo net.
         if "taxable_value" in line and line.get("taxable_value") is not None:
@@ -336,6 +341,24 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
                         continue
             if net > 0:
                 rate = round(net / qty, 2)
+                # gh#207 instrumentation — silent fallback made loud.
+                # If this fires in production, either (a) add a test
+                # locking the observed payload shape or (b) delete the
+                # tier as dead code. Cheap to log (Error Log is bounded
+                # by Frappe's rotation), no user impact.
+                frappe.log_error(
+                    title=(
+                        f"gh#207: invoice mirror fell back to tier 2 "
+                        f"(breakup_types sum) for sku={sku!r} — EE "
+                        f"payload lacked taxable_value"
+                    ),
+                    message=(
+                        f"item_code={item_code!r}, qty={qty}, "
+                        f"derived rate={rate}, line payload keys="
+                        f"{sorted(line.keys())!r}, breakup_types="
+                        f"{line_breakup!r}"
+                    ),
+                )
         # 3. Final fallback: derive from selling_price + tax_rate.
         # Coarser rounding but always lands a number when EE omits both
         # taxable_value and breakup_types.
@@ -346,6 +369,24 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
             rate = round(
                 gross_per_unit / (1 + tax_rate / 100), 2
             ) if (1 + tax_rate / 100) else gross_per_unit
+            # gh#207 instrumentation — same reasoning as tier 2 above.
+            # This is the coarsest tier and most suspect if it ever
+            # fires in production (rounds gross-to-net with less
+            # precision than tier 1/2).
+            frappe.log_error(
+                title=(
+                    f"gh#207: invoice mirror fell back to tier 3 "
+                    f"(selling_price / (1 + tax_rate/100)) for "
+                    f"sku={sku!r} — EE payload lacked both taxable_value "
+                    f"AND breakup_types with 'Excluding Tax' entries"
+                ),
+                message=(
+                    f"item_code={item_code!r}, qty={qty}, "
+                    f"selling_price={selling_price}, tax_rate={tax_rate}, "
+                    f"derived rate={rate}, line payload keys="
+                    f"{sorted(line.keys())!r}"
+                ),
+            )
 
         hsn = frappe.db.get_value("Item", item_code, "gst_hsn_code")
 
