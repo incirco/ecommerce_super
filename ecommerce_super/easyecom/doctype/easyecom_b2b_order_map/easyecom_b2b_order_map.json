@@ -27,7 +27,8 @@
   "payload_hash",
   "request_payload",
   "response_payload",
-  "last_error"
+  "last_error",
+  "ecs_correlation_id"
  ],
  "fields": [
   {
@@ -198,6 +199,14 @@
    "label": "Last Error",
    "read_only": 1,
    "description": "Last failure message from a push or cancel attempt. Empty when the most recent attempt succeeded."
+  },
+  {
+   "fieldname": "ecs_correlation_id",
+   "fieldtype": "Data",
+   "label": "ECS Correlation ID",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "gh#153 — cross-boundary correlation ID stamped on outbound createOrder push. Sent as X-ECS-Correlation-Id HTTP header. When EE echoes it back on inbound /einvoice/update, we can link the 3 legs of the flow. Fallback resolution via reference_code → Map lookup when EE hasn't echoed."
   }
  ],
  "links": [],

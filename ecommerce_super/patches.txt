@@ -165,3 +165,7 @@ ecommerce_super.patches.v0_1.repair_gh200_unshadow_standard_perms
 # deleted. Idempotent — a no-op on fresh installs and sites that have
 # already been healed.
 ecommerce_super.patches.v0_1.heal_gh205_pre_fix_draft_si_dates
+# gh#153 (2026-07-16): add ecs_correlation_id column to
+# EasyEcom B2B Order Map — persists the outbound X-ECS-Correlation-Id
+# header value so we can cross-reference on inbound /einvoice/update.
+ecommerce_super.patches.v0_1.add_ecs_correlation_id_to_b2b_order_map

@@ -245,6 +245,57 @@ def _gsp_endpoint(fn):
     return wrapper
 
 
+def _resolve_correlation_id_from_payload(request_body: str | None) -> str | None:
+    """gh#153 fallback resolver — when EE hasn't echoed the
+    X-ECS-Correlation-Id header, look up the correlation ID from the
+    B2B Order Map by `reference_code` (the SO name EE returns to us).
+
+    Returns None if:
+      - The request body isn't parseable JSON
+      - The payload has no `reference_code` (or no `orders.reference_code`)
+      - No B2B Order Map exists for that SO (rare — implies EE sent
+        us an invoice for an order we never pushed)
+      - Map exists but has no ecs_correlation_id (pre-gh#153 orders)
+
+    Any failure returns None cleanly — the outer caller falls back to
+    generating a fresh ID so the inbound log always gets *some*
+    correlation ID, just not one that crosses to leg 1.
+    """
+    if not request_body:
+        return None
+    try:
+        body = json.loads(request_body)
+    except (ValueError, TypeError):
+        return None
+
+    # Payload shape: {orders: {reference_code: ...}} (object)
+    # OR             {orders: [{reference_code: ...}]} (array — gh#142)
+    orders = body.get("orders") if isinstance(body, dict) else None
+    if isinstance(orders, list):
+        row = orders[0] if orders else {}
+    elif isinstance(orders, dict):
+        row = orders
+    else:
+        row = body if isinstance(body, dict) else {}
+
+    reference_code = (
+        row.get("reference_code")
+        or body.get("reference_code")
+        if isinstance(body, dict) else None
+    )
+    if not reference_code:
+        return None
+
+    try:
+        return frappe.db.get_value(
+            "EasyEcom B2B Order Map",
+            {"sales_order": reference_code},
+            "ecs_correlation_id",
+        )
+    except Exception:
+        return None
+
+
 def _log_inbound_gsp_call(
     *,
     endpoint: str,
@@ -328,12 +379,20 @@ def _log_inbound_gsp_call(
         # `EasyEcom API Call.company` is reqd=None, so leave it blank
         # when we can't resolve it cleanly.
         company = None
-        # Correlation ID: prefer inbound header if EE sent one (gh#153).
-        # Else, generate.
-        correlation_id = (
-            request.headers.get("X-ECS-Correlation-Id")
-            or frappe.generate_hash(length=32)
-        )
+        # Correlation ID resolution priority (gh#153):
+        #   1. X-ECS-Correlation-Id header from EE — used when EE has
+        #      shipped the echo-back on their side (coordinated)
+        #   2. Fallback: reference_code in the payload → look up the
+        #      B2B Order Map's ecs_correlation_id (which we stamped
+        #      at outbound-push time). Closes the trace even before
+        #      EE ships the echo-back.
+        #   3. Last resort: generate a fresh id (breaks cross-boundary
+        #      linkage but keeps intra-request tracing intact)
+        correlation_id = request.headers.get("X-ECS-Correlation-Id")
+        if not correlation_id:
+            correlation_id = _resolve_correlation_id_from_payload(req_body_capped)
+        if not correlation_id:
+            correlation_id = frappe.generate_hash(length=32)
         status = "Success" if 200 <= http_status < 300 else "Failed"
         doc = frappe.new_doc("EasyEcom API Call")
         doc.update({
