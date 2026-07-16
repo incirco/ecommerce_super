@@ -252,21 +252,16 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
 
     # IC requires submitted SI. Submit if Draft (whether or not we
     # then mint IRN — the GL impact happens either way).
+    #
+    # gh#205 part 2 removed the pre-submit `_reassert_si_dates_for_submit`
+    # heal path. It only existed to fix pre-gh#161-v2 Draft SIs
+    # (created before 2026-07-13). The one-shot migration patch
+    # `heal_gh205_pre_fix_draft_si_dates` (v0_1) runs the same heal on
+    # migrate; after that runs, no pre-fix Drafts remain and the runtime
+    # healer is dead code. Fresh SIs from the current mirror insert path
+    # already have set_posting_time=1 baked in, so the ERPNext-native
+    # date freeze works without our intervention.
     if si.docstatus == 0:
-        # gh#161 v2 heal path: existing Draft SIs created before the
-        # set_posting_time=1 fix landed carry set_posting_time=0. On
-        # submit, ERPNext resets posting_date to today, which lands
-        # due_date < posting_date if the SI was drafted on a prior day.
-        # Re-assert dates defensively before submit.
-        try:
-            _reassert_si_dates_for_submit(si)
-        except Exception as exc:  # noqa: BLE001
-            # Best-effort; if reassert fails, let the actual submit
-            # error surface below.
-            frappe.log_error(
-                title=f"gh#161 v2: date reassert failed for {si_name}",
-                message=f"{type(exc).__name__}: {exc}",
-            )
         try:
             si.flags.ignore_permissions = True
             si.submit()
@@ -353,65 +348,18 @@ def _post_variance_comment_on_si(
         pass
 
 
-def _reassert_si_dates_for_submit(si: Any) -> None:
-    """gh#161 v2 — heal pre-fix Draft SIs before submit.
-
-    Existing Drafts created before the set_posting_time=1 fix landed
-    (2026-07-13) have set_posting_time=0. On submit, ERPNext's
-    set_posting_time_and_date() resets posting_date to today, which
-    lands due_date < posting_date when the SI was drafted on a prior
-    day. Same root cause as gh#161 originally, exposed via a different
-    ERPNext validate path.
-
-    Fix in-place: set_posting_time=1 (freeze the date), ensure
-    due_date >= posting_date, clear any payment_terms_template that
-    would re-derive schedule.
-
-    gh#205 removed the transaction_date handling — that field is
-    native to Sales Order, not Sales Invoice. Setting it on SI was
-    either a silent no-op or a shadow field with no ERPNext-level
-    effect. See gh#205 for the audit.
-
-    Follow-up (gh#205): once no Draft SIs with set_posting_time=0
-    remain on live sites (query in the issue), delete this function
-    and its call sites. Pre-fix drafts should have all been submitted
-    or cancelled by then.
-    """
-    from frappe.utils import getdate
-    changed = False
-    if si.get("set_posting_time") != 1:
-        si.set_posting_time = 1
-        changed = True
-    # Defensive against non-date values (tests may pass MagicMock).
-    try:
-        if (
-            si.due_date
-            and getdate(si.due_date) < getdate(si.posting_date)
-        ):
-            si.due_date = si.posting_date
-            changed = True
-    except (TypeError, ValueError, AttributeError):
-        # Non-parseable date on either side — skip the compare, leave
-        # values as-is. Any real production SI has real dates; this
-        # guard is for mocks + defensive coding.
-        pass
-    if si.get("payment_terms_template"):
-        si.payment_terms_template = ""
-        si.payment_schedule = []
-        changed = True
-    if changed:
-        # Persist via db_set on the fields that don't need re-validate
-        # so submit's validate sees the sane values. Using db_set +
-        # reload rather than save() avoids nested-validate recursion.
-        si.db_set("set_posting_time", 1, update_modified=False)
-        si.db_set("due_date", si.posting_date, update_modified=False)
-        si.db_set("payment_terms_template", "", update_modified=False)
-        si.reload()
-
-
 # ============================================================
 # India Compliance — E-way bill mint
 # ============================================================
+#
+# NOTE (gh#205 part 2, 2026-07-16): the pre-submit `_reassert_si_dates_for_submit`
+# healer that lived here was deleted. It only existed to fix pre-gh#161-v2
+# Draft SIs (set_posting_time=0 with EE invoice_id back-ref). The one-shot
+# migration patch `heal_gh205_pre_fix_draft_si_dates` (v0_1) runs the same
+# heal at migrate time; after that runs, no pre-fix Drafts remain and the
+# runtime healer is dead code. Fresh SIs from the current mirror insert
+# path (invoice_mirror.py:159) already carry set_posting_time=1, so the
+# ERPNext-native date freeze works without our intervention.
 
 
 def mint_eway_for_si(
