@@ -24,10 +24,73 @@ frappe.ui.form.on("EasyEcom B2B Order Map", {
             () => _runDryRun(frm, "dry_run_ewaybill"),
             __("Diagnostics")
         );
+        // Re-fire (real, not dry-run) — MTTR relief for post-code-fix
+        // remediation. Fetches fresh EE data, runs the same handler
+        // chain the /einvoice/update endpoint uses. Idempotent — safe
+        // to click multiple times.
+        frm.add_custom_button(
+            __("Re-fire /einvoice/update"),
+            () => _confirmAndRefire(frm),
+            __("Diagnostics")
+        );
         // Render the "one place, whole story" lifecycle view.
         _renderLifecycle(frm);
     },
 });
+
+function _confirmAndRefire(frm) {
+    frappe.confirm(
+        __(
+            "Re-fire will actually create/update the Sales Invoice + mint " +
+            "IRN (if the toggle is on). This is NOT a dry-run.<br><br>" +
+            "Use this when you've fixed the underlying issue that caused " +
+            "the last /einvoice/update to fail. Idempotent — safe to run " +
+            "even if unsure.<br><br>" +
+            "Proceed?"
+        ),
+        () => _runRefire(frm),
+    );
+}
+
+function _runRefire(frm) {
+    frappe.call({
+        method: "ecommerce_super.easyecom.api.gsp_refire.refire_einvoice",
+        args: { map_name: frm.doc.name },
+        freeze: true,
+        freeze_message: __("Re-firing /einvoice/update…"),
+        callback(r) {
+            const result = r.message || {};
+            const indicator = result.ok ? "green" : "red";
+            const lines = [
+                __("<b>Outcome:</b> {0}", [
+                    frappe.utils.escape_html(result.message || "no message"),
+                ]),
+            ];
+            if (result.sales_invoice) {
+                const url = `/app/sales-invoice/${encodeURIComponent(result.sales_invoice)}`;
+                lines.push(
+                    __("<b>Sales Invoice:</b> <a href='{0}' target='_blank'>{1}</a>", [
+                        url, frappe.utils.escape_html(result.sales_invoice),
+                    ])
+                );
+            }
+            if (result.irn) {
+                lines.push(
+                    __("<b>IRN:</b> {0}", [frappe.utils.escape_html(result.irn)])
+                );
+            }
+            lines.push(
+                "<br><small>A Comment with this attempt + outcome has been added to the Map timeline.</small>"
+            );
+            frappe.msgprint({
+                title: __("Re-fire /einvoice/update"),
+                message: lines.join("<br>"),
+                indicator,
+            });
+            frm.reload_doc();  // pull in the new Comment
+        },
+    });
+}
 
 function _runDryRun(frm, method_name) {
     frappe.call({
