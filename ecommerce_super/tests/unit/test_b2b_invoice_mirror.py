@@ -57,6 +57,10 @@ def _ee_row(
                 "item_quantity": 3,
                 "selling_price": "1304.73",
                 "tax_rate": 18,
+                # gh#207: mirror now requires `taxable_value` (previous
+                # fallback tiers deleted). 1105.7034 is the same net as
+                # summing breakup_types below — kept for continuity.
+                "taxable_value": 1105.7034,
                 "breakup_types": {
                     "Item Amount Excluding Tax": 1105.7034,
                     "Item Amount CGST": 99.5133,
@@ -123,18 +127,6 @@ class TestParsePostingDate(unittest.TestCase):
 
 
 class TestResolveLineItems(unittest.TestCase):
-    def setUp(self):
-        # gh#207 instrumentation: mirror now calls frappe.log_error on
-        # fallback-tier fires. Stub it here so tests using tier 2/3
-        # payloads don't try to actually write an Error Log row (which
-        # requires DocType metadata not loaded in this test context).
-        patcher = patch(
-            "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror."
-            "frappe.log_error"
-        )
-        self.log_error_mock = patcher.start()
-        self.addCleanup(patcher.stop)
-
     def test_resolves_sku_via_item_map(self):
         row = _ee_row()
         with patch("frappe.db.get_value") as gv:
@@ -167,22 +159,27 @@ class TestResolveLineItems(unittest.TestCase):
             result = _resolve_line_items(row)
         self.assertEqual(result, [])
 
-    def test_falls_back_to_selling_price_when_no_breakup(self):
-        """Defensive: some EE responses may omit breakup_types per line."""
+    def test_raises_when_taxable_value_missing_gh207(self):
+        """gh#207: mirror requires EE's `taxable_value` on every line.
+        The previous selling_price / breakup_types fallback tiers were
+        deleted as speculative reinvention of tax arithmetic — any
+        real payload without taxable_value should surface a clear
+        error, not silently derive a maybe-wrong number."""
         row = _ee_row(items=[
             {
                 "sku": "FOO-001",
                 "item_quantity": 3,
                 "selling_price": "1304.73",
                 "tax_rate": 18,
-                # No breakup_types
+                # No taxable_value — post-#207 this must throw.
             },
         ])
-        with patch("frappe.db.get_value") as gv:
-            gv.side_effect = ["ITEM-FOO-001", "39241090"]
-            result = _resolve_line_items(row)
-        # 1304.73 / 3 = 434.91 gross; / 1.18 = 368.57 net
-        self.assertEqual(result[0]["rate"], 368.57)
+        with patch("frappe.db.get_value", return_value="ITEM-FOO-001"):
+            with self.assertRaises(InvoiceMirrorError) as ctx:
+                _resolve_line_items(row)
+        msg = str(ctx.exception)
+        self.assertIn("taxable_value", msg)
+        self.assertIn("FOO-001", msg)
 
 
 class TestResolveWarehouse(unittest.TestCase):
@@ -197,17 +194,6 @@ class TestResolveWarehouse(unittest.TestCase):
 
 class TestMirrorSiFromEeResponse(unittest.TestCase):
     """The headline integration of resolution + insertion + variance."""
-
-    def setUp(self):
-        # gh#207 instrumentation: same reasoning as TestResolveLineItems.
-        # Full mirror path exercises _resolve_line_items which may hit
-        # tier 2 / 3 fallbacks on payloads without taxable_value.
-        patcher = patch(
-            "ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror."
-            "frappe.log_error"
-        )
-        self.log_error_mock = patcher.start()
-        self.addCleanup(patcher.stop)
 
     def test_creates_si_when_not_already_mirrored(self):
         row = _ee_row()
