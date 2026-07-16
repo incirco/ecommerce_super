@@ -39,6 +39,60 @@ function _deferredMsgprint(opts) {
     setTimeout(() => frappe.msgprint(opts), 0);
 }
 
+// gh#148 — Diagnostics: pre-flight config check preview.
+// Calls the whitelisted `config_check` endpoint on the controller,
+// renders the returned blockers + warnings in a msgprint dialog.
+// Read-only; no side effects.
+function _runConfigCheck(frm) {
+    if (!_ensureSaved(frm, "Save the Account before running the pre-flight check — the checker reads the persisted record.")) {
+        return;
+    }
+    frappe.call({
+        method: "ecommerce_super.easyecom.doctype.easyecom_account.easyecom_account.config_check",
+        args: { account: frm.doc.name },
+        freeze: true,
+        freeze_message: __("Running pre-flight config check…"),
+        callback(r) {
+            const result = r.message || {};
+            const blockers = result.blockers || [];
+            const warnings = result.warnings || [];
+            const lines = [];
+            lines.push(
+                __("Account: <b>{0}</b> — enabled: {1}", [result.account, result.enabled])
+            );
+            if (blockers.length === 0 && warnings.length === 0) {
+                lines.push("");
+                lines.push(__("✓ No blockers, no warnings. Ready to enable."));
+                _deferredMsgprint({
+                    title: __("Pre-flight Config Check"),
+                    message: lines.join("<br>"),
+                    indicator: "green",
+                });
+                return;
+            }
+            if (blockers.length > 0) {
+                lines.push("");
+                lines.push(__("<b>Blockers ({0})</b> — must fix before enabling:", [blockers.length]));
+                for (const b of blockers) {
+                    lines.push(`&nbsp;&nbsp;• [${b.category}] ${frappe.utils.escape_html(b.message)}`);
+                }
+            }
+            if (warnings.length > 0) {
+                lines.push("");
+                lines.push(__("<b>Warnings ({0})</b> — non-blocking, review recommended:", [warnings.length]));
+                for (const w of warnings) {
+                    lines.push(`&nbsp;&nbsp;• [${w.category}] ${frappe.utils.escape_html(w.message)}`);
+                }
+            }
+            _deferredMsgprint({
+                title: __("Pre-flight Config Check"),
+                message: lines.join("<br>"),
+                indicator: blockers.length > 0 ? "red" : "orange",
+            });
+        },
+    });
+}
+
 function _runLocationDiscovery(frm) {
     if (!_ensureSaved(frm, "Save the Account before running discovery — the EasyEcom client reads credentials and the default location from the persisted record.")) {
         return;
@@ -650,6 +704,16 @@ frappe.ui.form.on("EasyEcom Account", {
         if (frm.is_new()) {
             return;
         }
+
+        // gh#148 Diagnostics group — pre-flight config check.
+        // Read-only preview of blockers/warnings the same validate()
+        // pass would emit on save. Useful pre-go-live sanity so the
+        // FDE can see the checklist without needing to flip enabled.
+        frm.add_custom_button(
+            __("Pre-flight Config Check (§11)"),
+            () => _runConfigCheck(frm),
+            __("Diagnostics")
+        );
 
         // Discover group — every entity master that ships a pull
         // surface. Each top-button delegates to the same section
