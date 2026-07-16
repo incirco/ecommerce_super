@@ -33,6 +33,7 @@ import base64
 from typing import Any
 
 import frappe
+from frappe import _
 from frappe.utils import now_datetime
 
 
@@ -149,18 +150,36 @@ def find_or_create_si_for_gsp(
             f"SI create from EE payload failed: {exc}"
         ) from exc
     except InvoiceMirrorVariance as exc:
-        # SI was still created. We pick it up via the invoice_id
-        # lookup (path 1) on the next iteration — but it already exists
-        # now, so search again.
-        existing_post_variance = frappe.db.get_value(
+        # gh#214-followup — the variance-swallow fix.
+        #
+        # Previously: this except clause looked up the just-created SI
+        # (which the mirror inserted before raising) and RETURNED it as
+        # if success. That hid the variance signal: EE received a
+        # normal response and the wrong-totalled SI shipped as an
+        # invoice. Live incident SO-2610405 (2026-07-16) shipped an
+        # under-billed invoice through this exact path — the variance
+        # check fired, but this swallow muffled it.
+        #
+        # Now: post a visible Comment on the Draft SI (so FDE sees it
+        # on the form) and propagate as GSPHandlerError. EE will
+        # receive an error response and the SI stays in Draft awaiting
+        # review — better than silently shipping wrong money.
+        #
+        # Small-variance case (≤ VARIANCE_THRESHOLD_PCT, currently 1%)
+        # still returns silently: the mirror never raises for those,
+        # so this except doesn't fire. Only >1% drift lands here, and
+        # that's exactly the case we want to surface.
+        si_name = frappe.db.get_value(
             "Sales Invoice",
             {"ecs_easyecom_invoice_id": ee_invoice_id},
             "name",
         )
-        if existing_post_variance:
-            return existing_post_variance
+        if si_name:
+            _post_variance_comment_on_si(si_name, ee_invoice_id, str(exc))
         raise GSPHandlerError(
-            f"SI create variance: {exc}"
+            f"SI variance exceeded threshold — SI left in Draft for FDE "
+            f"review, EE call refused to prevent shipping an under-billed "
+            f"invoice. Details: {exc}"
         ) from exc
 
     si_name = mirror_result["sales_invoice"]
@@ -291,6 +310,47 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
         )
 
     return _assemble_irn_response(si)
+
+
+def _post_variance_comment_on_si(
+    si_name: str,
+    ee_invoice_id: str,
+    variance_msg: str,
+) -> None:
+    """gh#214-followup — add a visible Comment on the Draft SI when the
+    variance check fired. Called from the /einvoice/update handler
+    right before it raises GSPHandlerError, so the FDE opening the SI
+    later sees WHY it's in Draft (instead of digging through Error
+    Log or API Call logs).
+
+    Never raises — a comment failure must not block the outer throw.
+    The variance is already going to surface as an HTTP error to EE;
+    the comment is just a courtesy for the FDE."""
+    try:
+        si = frappe.get_doc("Sales Invoice", si_name)
+        si.add_comment(
+            "Comment",
+            text=_(
+                "<b>Variance alert (gh#214-followup):</b><br><br>"
+                "This SI was left in Draft because its total differs from "
+                "EE's total by more than the threshold. The /einvoice/update "
+                "call from EE was refused so an under-billed invoice was "
+                "not shipped.<br><br>"
+                "<b>Details:</b> {0}<br>"
+                "<b>EE invoice_id:</b> {1}<br><br>"
+                "Review the tax lines, correct if needed, then either "
+                "submit this SI manually or ask EE to regenerate the "
+                "invoice (which will fire /einvoice/update again)."
+            ).format(
+                frappe.utils.escape_html(variance_msg),
+                frappe.utils.escape_html(ee_invoice_id),
+            ),
+        )
+    except Exception:
+        # Deliberate broad catch — the comment is best-effort. The
+        # variance itself surfaces via the raised GSPHandlerError; a
+        # comment failure must not muffle that signal.
+        pass
 
 
 def _reassert_si_dates_for_submit(si: Any) -> None:
