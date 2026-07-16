@@ -271,8 +271,11 @@ def _apply_ee_qtys_and_drop_zero_lines(si: Any, ee_row: dict) -> None:
     rare — implies EE invoiced an item not on the SO), we log and
     skip; SO wins.
     """
-    order_items = ee_row.get("order_items") or []
-    if not isinstance(order_items, list):
+    order_items = ee_row.get("order_items")
+    if not order_items or not isinstance(order_items, list):
+        # No line-level override info from EE — trust msi's items
+        # as-is (they came from the SO). Prevents "silently drop
+        # everything" when EE payload lacks order_items.
         return
 
     # Build sku → qty map from EE payload. Multiple lines with same
@@ -287,6 +290,12 @@ def _apply_ee_qtys_and_drop_zero_lines(si: Any, ee_row: dict) -> None:
         except (TypeError, ValueError):
             qty = 0
         ee_qty_by_sku[sku] = ee_qty_by_sku.get(sku, 0) + qty
+
+    # Defensive: if we somehow ended up with an empty map (all lines
+    # had no sku), don't drop anything. Better to keep msi's items
+    # than to blank the SI.
+    if not ee_qty_by_sku:
+        return
 
     # Resolve each SI item's ERPNext item_code → EE sku via Item Map,
     # then look up the qty. Cache lookups to avoid N queries.

@@ -5,10 +5,13 @@ since succeeded and ee_customer_id carries the real EE c_id.
 Pre-fix, `_upsert_map_row_after_create` (customer_push.py:524) only
 wrote ee_customer_id on the existing-map path, so an initial
 Flagged-Not-Created row that later got pushed successfully never had
-its placeholder ee_c_id overwritten. The inbound resolver in
-invoice_mirror._resolve_customer queries ee_c_id → misses → SI create
-fails with "cannot resolve buyer" even for customers that ARE pushed
-and ARE mapped.
+its placeholder ee_c_id overwritten. The (then-existing) inbound
+customer resolver in invoice_mirror queried ee_c_id → missed → SI
+create failed with "cannot resolve buyer" even for customers that
+ARE pushed and ARE mapped. That resolver was deleted in the
+mirror-uses-make_sales_invoice refactor (2026-07-16); this backfill
+still matters because §11 trace linkage and §8e re-pulls both rely on
+the ee_c_id → Customer mapping being clean.
 
 The push code and resolver are both fixed forward-going. This patch
 heals the historical rows on already-deployed sites.
