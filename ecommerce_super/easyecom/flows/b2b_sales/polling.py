@@ -555,33 +555,46 @@ def _apply_decision(
             mirror_si_from_ee_response,
         )
 
-        # Pick the row that carries the invoice (latest with
-        # invoice_number populated; multi-shipment splits would
-        # produce multiple invoices over time — Phase 1 mirrors
-        # the latest seen on each polling tick).
+        # Iterate ALL invoice rows in this polling response (gh#227):
+        # a single SO can produce multiple EE invoices over time
+        # (partial fulfilment, split shipments). We mirror each one
+        # separately — the mirror's own invoice_id idempotency means
+        # already-mirrored invoice_ids return early without creating
+        # duplicates. Previously we picked only the max() by
+        # last_update_date and gated on Map.sales_invoice being empty,
+        # which collapsed multi-invoice orders to just the first SI.
         b2b_rows = [r for r in rows if r.get("order_type_key") == "businessorder"]
-        invoice_row = max(
-            (r for r in b2b_rows if r.get("invoice_number")),
+        invoice_rows_sorted = sorted(
+            (r for r in b2b_rows if r.get("invoice_number") and r.get("invoice_id")),
             key=lambda r: r.get("last_update_date") or "",
-            default=None,
         )
+        # For the display fields (ee_invoice_number, status) use the
+        # latest row so the Map reflects the freshest invoice.
+        latest_invoice_row = invoice_rows_sorted[-1] if invoice_rows_sorted else None
 
         updates: dict[str, Any] = {"status": "Invoice Pending"}
-        if invoice_row:
+        if latest_invoice_row:
             ee_invoice_number = (
-                invoice_row.get("invoice_number") or ""
+                latest_invoice_row.get("invoice_number") or ""
             ).strip()
             if ee_invoice_number and not map_doc.get("ee_invoice_number"):
                 updates["ee_invoice_number"] = ee_invoice_number
 
-        # Mirror SI iff we haven't already (idempotent via Map.sales_invoice).
+        # Mirror every invoice row in order. The mirror's own
+        # idempotency handles the "already exists for this invoice_id"
+        # case — we never gate on Map.sales_invoice being empty, so
+        # subsequent polls creating additional invoices work correctly.
         mirror_outcome: dict | None = None
         variance_warning: str | None = None
-        if invoice_row and not map_doc.get("sales_invoice"):
+        variance_invoice_row: dict | None = None
+        for invoice_row in invoice_rows_sorted:
             try:
                 mirror_outcome = mirror_si_from_ee_response(
                     map_doc=map_doc, ee_row=invoice_row,
                 )
+                # Map.sales_invoice tracks the LATEST mirrored SI —
+                # older SIs remain discoverable via the SO's
+                # Connections tab and their own back-ref.
                 updates["sales_invoice"] = mirror_outcome["sales_invoice"]
                 updates["sales_invoice_mirrored_at"] = now_datetime()
                 updates["status"] = "Invoice Generated"
@@ -589,22 +602,22 @@ def _apply_decision(
                 # SI WAS created — it's in Draft. Variance exceeded
                 # VARIANCE_THRESHOLD_PCT (0.01%); raise Discrepancy
                 # for FDE review but persist the link.
-                # Re-derive the SI name from the exception's inner
-                # state: the mirror function already wrote the SI before
-                # the raise. Pull from the Map's existing sales_invoice
-                # link if it got set (transactional) — else fall back
-                # to a Sales Invoice lookup by invoice_id.
-                if not map_doc.get("sales_invoice"):
-                    si_name = frappe.db.get_value(
-                        "Sales Invoice",
-                        {"ecs_easyecom_invoice_id": str(invoice_row.get("invoice_id"))},
-                        "name",
-                    )
-                    if si_name:
-                        updates["sales_invoice"] = si_name
-                        updates["sales_invoice_mirrored_at"] = now_datetime()
+                # The mirror already wrote the SI before raising; look
+                # it up by invoice_id to link the Map.
+                si_name = frappe.db.get_value(
+                    "Sales Invoice",
+                    {"ecs_easyecom_invoice_id": str(invoice_row.get("invoice_id"))},
+                    "name",
+                )
+                if si_name:
+                    updates["sales_invoice"] = si_name
+                    updates["sales_invoice_mirrored_at"] = now_datetime()
                 updates["status"] = "Invoice Generated"
+                # Keep going — one invoice's variance shouldn't block
+                # sibling invoices in the same poll. Alert on the last
+                # variance seen (avoids fanout if two lines diverge).
                 variance_warning = str(exc)
+                variance_invoice_row = invoice_row
             except InvoiceMirrorError as exc:
                 # Mirror failed before SI was inserted (missing Customer
                 # Map, missing Item Map, etc.). Record on Map.last_error
@@ -628,6 +641,11 @@ def _apply_decision(
                         "retries automatically."
                     ),
                 )
+                # A prerequisite miss on ONE invoice halts the loop —
+                # subsequent invoices likely miss the same prerequisite
+                # (same Customer Map / Item Map) and would just fan out
+                # identical Discrepancies. Next polling tick retries.
+                break
 
         frappe.db.set_value(
             "EasyEcom B2B Order Map", map_doc.name, updates,
@@ -635,6 +653,10 @@ def _apply_decision(
         )
 
         if variance_warning:
+            variance_id_bit = (
+                f" (EE invoice_id={variance_invoice_row.get('invoice_id')!r})"
+                if variance_invoice_row else ""
+            )
             _raise_discrepancy(
                 kind="B2B Mode 2 SI mirror — variance exceeds threshold",
                 reference_doctype="EasyEcom B2B Order Map",
@@ -642,9 +664,9 @@ def _apply_decision(
                 company=company or "",
                 reason=(
                     f"§11.5.2 Mode 2 SI mirror created Draft SI for "
-                    f"reference_code={map_doc.sales_order!r} but the "
-                    f"computed totals diverge beyond "
-                    f"VARIANCE_THRESHOLD_PCT (0.01%). "
+                    f"reference_code={map_doc.sales_order!r}"
+                    f"{variance_id_bit} but the computed totals diverge "
+                    f"beyond VARIANCE_THRESHOLD_PCT (0.01%). "
                     f"{variance_warning} "
                     "FDE: SO built the SI natively via ERPNext's "
                     "make_sales_invoice; EE's total disagrees. Review "
