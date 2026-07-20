@@ -6,11 +6,14 @@ handlers. The lifecycle:
   1. EE calls /einvoice/update with full order payload
   2. find_or_create_si_for_gsp:
      - Look up SI by ecs_easyecom_invoice_id (idempotency)
-     - Else look up via B2B Order Map.sales_invoice link
-     - Else look up via reference_code → Map → SO → create new SI by
-       calling `invoice_mirror.mirror_si_from_ee_response`, which
+     - Else call `invoice_mirror.mirror_si_from_ee_response`, which
        delegates to ERPNext's native `make_sales_invoice(so.name)`
        (see PR #226 — the mirror no longer hand-copies fields).
+       The mirror handles its own idempotency by invoice_id, plus a
+       legacy-adoption shim for pre-fix SIs whose invoice_id was
+       never stamped (gh#227). Multiple invoices per SO produce
+       multiple SIs — the Map-lookup middle step that used to collapse
+       them was removed in gh#227.
   3. Submit the SI if Draft (IC requires submitted SI for generate_e_invoice)
   4. mint_irn_for_si:
      - If SI.irn already populated → return cached (idempotent)
@@ -61,8 +64,15 @@ def find_or_create_si_for_gsp(
 
     Lookup priority:
       1. ecs_easyecom_invoice_id (idempotency — re-hit returns cached)
-      2. B2B Order Map.sales_invoice (already mirrored / minted)
-      3. reference_code → Map → SO → create new SI from EE payload
+      2. reference_code → Map → SO → mirror creates a new SI (delegated
+         to invoice_mirror.mirror_si_from_ee_response, which also
+         handles legacy-adoption for pre-fix unstamped SIs on the Map)
+
+    Multiple EE invoices for the same SO (partial fulfilment, split
+    shipments) produce multiple SIs — one per unique invoice_id.
+    The Map's `sales_invoice` pointer becomes "latest SI"; the full
+    list of SIs for the SO is on the SO's Connections tab (native
+    ERPNext wiring, courtesy of PR #226).
 
     Raises GSPHandlerError on:
       - Missing invoice_id in payload (nothing to anchor idempotency)
@@ -77,6 +87,9 @@ def find_or_create_si_for_gsp(
         )
 
     # 1. Idempotency — SI already minted for this invoice_id?
+    # The mirror's own step 1 does this same check, so this early exit
+    # is a small optimisation (avoids loading the Map) rather than the
+    # true idempotency gate.
     existing = frappe.db.get_value(
         "Sales Invoice",
         {
@@ -88,34 +101,17 @@ def find_or_create_si_for_gsp(
     if existing:
         return existing
 
-    # 2. Map → linked SI (Mode 2 may have already mirrored)
-    reference_code = (ee_row.get("reference_code") or "").strip()
-    if reference_code:
-        map_existing = frappe.db.get_value(
-            "EasyEcom B2B Order Map",
-            {"sales_order": reference_code},
-            ["name", "sales_invoice"],
-            as_dict=True,
-        )
-        if map_existing and map_existing.get("sales_invoice"):
-            # Stamp the invoice_id on the existing SI so future
-            # idempotency lookups (path 1) hit. Mirror created the SI
-            # without an invoice_id (it was for Mode 2 polling) — now
-            # we're using it for Mode 1, attach the id.
-            si_name = map_existing["sales_invoice"]
-            if not frappe.db.get_value(
-                "Sales Invoice", si_name, "ecs_easyecom_invoice_id"
-            ):
-                frappe.db.set_value(
-                    "Sales Invoice", si_name,
-                    "ecs_easyecom_invoice_id", ee_invoice_id,
-                    update_modified=False,
-                )
-                frappe.db.commit()
-            return si_name
-
-    # 3. Create new SI from the source SO via invoice_mirror
+    # 2. Create new SI from the source SO via invoice_mirror
     #    (which delegates to ERPNext's make_sales_invoice).
+    #
+    # gh#227: the previous version had a middle step here that looked
+    # up Map.sales_invoice and returned it when set. That collapsed
+    # every second/third EE invoice for the same SO into the first SI
+    # (split shipments were under-recorded). Removed — the mirror's
+    # own invoice_id idempotency handles the "already mirrored" case,
+    # and the mirror's legacy-adoption shim (introduced in the same
+    # PR) handles the "Map points at a pre-fix unstamped SI" case.
+    reference_code = (ee_row.get("reference_code") or "").strip()
     if not reference_code:
         raise GSPHandlerError(
             "EE payload missing reference_code — cannot create new SI "

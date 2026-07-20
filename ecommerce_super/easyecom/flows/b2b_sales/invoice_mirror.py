@@ -101,7 +101,10 @@ def mirror_si_from_ee_response(
     Returns:
         dict with keys:
           - sales_invoice: str (SI docname)
-          - operation: "created" | "already_exists"
+          - operation: "created" | "already_exists" | "adopted_legacy"
+              adopted_legacy = the Map already pointed at an SI that
+              lacked ecs_easyecom_invoice_id; we stamped it with this
+              call's invoice_id and returned it (see gh#227 shim).
           - variance_pct: float
           - ee_total: float
           - si_total: float
@@ -136,6 +139,48 @@ def mirror_si_from_ee_response(
             "ee_total": ee_total,
             "si_total": si_total,
         }
+
+    # Legacy adoption — the Map may point at an SI that was created
+    # before we started stamping `ecs_easyecom_invoice_id` (or by a
+    # manual FDE workflow). If we find one, adopt it: stamp with the
+    # current invoice_id so future lookups hit the idempotency path
+    # above, and return it as if it had always belonged to this
+    # invoice_id. Prevents creating a duplicate SI on the first Mode 1
+    # /einvoice/update or Mode 2 poll that lands after this shim ships.
+    #
+    # Fires at most ONCE per legacy SI (the stamp we write makes the
+    # invoice_id lookup above hit next time). If MMPL has zero legacy
+    # unstamped SIs (the expected case), this branch is dead weight
+    # that never executes.
+    legacy_si = (map_doc.get("sales_invoice") or "").strip()
+    if legacy_si and frappe.db.exists("Sales Invoice", legacy_si):
+        legacy_stamp = frappe.db.get_value(
+            "Sales Invoice", legacy_si, "ecs_easyecom_invoice_id"
+        )
+        if not legacy_stamp:
+            frappe.db.set_value(
+                "Sales Invoice", legacy_si,
+                "ecs_easyecom_invoice_id", ee_invoice_id,
+                update_modified=False,
+            )
+            frappe.db.commit()
+            ee_total = float(ee_row.get("total_amount") or 0)
+            si_total = float(frappe.db.get_value(
+                "Sales Invoice", legacy_si, "grand_total"
+            ) or 0)
+            return {
+                "sales_invoice": legacy_si,
+                "operation": "adopted_legacy",
+                "variance_pct": _variance_pct(si_total, ee_total),
+                "ee_total": ee_total,
+                "si_total": si_total,
+            }
+        # If legacy_stamp is set AND differs from ee_invoice_id, this
+        # is a new invoice for the same SO — fall through and create
+        # a fresh SI. The Map.sales_invoice pointer will be overwritten
+        # by the caller to the new SI (existing behavior); the old SI
+        # remains discoverable via the SO ↔ SI Connections tab and via
+        # its own ecs_easyecom_b2b_order_map back-ref.
 
     # Load the source SO — required. Every B2B Order Map has one in
     # the §11 flow; a Map without a sales_order is a corrupted state.

@@ -59,11 +59,30 @@ def _ee_row(**overrides):
     return base
 
 
-def _map_doc(sales_order="SO-TEST-001", name="ECS-B2B-SO-TEST-001", company="MMPL"):
+def _map_doc(
+    sales_order="SO-TEST-001",
+    name="ECS-B2B-SO-TEST-001",
+    company="MMPL",
+    legacy_sales_invoice=None,
+):
+    """Fabricate a B2B Order Map for tests.
+
+    `legacy_sales_invoice` seeds the gh#227 legacy-adoption branch:
+    when non-None, `map_doc.get("sales_invoice")` returns that value,
+    which fires the mirror's "adopt an unstamped pre-fix SI" path.
+    Default None → adoption branch does not fire (matches the modern
+    case where every mirrored SI is stamped with its invoice_id).
+    """
     m = MagicMock()
     m.name = name
     m.sales_order = sales_order
     m.company = company
+    m.sales_invoice = legacy_sales_invoice
+    # Frappe DocType .get(field, default) accessor — used by the mirror
+    # to probe for legacy sales_invoice link without raising on missing.
+    m.get = lambda k, default=None: {
+        "sales_invoice": legacy_sales_invoice,
+    }.get(k, default)
     return m
 
 
@@ -876,6 +895,263 @@ class TestEeRowPayloadShapes(unittest.TestCase):
         si = _si_stub()
         _run_full_mirror(si=si, ee_row_overrides={"order_items": "malformed"})
         self.assertEqual(len(si.items), 2)
+
+
+# ============================================================
+# gh#227 — multi-invoice per SO + legacy adoption shim
+# ============================================================
+
+
+class TestLegacyAdoptionShim(unittest.TestCase):
+    """gh#227: if Map points at a pre-fix SI that was never stamped
+    with ecs_easyecom_invoice_id, adopt it — stamp with the current
+    call's invoice_id + return — instead of creating a duplicate."""
+
+    def _run(self, *, legacy_si_name, legacy_stamp, legacy_grand_total=4830.0):
+        """Fire the mirror against a Map with legacy_si_name preset.
+        `legacy_stamp` = what SI.ecs_easyecom_invoice_id returns
+        (None = truly unstamped legacy → adoption fires;
+        a string = already stamped → adoption skips)."""
+        map_doc = _map_doc(legacy_sales_invoice=legacy_si_name)
+
+        stamped = {"value": legacy_stamp}
+        set_calls = []
+
+        def _get_value(doctype, filters=None, field=None, **_):
+            if doctype == "Sales Invoice":
+                if isinstance(filters, dict) and "ecs_easyecom_invoice_id" in filters:
+                    # step 1 idempotency lookup — miss
+                    return None
+                if filters == legacy_si_name:
+                    if field == "ecs_easyecom_invoice_id":
+                        return stamped["value"]
+                    if field == "grand_total":
+                        return legacy_grand_total
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Sales Invoice" and name == legacy_si_name:
+                return True
+            return False
+
+        def _set_value(doctype, name, field, value, **_):
+            set_calls.append((doctype, name, field, value))
+            if doctype == "Sales Invoice" and field == "ecs_easyecom_invoice_id":
+                stamped["value"] = value
+
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=_get_value),
+            patch.object(mod.frappe.db, "exists", side_effect=_exists),
+            patch.object(mod.frappe.db, "set_value", side_effect=_set_value),
+            patch.object(mod.frappe.db, "commit"),
+        ):
+            result = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(),
+            )
+        return result, set_calls
+
+    def test_unstamped_legacy_si_gets_adopted(self):
+        """The pre-fix SI has no invoice_id stamped. Mirror adopts it:
+        writes the stamp + returns it. No new SI created."""
+        result, set_calls = self._run(
+            legacy_si_name="SI-LEGACY-001", legacy_stamp=None,
+        )
+        self.assertEqual(result["sales_invoice"], "SI-LEGACY-001")
+        self.assertEqual(result["operation"], "adopted_legacy")
+        # Stamp was written
+        stamp_writes = [c for c in set_calls if c[2] == "ecs_easyecom_invoice_id"]
+        self.assertEqual(len(stamp_writes), 1)
+        self.assertEqual(stamp_writes[0][3], "999888")  # ee_invoice_id in _ee_row
+
+    def test_stamped_legacy_si_with_different_invoice_id_creates_new_si(self):
+        """Map points at an SI already stamped with a DIFFERENT
+        invoice_id → this is a second invoice on the same SO. Do
+        NOT return the old SI; fall through to create a new one."""
+        map_doc = _map_doc(legacy_sales_invoice="SI-FIRST-001")
+        si = _si_stub(name="SI-SECOND-002")
+
+        def _get_value(doctype, filters=None, field=None, **_):
+            if doctype == "Sales Invoice":
+                if isinstance(filters, dict) and "ecs_easyecom_invoice_id" in filters:
+                    return None  # step 1 miss (new invoice_id)
+                if filters == "SI-FIRST-001":
+                    if field == "ecs_easyecom_invoice_id":
+                        return "111111"  # DIFFERENT from incoming 999888
+            if doctype == "Sales Order":
+                return None  # payment_terms_template
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Sales Invoice" and name == "SI-FIRST-001":
+                return True
+            if doctype == "Sales Order":
+                return True
+            return False
+
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=_get_value),
+            patch.object(mod.frappe.db, "exists", side_effect=_exists),
+            patch(
+                "erpnext.selling.doctype.sales_order.sales_order."
+                "make_sales_invoice",
+                return_value=si,
+            ),
+        ):
+            result = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(),
+            )
+        # New SI created — did NOT reuse SI-FIRST-001
+        self.assertEqual(result["sales_invoice"], "SI-SECOND-002")
+        self.assertEqual(result["operation"], "created")
+        si.insert.assert_called_once()
+
+    def test_no_legacy_si_on_map_creates_new_si(self):
+        """No legacy_sales_invoice on the Map (the modern case).
+        Adoption branch doesn't fire; mirror creates fresh SI."""
+        map_doc = _map_doc(legacy_sales_invoice=None)
+        si = _si_stub(name="SI-FRESH-001")
+
+        def _get_value(doctype, filters=None, field=None, **_):
+            if doctype == "Sales Invoice":
+                return None
+            return None
+
+        def _exists(doctype, name):
+            return doctype == "Sales Order"
+
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=_get_value),
+            patch.object(mod.frappe.db, "exists", side_effect=_exists),
+            patch(
+                "erpnext.selling.doctype.sales_order.sales_order."
+                "make_sales_invoice",
+                return_value=si,
+            ),
+        ):
+            result = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(),
+            )
+        self.assertEqual(result["operation"], "created")
+
+    def test_legacy_si_link_points_at_deleted_si_treated_as_no_legacy(self):
+        """Map.sales_invoice → 'SI-GONE' but that SI no longer exists.
+        Adoption branch skips gracefully; mirror creates fresh SI."""
+        map_doc = _map_doc(legacy_sales_invoice="SI-GONE")
+        si = _si_stub(name="SI-FRESH-002")
+
+        def _get_value(doctype, filters=None, field=None, **_):
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Sales Invoice" and name == "SI-GONE":
+                return False  # SI was deleted / never existed
+            return doctype == "Sales Order"
+
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=_get_value),
+            patch.object(mod.frappe.db, "exists", side_effect=_exists),
+            patch(
+                "erpnext.selling.doctype.sales_order.sales_order."
+                "make_sales_invoice",
+                return_value=si,
+            ),
+        ):
+            result = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(),
+            )
+        self.assertEqual(result["operation"], "created")
+        self.assertEqual(result["sales_invoice"], "SI-FRESH-002")
+
+
+class TestMultiInvoicePerSO(unittest.TestCase):
+    """gh#227 core scenario: SO with multiple EE invoices produces
+    multiple SIs. Each mirror call with a distinct invoice_id creates
+    a new SI; each call with a repeated invoice_id returns the same
+    SI (idempotent)."""
+
+    def test_two_distinct_invoice_ids_each_create_own_si(self):
+        """First mirror call (invoice_id=A) creates SI-A. Second mirror
+        call (invoice_id=B, same SO) creates SI-B — does NOT reuse SI-A.
+        This is the exact scenario from gh#227."""
+        map_doc = _map_doc(legacy_sales_invoice=None)  # Modern Map — no legacy
+
+        si_calls = []
+
+        def _make_si_side_effect(source_name, ignore_permissions):
+            n = len(si_calls) + 1
+            new_si = _si_stub(name=f"SI-INV-{n:03d}")
+            si_calls.append(new_si)
+            return new_si
+
+        def _get_value(doctype, filters=None, field=None, **_):
+            if doctype == "Sales Invoice":
+                # Both calls miss on idempotency (different invoice_ids)
+                return None
+            return None
+
+        def _exists(doctype, name):
+            return doctype == "Sales Order"
+
+        # First invoice — INV-A
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=_get_value),
+            patch.object(mod.frappe.db, "exists", side_effect=_exists),
+            patch(
+                "erpnext.selling.doctype.sales_order.sales_order."
+                "make_sales_invoice",
+                side_effect=_make_si_side_effect,
+            ),
+        ):
+            result_a = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(invoice_id="INV-A"),
+            )
+            result_b = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(invoice_id="INV-B"),
+            )
+
+        self.assertEqual(result_a["sales_invoice"], "SI-INV-001")
+        self.assertEqual(result_b["sales_invoice"], "SI-INV-002")
+        self.assertNotEqual(
+            result_a["sales_invoice"], result_b["sales_invoice"],
+            "Two invoice_ids for the same SO must produce distinct SIs",
+        )
+        # make_sales_invoice was called TWICE — proving no reuse
+        self.assertEqual(len(si_calls), 2)
+
+    def test_same_invoice_id_twice_returns_same_si(self):
+        """Idempotency preserved — same invoice_id twice → same SI,
+        no second make_sales_invoice call."""
+        map_doc = _map_doc(legacy_sales_invoice=None)
+        make_si_called = MagicMock()
+
+        def _get_value(doctype, filters=None, field=None, **_):
+            if doctype == "Sales Invoice":
+                if isinstance(filters, dict) and \
+                        filters.get("ecs_easyecom_invoice_id") == "INV-DUP":
+                    return "SI-EXISTING-001"  # step 1 hits
+                if filters == "SI-EXISTING-001":
+                    return 4830.0  # grand_total for variance calc
+            return None
+
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=_get_value),
+            patch(
+                "erpnext.selling.doctype.sales_order.sales_order."
+                "make_sales_invoice",
+                side_effect=make_si_called,
+            ),
+        ):
+            result_1 = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(invoice_id="INV-DUP"),
+            )
+            result_2 = mod.mirror_si_from_ee_response(
+                map_doc=map_doc, ee_row=_ee_row(invoice_id="INV-DUP"),
+            )
+
+        self.assertEqual(result_1["sales_invoice"], "SI-EXISTING-001")
+        self.assertEqual(result_2["sales_invoice"], "SI-EXISTING-001")
+        self.assertEqual(result_1["operation"], "already_exists")
+        make_si_called.assert_not_called()
 
 
 if __name__ == "__main__":
