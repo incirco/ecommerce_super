@@ -271,6 +271,34 @@ def mirror_si_from_ee_response(
         if value:
             setattr(si, field, value)
 
+    # gh#227 follow-up — shield against India Compliance's
+    # validate_item_wise_tax_detail crash. IC's validator (in
+    # `india_compliance/gst_india/overrides/transaction.py`) does
+    # `for row in doc.get("_item_wise_tax_details", [])`, which
+    # relies on the default `[]` kicking in when the key is missing.
+    # But `make_sales_invoice(so.name)` returns a mapped SI where
+    # this field is EXPLICITLY set to None (rather than absent) in
+    # certain SO states — notably when the source SO already has a
+    # linked Draft SI. `dict.get()` returns None, not the default,
+    # → IC's `for` loop crashes with TypeError.
+    #
+    # Observed live on MMPL SO-2610659 (2026-07-22 12:04:13). Third
+    # /einvoice/update retry landed after a Draft SI was already on
+    # the SO from the prior retry; make_sales_invoice returned
+    # _item_wise_tax_details=None; IC crashed before ERPNext's
+    # calculate_taxes_and_totals could populate it. HTTP 422 to EE.
+    #
+    # Coerce None → [] so IC's validator iterates safely. ERPNext's
+    # calculate_taxes_and_totals runs later during insert() and
+    # populates the real values. Two lines, zero blast radius —
+    # only shields the None case; a real populated dict is unaffected.
+    #
+    # TODO: file upstream at india_compliance to make its `.get()`
+    # call defensive (`doc.get("_item_wise_tax_details") or []`); this
+    # workaround can then be removed.
+    if si.get("_item_wise_tax_details") is None:
+        si._item_wise_tax_details = []
+
     si.flags.ignore_permissions = True
     si.insert()
 
