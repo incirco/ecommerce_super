@@ -1154,5 +1154,120 @@ class TestMultiInvoicePerSO(unittest.TestCase):
         make_si_called.assert_not_called()
 
 
+# ============================================================
+# gh#227 follow-up — IC's None-tax-details crash shield
+# ============================================================
+
+
+class TestICTaxDetailsNoneShield(unittest.TestCase):
+    """Regression: on 2026-07-22 12:04:13, MMPL's third /einvoice/update
+    retry for SO-2610659 crashed with `TypeError: 'NoneType' object is
+    not iterable` inside India Compliance's `validate_item_wise_tax_detail`.
+
+    Root cause is IC's own bug — it does
+    `for row in doc.get('_item_wise_tax_details', [])`,
+    which returns None (not the default `[]`) when the key is present but
+    set to None. `make_sales_invoice(so.name)` produces that state on SOs
+    that already have a Draft SI linked (which happens when a prior EE
+    retry created a Draft SI and left it un-submitted).
+
+    Our shield: before `si.insert()`, coerce `_item_wise_tax_details=None`
+    → `[]` so IC's iterator is safe. ERPNext's `calculate_taxes_and_totals`
+    populates the real values later during validate(); the coerce only
+    affects the None → [] transition, never a populated dict.
+    """
+
+    def test_none_item_wise_tax_details_gets_coerced_to_empty_list(self):
+        """The exact SO-2610659 scenario: `make_sales_invoice` returns a
+        mapped SI where `_item_wise_tax_details` is explicitly None."""
+        si = _si_stub(name="SI-FRESH")
+        # Force the IC-crash precondition:
+        # dict.get('_item_wise_tax_details', []) returns None, not [].
+        si.get = lambda k, default=None: (
+            None if k == "_item_wise_tax_details" else default
+        )
+        # Track whether the coerce happened by observing what gets set.
+        coerced = {"value": "UNCHANGED"}
+
+        def _capture_setattr(self_ref, name, value):
+            if name == "_item_wise_tax_details":
+                coerced["value"] = value
+            object.__setattr__(self_ref, name, value)
+
+        # Wire the assignment path — MagicMock swallows attribute writes
+        # silently. Use __setattr__ observer.
+        original_setattr = type(si).__setattr__
+        try:
+            _run_full_mirror(si=si)
+        except Exception:
+            pass  # We only care that the coerce ran before insert
+        finally:
+            type(si).__setattr__ = original_setattr
+
+        # After the mirror ran, _item_wise_tax_details on si should be [].
+        # (MagicMock captures attribute writes as attributes on the mock.)
+        self.assertEqual(si._item_wise_tax_details, [])
+        # And insert was called (i.e., we got past the IC-crash point)
+        si.insert.assert_called_once()
+
+    def test_populated_item_wise_tax_details_is_left_alone(self):
+        """The shield only fires on None. A populated dict / non-empty
+        list must NOT be replaced (would clobber real tax computation)."""
+        si = _si_stub(name="SI-FRESH")
+        # msi returned an SI where IC's tax-details field is already
+        # populated (as it normally would be during calculate_taxes_and_totals).
+        real_details = {"CGST - MMPL": [325.0, 16.24]}
+        # Preload the real dict onto the mock and route .get() to return it.
+        si.get = lambda k, default=None: (
+            real_details if k == "_item_wise_tax_details" else default
+        )
+        # Explicitly set the attribute so we can detect if the mirror
+        # overwrites it.
+        si._item_wise_tax_details = real_details
+
+        try:
+            _run_full_mirror(si=si)
+        except Exception:
+            pass
+
+        # Shield must NOT have fired — the real dict is intact
+        self.assertEqual(si._item_wise_tax_details, real_details)
+        si.insert.assert_called_once()
+
+    def test_shield_fires_before_insert_not_after(self):
+        """Order matters: the coerce must happen BEFORE si.insert(),
+        because IC's validator runs inside insert()'s validate() hook.
+        Coercing after insert() would be too late."""
+        si = _si_stub(name="SI-ORDER")
+        # Track call order via a shared list
+        call_order = []
+        original_get = si.get
+        si.get = lambda k, default=None: (
+            (call_order.append("get_tax_details"),
+             None if k == "_item_wise_tax_details" else default)[1]
+        )
+        si.insert = MagicMock(
+            side_effect=lambda: call_order.append("insert"),
+        )
+
+        try:
+            _run_full_mirror(si=si)
+        except Exception:
+            pass
+
+        # get() for _item_wise_tax_details must happen before insert()
+        # (proving the coerce ran before validate() fired IC's crash path)
+        gets_before_insert = [
+            i for i, c in enumerate(call_order) if c == "get_tax_details"
+        ]
+        inserts = [i for i, c in enumerate(call_order) if c == "insert"]
+        self.assertTrue(gets_before_insert, "shield's .get() must fire")
+        self.assertTrue(inserts, "insert() must fire")
+        self.assertLess(
+            min(gets_before_insert), min(inserts),
+            "shield must run before insert() (IC's validate() is inside insert)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
