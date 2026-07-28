@@ -155,9 +155,14 @@ def pull_grns_for_location(
             "EasyEcom Account", {"enabled": 1}, "name"
         )
     if account_name and not created_after:
-        created_after = frappe.db.get_value(
+        watermark = frappe.db.get_value(
             "EasyEcom Account", account_name, "grn_pull_high_watermark"
         )
+        # gh#234 — roll `created_after` back a bounded window so back-dated
+        # GRNs (whose EE `grn_created_at` lands behind the advanced high
+        # watermark) are re-fetched instead of silently missed. Already-
+        # Receipted GRNs short-circuit as no-ops, so this is idempotent.
+        created_after = _created_after_with_lookback(watermark)
 
     sweep = GRNSweepOutcome()
     max_observed_dt = None
@@ -2115,6 +2120,43 @@ def _fmt_dt_for_ee(value: Any) -> str:
         return d.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return str(value)
+
+
+# gh#234 — back-dated GRN look-back window.
+# The forward-only delta (`created_after = grn_pull_high_watermark`) is
+# anchored on EE's `grn_created_at`, which moves with a back-dated GRN.
+# So a GRN entered late but dated in the past lands BEHIND the advanced
+# watermark and the plain delta never returns it. We widen `created_after`
+# back a bounded window so those are re-fetched. Tunable in one place.
+GRN_BACKDATE_LOOKBACK_DAYS = 7
+
+
+def _created_after_with_lookback(
+    watermark: Any, lookback_days: int = GRN_BACKDATE_LOOKBACK_DAYS
+) -> Any:
+    """gh#234 — widen `created_after` to at least ``now - lookback_days``.
+
+    Returns the EARLIER of the watermark and ``now - lookback_days`` so
+    back-dated GRNs whose `grn_created_at` sits behind the advanced
+    `grn_pull_high_watermark` are re-fetched instead of silently missed.
+    Re-scanned already-Receipted GRNs short-circuit as a Step-3 no-op, so
+    the wider window is idempotent — no duplicate Purchase Receipts.
+
+    Safety properties:
+      - First pull (watermark falsy) → returned unchanged, so the existing
+        full / backstop pull behaviour is untouched.
+      - The result is never LATER than the watermark, so the window can
+        only widen backwards, never narrow — no already-covered GRN is
+        skipped.
+      - lookback_days <= 0 disables the look-back (returns the watermark).
+    """
+    if not watermark or not lookback_days or int(lookback_days) <= 0:
+        return watermark
+    from datetime import timedelta
+
+    wm = frappe.utils.get_datetime(watermark)
+    floor = now_datetime() - timedelta(days=int(lookback_days))
+    return min(wm, floor)
 
 
 def _extract_next_url(page: dict | None) -> str | None:
