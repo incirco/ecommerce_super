@@ -81,3 +81,69 @@ class TestGh158AlwaysSendMandatory(unittest.TestCase):
         self.assertIn("TaxRate", _ALWAYS_SEND_UPDATE_FIELDS)
         self.assertIn("ProductTaxCode", _ALWAYS_SEND_UPDATE_FIELDS)
         self.assertIn("productId", _ALWAYS_SEND_UPDATE_FIELDS)
+
+
+class TestGh236AccountingUnitAlwaysSent(unittest.TestCase):
+    """gh#236 — item perpetually Created-Flagged because EE-side
+    `accounting_unit` is blank and our sparse-diff never re-sends it.
+
+    Root cause: snapshot has `accounting_unit=PCS`, ERPNext still
+    maps stock_uom→accounting_unit=PCS, diff says "unchanged" → EE
+    stays blank → next pull re-flags the item forever.
+
+    Fix: add `accounting_unit` to `_ALWAYS_SEND_UPDATE_FIELDS` so it
+    rides on every UpdateMasterProduct call regardless of diff, breaking
+    the loop even when the snapshot is out of sync with EE reality.
+    """
+
+    def test_accounting_unit_in_always_send_set(self):
+        """Guard against removal — the set membership IS the fix."""
+        from ecommerce_super.easyecom.flows.item_push import (
+            _ALWAYS_SEND_UPDATE_FIELDS,
+        )
+        self.assertIn("accounting_unit", _ALWAYS_SEND_UPDATE_FIELDS)
+
+    def test_accounting_unit_sent_when_unchanged_from_snapshot(self):
+        """The exact live scenario from FG06588-RATHORE-M: snapshot has
+        accounting_unit=PCS, current also PCS. Delta MUST still include
+        it so EE's blank value gets corrected on the next tick."""
+        prior = {
+            "productId": 219723416, "sku": "FG06588-RATHORE-M",
+            "productName": "Rathore Set M",
+            "TaxRuleName": "GST5", "TaxRate": 5,
+            "ProductTaxCode": "62052000",
+            "accounting_unit": "PCS",  # already in snapshot
+        }
+        full = dict(prior)  # nothing changed
+        delta = _run_builder(full_payload=full, prior=prior)
+        # accounting_unit MUST be in the delta despite unchanged
+        self.assertEqual(delta.get("accounting_unit"), "PCS")
+
+    def test_accounting_unit_omitted_when_absent_from_full_payload(self):
+        """If the full payload doesn't include accounting_unit at all
+        (e.g. mapping rule not yet applied on some legacy path), the
+        always-send set doesn't fabricate the field — it just includes
+        it WHEN PRESENT. Regression guard for the seeding logic."""
+        prior = {
+            "productId": 1, "TaxRuleName": "GST5",
+            "TaxRate": 5, "ProductTaxCode": "99",
+        }
+        full = dict(prior)  # no accounting_unit in either side
+        delta = _run_builder(full_payload=full, prior=prior)
+        self.assertNotIn("accounting_unit", delta)
+
+    def test_accounting_unit_new_value_sent(self):
+        """If ERPNext's stock_uom just changed (e.g. FDE corrected from
+        Nos to PCS) and snapshot has the old value, delta contains the
+        new value. Locks that the always-send doesn't accidentally
+        prefer the SNAPSHOT value over the CURRENT value."""
+        prior = {
+            "productId": 1, "TaxRuleName": "GST5",
+            "TaxRate": 5, "ProductTaxCode": "99",
+            "accounting_unit": "Nos",  # old snapshot value
+        }
+        full = dict(prior)
+        full["accounting_unit"] = "PCS"  # FDE corrected in ERPNext
+        delta = _run_builder(full_payload=full, prior=prior)
+        # Sends the NEW value, not the stale snapshot value
+        self.assertEqual(delta.get("accounting_unit"), "PCS")
