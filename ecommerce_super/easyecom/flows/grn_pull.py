@@ -252,7 +252,13 @@ def pull_grns_for_location(
 @frappe.whitelist()
 def scheduled_grn_pull(account_name: str | None = None) -> dict[str, Any]:
     """Wired by Stage 4's cron. Walks every operational EasyEcom Location
-    on the (single, enabled) account, returns a summary."""
+    on the (single, enabled) account, returns a summary.
+
+    gh#230: also chains `resweep_held_pre_qc_grns` at the end so a
+    manual/on-demand invocation picks up Held-Pre-QC rows in the same
+    session (the hourly cron would otherwise be the only path to
+    convert them, forcing FDEs to wait up to 1h).
+    """
     if account_name is None:
         account_name = frappe.db.get_value(
             "EasyEcom Account", {"enabled": 1}, "name"
@@ -286,7 +292,26 @@ def scheduled_grn_pull(account_name: str | None = None) -> dict[str, Any]:
             summaries.append(
                 {"location_key": loc_key, "error": f"{type(exc).__name__}"}
             )
-    return {"ok": True, "summaries": summaries}
+
+    # gh#230: run the Held-Pre-QC re-sweep in the same session so an
+    # FDE-triggered "Pull GRN" progresses QC-completed rows without
+    # waiting for the hourly cron. Failures here don't fail the overall
+    # response — the forward-delta sweeps above already succeeded.
+    resweep_summary: dict[str, Any] | None = None
+    try:
+        resweep_summary = resweep_held_pre_qc_grns(account_name=account_name)
+    except Exception as exc:
+        frappe.log_error(
+            title="§9 gh#230: chained Held-Pre-QC re-sweep failed",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        resweep_summary = {"ok": False, "message": f"{type(exc).__name__}"}
+
+    return {
+        "ok": True,
+        "summaries": summaries,
+        "held_pre_qc_resweep": resweep_summary,
+    }
 
 
 # ============================================================
@@ -463,6 +488,148 @@ def resweep_held_pre_qc_grns(
         "still_held": still_held,
         "failed": failed,
         "errors": errors[:50],
+    }
+
+
+@frappe.whitelist()
+def resweep_one_held_grn(grn_map_name: str) -> dict[str, Any]:
+    """gh#230: FDE-triggered Held-Pre-QC re-sweep for a SINGLE Map row.
+
+    Called from the form-view "Re-check QC / Force Re-sweep" button.
+    Complements the periodic `resweep_held_pre_qc_grns` cron (hourly)
+    and the chained sweep at the end of `scheduled_grn_pull` (gh#230).
+    Both are batch-oriented — this entrypoint is per-row so an FDE
+    debugging a specific stuck GRN can resolve it in-session.
+
+    Delegates to `pull_grns_for_location` with `created_after` anchored
+    on the target row's `grn_created_at` (minus a 1s guard band) so EE
+    re-returns the row and `process_one_grn` can flip its status.
+
+    Idempotency:
+      - Already-Receipted GRNs short-circuit in process_one_grn Step 4
+      - Repeated clicks are safe (same code path, same guards)
+
+    Returns:
+      {ok, ee_grn_id, old_status, new_status, message?}
+      new_status:
+        - "Receipted"     : QC completed, PR created
+        - "Held-Pre-QC"   : still waiting on QC (retry later)
+        - anything else   : unexpected transition — flagged in message
+    """
+    if not grn_map_name:
+        return {"ok": False, "message": "grn_map_name is required"}
+
+    if not frappe.db.exists("EasyEcom GRN Map", grn_map_name):
+        return {"ok": False, "message": f"GRN Map {grn_map_name!r} not found"}
+
+    frappe.only_for(["EasyEcom FDE", "System Manager"])
+
+    map_row = frappe.db.get_value(
+        "EasyEcom GRN Map",
+        grn_map_name,
+        ["name", "ee_grn_id", "grn_created_at",
+         "inwarded_warehouse_c_id", "status"],
+        as_dict=True,
+    )
+    if not map_row:
+        return {"ok": False, "message": f"GRN Map {grn_map_name!r} unreadable"}
+
+    if map_row.status == "Receipted":
+        return {
+            "ok": True,
+            "ee_grn_id": map_row.ee_grn_id,
+            "old_status": "Receipted",
+            "new_status": "Receipted",
+            "message": (
+                "Already Receipted — no re-sweep needed. Purchase Receipt "
+                "should already be linked."
+            ),
+        }
+
+    if map_row.status != "Held-Pre-QC":
+        return {
+            "ok": False,
+            "ee_grn_id": map_row.ee_grn_id,
+            "old_status": map_row.status,
+            "message": (
+                f"Row is in status {map_row.status!r}, not 'Held-Pre-QC'. "
+                "Re-sweep only converts Held-Pre-QC rows; use the appropriate "
+                "action for this state (drift resolution, cancel, etc.)."
+            ),
+        }
+
+    if not map_row.grn_created_at:
+        return {
+            "ok": False,
+            "ee_grn_id": map_row.ee_grn_id,
+            "message": "Row missing grn_created_at — cannot anchor re-fetch",
+        }
+
+    account_name = frappe.db.get_value(
+        "EasyEcom Account", {"enabled": 1}, "name"
+    )
+    if not account_name:
+        return {"ok": False, "message": "No enabled EasyEcom Account"}
+
+    location_row = _resolve_location_for_warehouse_c_id(
+        int(map_row.inwarded_warehouse_c_id or 0)
+    )
+    if location_row is None:
+        return {
+            "ok": False,
+            "ee_grn_id": map_row.ee_grn_id,
+            "message": (
+                f"warehouse_c_id={map_row.inwarded_warehouse_c_id} does not "
+                "resolve to an EE Location — cannot re-fetch"
+            ),
+        }
+
+    from datetime import timedelta
+    created_after = map_row.grn_created_at - timedelta(seconds=1)
+
+    try:
+        client = EasyEcomClient(location_key=location_row["location_key"])
+        pull_grns_for_location(
+            location_key=location_row["location_key"],
+            account_name=account_name,
+            client=client,
+            created_after=str(created_after),
+        )
+    except Exception as exc:
+        frappe.log_error(
+            title=f"gh#230 per-row re-sweep failed on {grn_map_name}",
+            message=f"{type(exc).__name__}: {exc}",
+        )
+        return {
+            "ok": False,
+            "ee_grn_id": map_row.ee_grn_id,
+            "old_status": "Held-Pre-QC",
+            "message": (
+                f"Re-fetch sweep failed: {type(exc).__name__}: "
+                f"{str(exc)[:180]}"
+            ),
+        }
+
+    # Post-sweep: re-read status
+    new_status = frappe.db.get_value(
+        "EasyEcom GRN Map", grn_map_name, "status",
+    )
+
+    return {
+        "ok": True,
+        "ee_grn_id": map_row.ee_grn_id,
+        "old_status": "Held-Pre-QC",
+        "new_status": new_status,
+        "message": (
+            "PR created — QC has completed on EE side"
+            if new_status == "Receipted"
+            else (
+                "Still Held-Pre-QC — QC not yet completed on EE, "
+                "or QC line status hasn't hit the trigger. Retry later."
+                if new_status == "Held-Pre-QC"
+                else f"Unexpected transition to {new_status!r} — investigate"
+            )
+        ),
     }
 
 
