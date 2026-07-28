@@ -27,7 +27,7 @@ def _mock_map(**overrides):
     m.status = "Pushed"
     m.ee_order_id = None
     m.ee_suborder_id = None
-    m.invoice_id = None
+    m.ee_invoice_id = None
     m.invoice_number = None
     m.sales_invoice = None
     m.creation = "2026-07-16 14:00:00"
@@ -139,7 +139,7 @@ class TestGetLifecycleStageSequence(unittest.TestCase):
         """Some New B2B paths land invoice_id before ee_order_id via
         polling backfill — either signal counts as 'EE Accepted'."""
         stages = self._run(
-            map_doc=_mock_map(invoice_id="INV-176305783"),
+            map_doc=_mock_map(ee_invoice_id="INV-176305783"),
             so_val=_mock_so_get_value(),
         )
         by_stage = {s["stage"]: s for s in stages}
@@ -252,7 +252,7 @@ class TestApiCallSummary(unittest.TestCase):
     Call log column shape is unexpected."""
 
     def test_no_search_anchors_returns_zeros(self):
-        m = _mock_map(sales_order=None, ee_order_id=None, invoice_id=None)
+        m = _mock_map(sales_order=None, ee_order_id=None, ee_invoice_id=None)
         result = mod._summarise_api_calls_for_map(m)
         self.assertEqual(
             result, {"total": 0, "outbound": 0, "inbound": 0},

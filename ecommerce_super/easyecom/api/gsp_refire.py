@@ -234,7 +234,7 @@ def _fetch_fresh_ee_row(map_name: str) -> tuple[dict, str]:
     # Prefer the row that matches our stored invoice_id (if any) so
     # multi-invoice edge cases pick the right one. Otherwise take the
     # first row.
-    invoice_id = str(map_doc.invoice_id or "").strip()
+    invoice_id = str(map_doc.ee_invoice_id or "").strip()
     if invoice_id:
         matching = [r for r in rows if str(r.get("invoice_id") or "") == invoice_id]
         if matching:

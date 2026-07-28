@@ -174,14 +174,14 @@ def get_lifecycle(map_name: str) -> list[dict]:
 
     # --- Stage 3: EE Accepted / IDs assigned ---
     has_order_id = bool(map_doc.ee_order_id)
-    has_invoice_id = bool(map_doc.invoice_id)
+    has_invoice_id = bool(map_doc.ee_invoice_id)
     id_bits = []
     if has_order_id:
         id_bits.append(f"ee_order_id={map_doc.ee_order_id}")
     if map_doc.get("ee_suborder_id"):
         id_bits.append(f"ee_suborder_id={map_doc.ee_suborder_id}")
     if has_invoice_id:
-        id_bits.append(f"invoice_id={map_doc.invoice_id}")
+        id_bits.append(f"ee_invoice_id={map_doc.ee_invoice_id}")
     stages.append({
         "stage": "EE Accepted (IDs assigned)",
         "ok": has_order_id or has_invoice_id,
@@ -269,8 +269,8 @@ def _summarise_api_calls_for_map(map_doc) -> dict:
         filters_or.append(["endpoint", "like", f"%{map_doc.sales_order}%"])
     if map_doc.ee_order_id:
         filters_or.append(["response_body", "like", f"%{map_doc.ee_order_id}%"])
-    if map_doc.invoice_id:
-        filters_or.append(["response_body", "like", f"%{map_doc.invoice_id}%"])
+    if map_doc.ee_invoice_id:
+        filters_or.append(["response_body", "like", f"%{map_doc.ee_invoice_id}%"])
     if not filters_or:
         return {"total": 0, "outbound": 0, "inbound": 0}
 
