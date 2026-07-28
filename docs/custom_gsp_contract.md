@@ -174,6 +174,30 @@ Additional fields (`igst`, `cgst`, `sgst`, `utgst`, `breakup_types`, `selling_pr
 
 **Idempotency:** re-calling with the same `invoice_id` returns the same SI (via `ecs_easyecom_invoice_id` field lookup). Safe to retry.
 
+**Internal-transfer no-op (opt-in):** if `reference_code` resolves to a §10 internal-transfer Delivery Note (has an `EasyEcom Transfer Map`, not a `B2B Order Map`) AND `EasyEcom Company Settings.gsp_noop_on_internal_transfer` is enabled for the SI's Company, this endpoint returns **HTTP 200** with a "no e-invoice required" message and all IRN fields set to `null` in `data.invoice_details`. No Sales Invoice is created; no IRN is minted; no Error Log entry is written. Rationale: same-GSTIN internal transfers are not a "supply" under GST, so an e-invoice is never required — even if EE's "Generate E-Invoice for B2B Order" toggle attempts it. Flag defaults OFF for backward compatibility; enable per Company once EE's response handling on 200-with-no-IRN is validated on UAT.
+
+Response body shape on the no-op path:
+
+```json
+{
+  "status": 200,
+  "message": "reference_code 'DL-261500-1' is a §10 internal-transfer Delivery Note. Same-GSTIN internal transfers don't require an e-invoice under GST (intra-GSTIN movement is not a supply). No Sales Invoice created; no IRN minted. Physical goods transfer completes via Delivery Note → Purchase Receipt.",
+  "reference_code": "DL-261500-1",
+  "data": {
+    "invoice_details": {
+      "invoice_id": "<the EE invoice_id from the request>",
+      "erp_invoice_num": null,
+      "irn": null,
+      "ack_number": null,
+      "ack_date": null,
+      "invoice_pdf": null,
+      "irn_qr": null,
+      "invoice_base64": null
+    }
+  }
+}
+```
+
 ---
 
 ### 2.3 `/ewaybill/update` — receive EE transport info → return e-way bill
@@ -251,6 +275,7 @@ Every non-200 response carries `{"status": <http>, "message": "<human-readable r
 | `SI create/find failed: <detail>` | Downstream failure — no customer map, no item map, missing HSN, etc. Detail carries the exact reason (post-gh#142) | Fix the underlying data (Customer Map, Item Map, HSN, GST context) — use the **Dry-Run /einvoice/update** button on the Map form to preview |
 | `<type>: <message>` (e.g. `ValidationError: Missing item_tax_template`) | Frappe validation on the SI insert path | Fix the SO or Item Tax Template |
 | `SI variance exceeded threshold — SI left in Draft for FDE review` (post gh#218) | SI grand_total differed from EE's `total_amount` by more than 1% after native tax recompute | Review the Draft SI; use **Re-fire /einvoice/update** button after fixing |
+| `No EasyEcom B2B Order Map found for reference_code '<code>'. The SO must have been pushed via §11 before EE can request an invoice for it.` | `reference_code` is a §10 internal-transfer Delivery Note (has a Transfer Map, not a B2B Order Map). EE's "Generate E-Invoice for B2B Order" toggle attempted an e-invoice on a same-GSTIN transfer, which under GST doesn't need one. | (a) On EE: don't click Generate / Regenerate Invoice on internal-transfer consignments — they complete via DN → PR without an invoice. (b) On our side: enable `EasyEcom Company Settings.gsp_noop_on_internal_transfer` to convert this 422 to a graceful HTTP 200 no-op (see §2.2 "Internal-transfer no-op"). |
 | `NIC IRP mint failed: <detail>` | India Compliance's `generate_e_invoice` returned error | Check E-Invoice Log for NIC-side detail |
 
 ### 429 Too Many Requests

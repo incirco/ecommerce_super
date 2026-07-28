@@ -966,6 +966,7 @@ def _einvoice_handler_impl(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
     from ecommerce_super.easyecom.flows.b2b_sales.gsp_handler import (
         find_or_create_si_for_gsp,
         GSPHandlerError,
+        GSPHandlerNoOp,
         mint_irn_for_si,
     )
     ref = str(ee_row.get("reference_code") or "") or None
@@ -974,6 +975,30 @@ def _einvoice_handler_impl(*, ee_row: dict, ee_account: str) -> dict[str, Any]:
         si_name = find_or_create_si_for_gsp(
             ee_row=ee_row, ee_account=ee_account,
         )
+    except GSPHandlerNoOp as exc:
+        # Feature-flagged short-circuit: reference_code points at a §10
+        # internal-transfer DN (Transfer Map, not B2B Order Map). Same-
+        # GSTIN transfers don't need an e-invoice under GST — see
+        # `_should_noop_for_internal_transfer` in gsp_handler.py.
+        # Return HTTP 200 so EE stops retrying with fresh invoice_ids.
+        # Deliberately do NOT log to Error Log; this is expected
+        # behavior when the flag is on, not a failure.
+        frappe.response.http_status_code = 200
+        return {
+            "status": 200,
+            "message": str(exc),
+            "reference_code": ref,
+            "data": {"invoice_details": {
+                "invoice_id": str(ee_row.get("invoice_id") or ""),
+                "erp_invoice_num": None,
+                "irn": None,
+                "ack_number": None,
+                "ack_date": None,
+                "invoice_pdf": None,
+                "irn_qr": None,
+                "invoice_base64": None,
+            }},
+        }
     except GSPHandlerError as exc:
         reason = str(exc)
         _log_inbound_gsp_failure(
