@@ -24,12 +24,12 @@ from ecommerce_super.easyecom.api import gsp_refire as mod
 
 
 def _mock_map(name="ECS-B2B-RETEST", sales_order="SO-RE-01",
-              ee_account="EE-ACC-01", invoice_id="INV-999"):
+              ee_account="EE-ACC-01", ee_invoice_id="INV-999"):
     m = MagicMock()
     m.name = name
     m.sales_order = sales_order
     m.easyecom_account = ee_account
-    m.invoice_id = invoice_id
+    m.ee_invoice_id = ee_invoice_id
     m.add_comment = MagicMock()
     return m
 
