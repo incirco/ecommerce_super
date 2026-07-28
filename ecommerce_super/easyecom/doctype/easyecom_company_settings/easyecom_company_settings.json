@@ -38,7 +38,9 @@
   "fde_section",
   "assigned_fde",
   "default_rejected_warehouse_override",
-  "default_in_transit_warehouse_override"
+  "default_in_transit_warehouse_override",
+  "gsp_section",
+  "gsp_noop_on_internal_transfer"
  ],
  "fields": [
   {
@@ -265,6 +267,18 @@
    "fieldtype": "Link",
    "label": "In-Transit Warehouse Override",
    "options": "Warehouse"
+  },
+  {
+   "fieldname": "gsp_section",
+   "fieldtype": "Section Break",
+   "label": "Custom GSP (§11.5.1)"
+  },
+  {
+   "fieldname": "gsp_noop_on_internal_transfer",
+   "fieldtype": "Check",
+   "label": "GSP no-op on internal-transfer DNs",
+   "default": "0",
+   "description": "When enabled, the /einvoice/update endpoint returns HTTP 200 with a 'no e-invoice required' informational body when reference_code resolves to a §10 internal-transfer Delivery Note (Transfer Map), instead of HTTP 422 with 'No B2B Order Map found'. Same-GSTIN internal transfers don't need an e-invoice under GST (movement within one GSTIN is not a supply). Default OFF for backward compatibility — enable once EE's handling of 200-with-no-IRN is validated on UAT."
   }
  ],
  "index_web_pages_for_search": 0,

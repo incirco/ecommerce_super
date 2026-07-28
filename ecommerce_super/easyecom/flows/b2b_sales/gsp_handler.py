@@ -49,6 +49,23 @@ class GSPHandlerError(Exception):
     """
 
 
+class GSPHandlerNoOp(Exception):
+    """Raised when the handler determines the incoming EE request needs
+    no ERPNext action — for example, when reference_code resolves to a
+    §10 internal-transfer Delivery Note (Transfer Map, not B2B Order
+    Map). Under GST, movement within a single GSTIN is not a supply,
+    so no e-invoice is required.
+
+    Callers translate to HTTP 200 with an informational body — no SI
+    created, no IRN minted, no Error Log entry. This tells EE "you
+    called, we heard you, nothing to do here" so it stops retrying
+    with fresh invoice_ids.
+
+    Distinct from GSPHandlerError (real error → 422 → Error Log) and
+    from a successful SI return (200 → real IRN → Error Log clean).
+    """
+
+
 # ============================================================
 # Find / create SI
 # ============================================================
@@ -116,6 +133,28 @@ def find_or_create_si_for_gsp(
         raise GSPHandlerError(
             "EE payload missing reference_code — cannot create new SI "
             "without an anchor to the originating SO."
+        )
+
+    # Internal-transfer shim (feature-flagged via EasyEcom Company
+    # Settings.gsp_noop_on_internal_transfer). Detects reference_codes
+    # that point at a §10 Delivery Note (Transfer Map) rather than a
+    # §11 Sales Order (B2B Order Map) and short-circuits with a
+    # GSPHandlerNoOp — the endpoint returns HTTP 200 with a "no
+    # e-invoice required" body, EE stops retrying with fresh invoice_ids.
+    #
+    # Rationale locked with @rishinikhil on 2026-07-28 (verifying
+    # DL-261500-1 + DL-261467 pattern): same-GSTIN internal transfers
+    # are not a "supply" under GST, so no e-invoice is required — even
+    # if EE's "Generate E-Invoice for B2B Order" toggle attempts it.
+    # Flag defaults OFF; enable per Company once EE's response
+    # handling on 200-with-no-IRN is validated on UAT.
+    if _should_noop_for_internal_transfer(reference_code, ee_account=ee_account):
+        raise GSPHandlerNoOp(
+            f"reference_code {reference_code!r} is a §10 internal-transfer "
+            "Delivery Note. Same-GSTIN internal transfers don't require an "
+            "e-invoice under GST (intra-GSTIN movement is not a supply). "
+            "No Sales Invoice created; no IRN minted. Physical goods "
+            "transfer completes via Delivery Note → Purchase Receipt."
         )
 
     map_doc_name = frappe.db.get_value(
@@ -572,6 +611,46 @@ def _should_mint_ewaybill(ee_account: str | None) -> bool:
     if value is None:
         return True
     return bool(int(value))
+
+
+def _should_noop_for_internal_transfer(
+    reference_code: str, *, ee_account: str,
+) -> bool:
+    """Detect whether reference_code points to a §10 internal-transfer
+    Delivery Note (has an EasyEcom Transfer Map) rather than a §11
+    Sales Order (has a B2B Order Map), AND the per-Company opt-in flag
+    is enabled.
+
+    Returns True → caller should raise GSPHandlerNoOp → endpoint
+    returns HTTP 200 with informational body.
+
+    Defaults False (no-op path skipped) when:
+      - the flag isn't set on the Company (backward-compat default)
+      - the EE Account can't be resolved to a Company
+      - the reference_code doesn't match any Transfer Map
+      - any lookup errors (never let this shim block the normal flow)
+    """
+    if not reference_code or not ee_account:
+        return False
+    try:
+        company = frappe.db.get_value(
+            "EasyEcom Account", ee_account, "company"
+        )
+        if not company:
+            return False
+        flag = frappe.db.get_value(
+            "EasyEcom Company Settings",
+            {"company": company},
+            "gsp_noop_on_internal_transfer",
+        )
+        if not flag:
+            return False
+        return bool(frappe.db.exists(
+            "EasyEcom Transfer Map",
+            {"delivery_note": reference_code},
+        ))
+    except Exception:
+        return False
 
 
 def _render_si_pdf_base64(
