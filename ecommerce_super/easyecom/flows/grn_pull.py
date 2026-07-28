@@ -133,6 +133,9 @@ class GRNSweepOutcome:
 # ============================================================
 
 
+_DEFAULT_BACKDATE_WINDOW_DAYS: int = 7
+
+
 def pull_grns_for_location(
     *,
     location_key: str,
@@ -146,6 +149,11 @@ def pull_grns_for_location(
     `created_after` overrides the account's high-water mark (used by
     tests + replay tooling). Production sweeps pass None and let the
     sweep load the watermark from the account.
+
+    gh#234: applies a rolling look-back window on top of the watermark
+    so back-dated GRNs (grn_created_at in the past) aren't silently
+    skipped by the forward-only delta. Effective cutoff =
+    min(watermark, now - N days). See _apply_backdate_lookback below.
     """
     if client is None:
         client = EasyEcomClient(location_key=location_key)
@@ -157,6 +165,13 @@ def pull_grns_for_location(
     if account_name and not created_after:
         created_after = frappe.db.get_value(
             "EasyEcom Account", account_name, "grn_pull_high_watermark"
+        )
+        # gh#234: widen the cutoff if the account is configured with a
+        # back-date look-back window (default 7d). Only applied when we
+        # loaded the watermark from the account — an explicit
+        # `created_after` override (tests / replay) is used verbatim.
+        created_after = _apply_backdate_lookback(
+            created_after, account_name=account_name,
         )
 
     sweep = GRNSweepOutcome()
@@ -2115,6 +2130,57 @@ def _fmt_dt_for_ee(value: Any) -> str:
         return d.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return str(value)
+
+
+def _apply_backdate_lookback(
+    watermark: Any, *, account_name: str,
+) -> Any:
+    """gh#234: widen the delta cutoff by a rolling look-back window so
+    back-dated GRNs (grn_created_at earlier than the watermark) get
+    caught on subsequent sweeps.
+
+    Effective cutoff = min(watermark, now - N days), where N is the
+    per-Account `grn_pull_backdate_window_days` field (default 7).
+
+    Behaviour matrix:
+      - N == 0 (or unset)         → look-back disabled; watermark returned as-is
+      - watermark is NULL          → bootstrap path; return None so EE's
+                                     default backstop kicks in (unchanged)
+      - watermark within last N d  → watermark still older/equal to
+                                     (now - N days), return watermark
+      - watermark > (now - N days) → return (now - N days) — widens the
+                                     window so back-dated GRNs pull
+
+    Idempotent: already-Receipted GRNs short-circuit in `process_one_grn`
+    Step 3/4, so re-scanning the last N days is safe.
+    """
+    if not watermark:
+        return watermark  # NULL bootstrap unchanged
+    try:
+        window_days = frappe.db.get_value(
+            "EasyEcom Account", account_name,
+            "grn_pull_backdate_window_days",
+        )
+    except Exception:
+        return watermark
+    n = int(window_days or 0)
+    if n <= 0:
+        return watermark
+    try:
+        wm = frappe.utils.get_datetime(watermark)
+        cutoff = now_datetime() - _timedelta_days(n)
+        # If the window cutoff is EARLIER than the watermark, widen.
+        # If the watermark is already earlier (or equal), keep it.
+        return cutoff if cutoff < wm else wm
+    except Exception:
+        return watermark
+
+
+def _timedelta_days(n: int):
+    """Isolated for testability — subclass point if we ever swap to
+    business days / calendar-aware deltas."""
+    from datetime import timedelta
+    return timedelta(days=n)
 
 
 def _extract_next_url(page: dict | None) -> str | None:

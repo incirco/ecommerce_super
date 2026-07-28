@@ -114,6 +114,7 @@
   "grn_pull_cursor",
   "grn_pull_cursor_at",
   "grn_pull_high_watermark",
+  "grn_pull_backdate_window_days",
   "grn_pull_total_seen",
   "go_live_section",
   "go_live_enable_auto_push_action",
@@ -855,6 +856,13 @@
    "label": "GRN High Watermark (created_after)",
    "read_only": 1,
    "description": "Max grn_created_at observed in the last clean walk. Sent as `created_after` on the next sweep so the delta pull stays narrow. Bootstrap (NULL) → EE's default last-7-days backstop; steady state always passes the watermark."
+  },
+  {
+   "fieldname": "grn_pull_backdate_window_days",
+   "fieldtype": "Int",
+   "label": "GRN Back-Date Look-Back Window (days)",
+   "default": "7",
+   "description": "Rolling look-back applied to the delta cutoff. Effective cutoff = min(grn_pull_high_watermark, now - N days). Catches back-dated GRNs (grn_created_at in the past) that would otherwise be permanently skipped by the forward-only watermark. Idempotent: already-Receipted GRNs short-circuit early in process_one_grn, so re-scanning the last N days is safe. Set 0 to disable the look-back (revert to strict forward-only watermark)."
   },
   {
    "fieldname": "grn_pull_total_seen",
