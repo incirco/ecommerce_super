@@ -1826,11 +1826,33 @@ def _resolve_update_write_id(
 #   - ProductTaxCode  (line 1354: HSN — hard mandatory)
 #
 # productId is the key, always sent.
+#
+# gh#236 (Garv 2026-07-28 mmpl16): `accounting_unit` added for a
+# different reason — it's not EE-mandatory, but the sparse-diff
+# semantics leave EE stuck on a stale blank value forever when:
+#   1. The Push Snapshot claims `accounting_unit=PCS` (from a prior
+#      successful push).
+#   2. ERPNext's stock_uom still maps to `accounting_unit=PCS`.
+#   3. EE's actual product master has `accounting_unit` blank (snapshot
+#      out of sync with EE reality — root cause TBD; EE-side wipe,
+#      race, etc.).
+#   4. Diff finds prior==current, omits the field, EE stays blank,
+#      pull re-reads blank, Item Map re-flagged Created-Flagged forever.
+#
+# Adding to always-send breaks the loop: every UpdateMasterProduct call
+# re-asserts `accounting_unit`, so a blank EE value gets corrected on
+# the next push tick regardless of snapshot state. No pull-side re-flag
+# needed as a follow-up.
+#
+# Blast radius is small: `accounting_unit` is an identity/UOM field,
+# so re-sending its current value on every update is semantically a
+# no-op when EE already has the same value (idempotent).
 _ALWAYS_SEND_UPDATE_FIELDS: frozenset[str] = frozenset({
     "productId",
     "TaxRuleName",
     "TaxRate",
     "ProductTaxCode",
+    "accounting_unit",  # gh#236
 })
 
 
