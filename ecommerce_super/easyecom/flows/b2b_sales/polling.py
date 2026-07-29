@@ -551,6 +551,7 @@ def _apply_decision(
         # Capture EE's invoice_number on the Map too.
         from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
             InvoiceMirrorError,
+            InvoiceMirrorSOFullyBilled,
             InvoiceMirrorVariance,
             mirror_si_from_ee_response,
         )
@@ -598,6 +599,22 @@ def _apply_decision(
                 updates["sales_invoice"] = mirror_outcome["sales_invoice"]
                 updates["sales_invoice_mirrored_at"] = now_datetime()
                 updates["status"] = "Invoice Generated"
+            except InvoiceMirrorSOFullyBilled as exc:
+                # gh#241: EE polled a SO that's already fully billed by
+                # prior SI(s). NOT an error — a duplicate / corrective
+                # invoice on EE's side. Log-and-continue (don't Discrepancy,
+                # don't break the loop — sibling invoice rows in this poll
+                # may still be legitimately new).
+                frappe.logger().info(
+                    f"[gh#241] Polling: SO {map_doc.sales_order!r} already "
+                    f"fully billed by {exc.existing_si_names!r}. Skipping "
+                    f"invoice_id={invoice_row.get('invoice_id')!r} "
+                    f"(nothing new to invoice). Continuing with sibling rows."
+                )
+                # Continue to next invoice_row without touching updates
+                # or setting last_error — this is expected behavior, not
+                # a failure state.
+                continue
             except InvoiceMirrorVariance as exc:
                 # SI WAS created — it's in Draft. Variance exceeded
                 # VARIANCE_THRESHOLD_PCT (0.01%); raise Discrepancy

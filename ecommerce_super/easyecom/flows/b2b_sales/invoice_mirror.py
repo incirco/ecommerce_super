@@ -84,6 +84,29 @@ class InvoiceMirrorVariance(Exception):
     """
 
 
+class InvoiceMirrorSOFullyBilled(InvoiceMirrorError):
+    """Raised when the source SO has already been fully invoiced by
+    prior SI(s), so `make_sales_invoice` returns an SI with no billable
+    lines (qty = so.qty - billed_qty - returned_qty ≤ 0 on every line).
+
+    gh#241: without this guard, `si.insert()` throws an opaque
+    `MandatoryError: [Sales Invoice, ...]: items` when EE requests an
+    invoice for a fully-billed SO (common on multi-invoice orders where
+    EE sends a corrective / duplicate invoice for a fresh invoice_id).
+
+    Subclass of InvoiceMirrorError so existing `except InvoiceMirrorError`
+    catches still fire; callers that want to distinguish can catch this
+    class specifically to translate to a graceful "already invoiced"
+    response instead of a hard failure.
+
+    Carries `existing_si_names: list[str]` — the SIs that already
+    consumed the SO — so callers can surface them in the response.
+    """
+    def __init__(self, message: str, *, existing_si_names: list[str] | None = None):
+        super().__init__(message)
+        self.existing_si_names = list(existing_si_names or [])
+
+
 def mirror_si_from_ee_response(
     *,
     map_doc: Any,
@@ -215,6 +238,38 @@ def mirror_si_from_ee_response(
         ignore_permissions=True,
     )
 
+    # gh#241 — early guard: `make_sales_invoice` returns an SI with no
+    # items when the source SO has already been FULLY billed by prior
+    # SI(s). Each SO line's fresh qty = so.qty - billed_qty - returned_qty;
+    # when that's ≤ 0 on every line, ERPNext's mapper produces an empty
+    # items list. If we let this SI reach `insert()`, ERPNext throws an
+    # opaque `MandatoryError: [Sales Invoice, ...]: items`.
+    #
+    # Live symptom on MMPL (2026-07-28): SI-2603459, SI-2603465 from EE's
+    # GenerateB2BInvoiceJob when EE sent a corrective/duplicate invoice
+    # for an already-fully-billed SO. Fresh EE invoice_id, so the
+    # invoice_id idempotency guard above missed it and we built an
+    # empty SI.
+    #
+    # Raise a specific exception the caller can translate to a graceful
+    # "already invoiced" response instead of the opaque MandatoryError.
+    if not (si.items or []):
+        existing_sis = _find_existing_sis_for_so(map_doc.sales_order)
+        raise InvoiceMirrorSOFullyBilled(
+            f"Source Sales Order {map_doc.sales_order!r} is already fully "
+            f"billed — `make_sales_invoice` returned an SI with no billable "
+            f"lines (every line's remaining qty is 0). This typically means "
+            f"EE sent a corrective / duplicate invoice for an already-invoiced "
+            f"SO. EE invoice_id={ee_invoice_id!r} was not previously mirrored "
+            f"(it slipped past the invoice_id idempotency guard because it's "
+            f"fresh), but nothing new can be invoiced against this SO."
+            + (
+                f" Existing SI(s) that billed the SO: {existing_sis}."
+                if existing_sis else ""
+            ),
+            existing_si_names=existing_sis,
+        )
+
     # --- Override item qtys with EE's actual invoiced quantities ---
     # ERPNext's make_sales_invoice auto-computes qty = so.qty -
     # billed_qty - returned_qty, which is the right default for
@@ -222,6 +277,30 @@ def mirror_si_from_ee_response(
     # EE's authoritative per-line quantities instead — including
     # "this line wasn't in this invoice" (qty = 0 → drop the line).
     _apply_ee_qtys_and_drop_zero_lines(si, ee_row)
+
+    # gh#241 — second guard: `_apply_ee_qtys_and_drop_zero_lines` can
+    # empty the items list too. That happens when NO SI item's EE-mapped
+    # sku appears in EE's `order_items` — a SKU mismatch (either
+    # missing/incorrect Item Map rows on our side, or EE's invoice
+    # references items outside the SO). We reach here despite the
+    # earlier guard because make_sales_invoice DID return items; the
+    # override subsequently dropped them all.
+    #
+    # Raise a clear InvoiceMirrorError naming the mismatch (rather than
+    # `MandatoryError: items`) so FDE sees the actionable signal
+    # (fix Item Map / verify EE catalog) instead of an opaque ERPNext
+    # framework error.
+    if not (si.items or []):
+        ee_skus = _extract_ee_skus(ee_row)
+        so_skus = _get_so_item_skus(map_doc.sales_order)
+        raise InvoiceMirrorError(
+            f"After applying EE's per-line qtys, all SI items were dropped "
+            f"— SKU mismatch between EE's invoice and the source SO. "
+            f"EE invoice SKUs: {sorted(ee_skus)!r}. "
+            f"SO item SKUs (via Item Map): {sorted(so_skus)!r}. "
+            f"FDE: verify Item Map rows exist for each SO item AND EE's "
+            f"invoice references items that are actually on the SO."
+        )
 
     # --- Copy payment_terms_template from SO ---
     # ERPNext's make_sales_invoice deliberately excludes this in its
@@ -517,3 +596,88 @@ def _extract_irn_fields(ee_row: dict) -> dict[str, Any]:
             if found:
                 result["signed_qr_code"] = found
     return result
+
+
+# ============================================================
+# gh#241 helpers — empty-items guard support
+# ============================================================
+
+
+def _find_existing_sis_for_so(so_name: str) -> list[str]:
+    """Return the (submitted-or-draft, not-cancelled) Sales Invoice names
+    already linked to `so_name` via the SO Connections tab (SI Item
+    `sales_order` back-ref). Read-only.
+
+    Used to populate the `existing_si_names` on
+    InvoiceMirrorSOFullyBilled so callers can surface WHICH SIs already
+    consumed the SO in error responses / discrepancy alerts.
+    """
+    if not so_name:
+        return []
+    try:
+        rows = frappe.db.sql(
+            """
+            SELECT DISTINCT si.name
+              FROM `tabSales Invoice Item` sii
+              JOIN `tabSales Invoice` si ON si.name = sii.parent
+             WHERE sii.sales_order = %(so)s
+               AND si.docstatus IN (0, 1)
+             ORDER BY si.creation
+            """,
+            {"so": so_name},
+            as_dict=True,
+        )
+    except Exception:
+        return []
+    return [r["name"] for r in rows if r.get("name")]
+
+
+def _extract_ee_skus(ee_row: dict) -> set[str]:
+    """Extract the set of SKUs referenced in EE's order_items payload.
+    Used to build the SKU-mismatch error message when
+    _apply_ee_qtys_and_drop_zero_lines empties the SI items."""
+    order_items = ee_row.get("order_items") or []
+    if not isinstance(order_items, list):
+        return set()
+    skus: set[str] = set()
+    for line in order_items:
+        if not isinstance(line, dict):
+            continue
+        sku = (line.get("sku") or "").strip()
+        if sku:
+            skus.add(sku)
+    return skus
+
+
+def _get_so_item_skus(so_name: str) -> set[str]:
+    """Return the set of EE SKUs mapped to the SO's item lines (via
+    EasyEcom Item Map lookup on each SO Item's item_code). Read-only.
+
+    Used to build the SKU-mismatch error message."""
+    if not so_name:
+        return set()
+    try:
+        item_codes = frappe.db.sql(
+            """
+            SELECT DISTINCT item_code
+              FROM `tabSales Order Item`
+             WHERE parent = %(so)s
+            """,
+            {"so": so_name},
+            as_dict=True,
+        )
+    except Exception:
+        return set()
+    skus: set[str] = set()
+    for row in item_codes:
+        code = row.get("item_code")
+        if not code:
+            continue
+        sku = frappe.db.get_value(
+            "EasyEcom Item Map",
+            {"erpnext_name": code},
+            "ee_sku",
+        )
+        if sku:
+            skus.add(sku)
+    return skus

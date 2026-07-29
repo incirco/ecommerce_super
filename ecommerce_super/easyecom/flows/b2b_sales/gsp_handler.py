@@ -175,6 +175,7 @@ def find_or_create_si_for_gsp(
     # submit + mint afterwards.
     from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
         InvoiceMirrorError,
+        InvoiceMirrorSOFullyBilled,
         InvoiceMirrorVariance,
         mirror_si_from_ee_response,
     )
@@ -183,6 +184,19 @@ def find_or_create_si_for_gsp(
         mirror_result = mirror_si_from_ee_response(
             map_doc=map_doc, ee_row=ee_row,
         )
+    except InvoiceMirrorSOFullyBilled as exc:
+        # gh#241: EE requested an invoice for a SO that's already
+        # fully billed by prior SI(s). This is NOT an error — it's a
+        # duplicate / corrective request. Translate to GSPHandlerNoOp
+        # so the endpoint returns HTTP 200 with a graceful "already
+        # invoiced" message + existing SI reference. Prevents EE from
+        # retrying indefinitely with fresh invoice_ids.
+        existing = ", ".join(exc.existing_si_names) if exc.existing_si_names else "(none linked yet)"
+        raise GSPHandlerNoOp(
+            f"Source SO already fully invoiced by: {existing}. "
+            f"EE requested invoice for a SO with no remaining billable qty; "
+            f"treating as a no-op. Details: {exc}"
+        ) from exc
     except InvoiceMirrorError as exc:
         raise GSPHandlerError(
             f"SI create from EE payload failed: {exc}"
