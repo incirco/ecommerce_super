@@ -148,13 +148,17 @@ def find_or_create_si_for_gsp(
     # if EE's "Generate E-Invoice for B2B Order" toggle attempts it.
     # Flag defaults OFF; enable per Company once EE's response
     # handling on 200-with-no-IRN is validated on UAT.
-    if _should_noop_for_internal_transfer(reference_code, ee_account=ee_account):
+    if _should_noop_for_internal_transfer(
+        reference_code, ee_account=ee_account, ee_row=ee_row,
+    ):
         raise GSPHandlerNoOp(
             f"reference_code {reference_code!r} is a §10 internal-transfer "
             "Delivery Note. Same-GSTIN internal transfers don't require an "
             "e-invoice under GST (intra-GSTIN movement is not a supply). "
             "No Sales Invoice created; no IRN minted. Physical goods "
-            "transfer completes via Delivery Note → Purchase Receipt."
+            "transfer completes via Delivery Note → Purchase Receipt "
+            "(destination-side PR is created manually by ops when the "
+            "destination warehouse is not EE-mapped)."
         )
 
     map_doc_name = frappe.db.get_value(
@@ -628,7 +632,7 @@ def _should_mint_ewaybill(ee_account: str | None) -> bool:
 
 
 def _should_noop_for_internal_transfer(
-    reference_code: str, *, ee_account: str,
+    reference_code: str, *, ee_account: str, ee_row: dict | None = None,
 ) -> bool:
     """Detect whether reference_code points to a §10 internal-transfer
     Delivery Note (has an EasyEcom Transfer Map) rather than a §11
@@ -640,15 +644,31 @@ def _should_noop_for_internal_transfer(
 
     Defaults False (no-op path skipped) when:
       - the flag isn't set on the Company (backward-compat default)
-      - the EE Account can't be resolved to a Company
+      - Company can't be resolved via ANY fallback path
       - the reference_code doesn't match any Transfer Map
       - any lookup errors (never let this shim block the normal flow)
+
+    gh#243 — Company resolution fallback chain (the original shim
+    from PR #233 assumed `EasyEcom Account.company` was always
+    populated, but MMPL's live Account row has that field empty; the
+    shim short-circuited and every internal-transfer /einvoice/update
+    returned 422 despite the flag being on). Fallback chain in order:
+      1. `EasyEcom Account.company` — the original lookup
+      2. `ee_row.assigned_company_name` / `ee_row.company_name`
+         (payload-side signal; matched against Company by exact or
+         prefix match)
+      3. The Transfer Map's `source_warehouse.company` — derived
+         from the reference_code itself
+      4. Failing all, return False (defensive — never block the
+         normal path when config gaps hide the Company link).
     """
-    if not reference_code or not ee_account:
+    if not reference_code:
         return False
     try:
-        company = frappe.db.get_value(
-            "EasyEcom Account", ee_account, "company"
+        company = _resolve_company_for_transfer_shim(
+            reference_code=reference_code,
+            ee_account=ee_account,
+            ee_row=ee_row,
         )
         if not company:
             return False
@@ -665,6 +685,90 @@ def _should_noop_for_internal_transfer(
         ))
     except Exception:
         return False
+
+
+def _resolve_company_for_transfer_shim(
+    *,
+    reference_code: str,
+    ee_account: str | None,
+    ee_row: dict | None,
+) -> str | None:
+    """Company resolution for the internal-transfer no-op shim.
+
+    Tries multiple paths so a single empty config field can't disable
+    the shim silently (as it did before gh#243). Every step is
+    defensive — any exception falls through to the next path.
+
+    Order (widest-scope-last):
+      1. EasyEcom Account.company — original path from PR #233
+      2. ee_row.assigned_company_name / company_name — payload hint,
+         exact or prefix-matched against Company docname
+      3. Transfer Map source_warehouse → Warehouse.company —
+         derived from the reference_code itself (always resolvable
+         if a Transfer Map exists for the reference)
+    """
+    # Path 1: Account.company
+    if ee_account:
+        try:
+            company = frappe.db.get_value(
+                "EasyEcom Account", ee_account, "company"
+            )
+            if company:
+                return company
+        except Exception:
+            pass
+
+    # Path 2: payload-side company_name / assigned_company_name
+    if ee_row:
+        for key in ("assigned_company_name", "company_name"):
+            hint = (ee_row.get(key) or "").strip()
+            if not hint:
+                continue
+            try:
+                # Exact match on Company docname
+                if frappe.db.exists("Company", hint):
+                    return hint
+                # Prefix match — EE often abbreviates ("Modern Marwar Pvt Ltd"
+                # vs Frappe's "Modern Marwar Private Limited")
+                match = frappe.db.get_value(
+                    "Company",
+                    {"company_name": ["like", f"{hint}%"]},
+                    "name",
+                )
+                if match:
+                    return match
+                # Reverse prefix — Frappe short, EE long
+                match = frappe.db.sql(
+                    """
+                    SELECT name FROM `tabCompany`
+                    WHERE %(hint)s LIKE CONCAT(company_name, '%%')
+                    LIMIT 1
+                    """,
+                    {"hint": hint},
+                    as_dict=True,
+                )
+                if match:
+                    return match[0]["name"]
+            except Exception:
+                continue
+
+    # Path 3: derive from the Transfer Map itself
+    try:
+        src_wh = frappe.db.get_value(
+            "EasyEcom Transfer Map",
+            {"delivery_note": reference_code},
+            "source_warehouse",
+        )
+        if src_wh:
+            company = frappe.db.get_value(
+                "Warehouse", src_wh, "company"
+            )
+            if company:
+                return company
+    except Exception:
+        pass
+
+    return None
 
 
 def _render_si_pdf_base64(
