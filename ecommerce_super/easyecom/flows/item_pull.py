@@ -1166,6 +1166,52 @@ def _write_pull_sync_record(outcome: ProductOutcome, *, sku: str) -> None:
         )
 
 
+def _known_stock_uom(sku: str) -> str | None:
+    """Return the linked ERPNext Item's stock_uom if one exists and is a
+    valid UOM, else None.
+
+    gh#236: EasyEcom does not persist `accounting_unit` on the product
+    master (a live GetProductMaster read shows it blank catalogue-wide,
+    even immediately after a successful UpdateMasterProduct). So the
+    pulled `stock_uom` — mapped from `accounting_unit` via the gh#38
+    rule — is blank on every re-pull of an ERPNext-originated item, and
+    the push-side always-send fix (#238) cannot clear it. When a linked
+    Item already carries a valid stock_uom (mapped Item, byte-equal
+    item_code, or a bundle's wrapper Item), trust that known UOM instead
+    of re-substituting the account default and re-flagging the UOM as
+    dirty on every pull.
+
+    Read-only. Returns None when there is no linked Item yet (genuine
+    first pull), so a truly-new item with a dirty EE UOM is still
+    substituted-and-flagged exactly as before.
+    """
+    row = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"ee_sku": sku},
+        ["erpnext_doctype", "erpnext_name"],
+        as_dict=True,
+    )
+    item_name: str | None = None
+    if row and row.erpnext_name:
+        if row.erpnext_doctype == "Item":
+            item_name = row.erpnext_name
+        elif row.erpnext_doctype == "Product Bundle":
+            # The comparable content (incl. stock_uom) lives on the
+            # bundle's wrapper Item, not the Product Bundle doc.
+            item_name = frappe.db.get_value(
+                "Product Bundle", row.erpnext_name, "new_item_code"
+            )
+    if not item_name and frappe.db.exists("Item", sku):
+        # Auto-map candidate: byte-equal item_code with no map row yet.
+        item_name = sku
+    if not item_name:
+        return None
+    uom = frappe.db.get_value("Item", item_name, "stock_uom")
+    if uom and frappe.db.exists("UOM", uom):
+        return uom
+    return None
+
+
 def _process_one_product_inner(
     product: dict,
     *,
@@ -1246,12 +1292,23 @@ def _process_one_product_inner(
     flag_reasons: list[str] = []
     raw_uom = erpnext_fields.get("stock_uom")
     if not raw_uom or not frappe.db.exists("UOM", raw_uom):
-        substituted = account.get("default_uom") or "Nos"
-        flag_reasons.append(
-            f"dirty/unknown accounting_unit {raw_uom!r}; substituted "
-            f"default UOM {substituted!r} — FDE: verify or correct."
-        )
-        erpnext_fields["stock_uom"] = substituted
+        # gh#236: EE never persists accounting_unit, so raw_uom is blank on
+        # every re-pull of an ERPNext-originated item. If a linked Item
+        # already carries a valid stock_uom, adopt it silently — the UOM is
+        # known, there is nothing for an FDE to fix, and the row must not
+        # stay perpetually Created-Flagged. Only substitute the account
+        # default AND flag when there is no trusted UOM to adopt (a genuine
+        # first pull of a brand-new item with a dirty EE UOM).
+        known_uom = _known_stock_uom(sku)
+        if known_uom:
+            erpnext_fields["stock_uom"] = known_uom
+        else:
+            substituted = account.get("default_uom") or "Nos"
+            flag_reasons.append(
+                f"dirty/unknown accounting_unit {raw_uom!r}; substituted "
+                f"default UOM {substituted!r} — FDE: verify or correct."
+            )
+            erpnext_fields["stock_uom"] = substituted
 
     # === Step 5: matching (§8.1.3) ===
     map_name = frappe.db.get_value(
@@ -1460,14 +1517,17 @@ def _detect_drift_one_product(
     # === Case 2 / 3: existing mapping — diff the translated payload
     # against the current ERPNext doc. ===
     erpnext_fields = executor.pull(product)
-    # Apply the same dirty-UOM substitution the normal pull would, so
-    # we compare apples-to-apples (a re-pull with the same dirty
-    # accounting_unit produces the same substituted stock_uom →
-    # compared to the existing substituted stock_uom → no spurious
-    # drift).
+    # Apply the same dirty-UOM handling the normal pull would, so we
+    # compare apples-to-apples. gh#236: mirror _process_one_product_inner
+    # — adopt the linked Item's known stock_uom when EE's accounting_unit
+    # is blank (which it always is), so a blank EE UOM never registers as
+    # stock_uom drift; fall back to the substituted default only when
+    # there is no known UOM.
     raw_uom = erpnext_fields.get("stock_uom")
     if not raw_uom or not frappe.db.exists("UOM", raw_uom):
-        erpnext_fields["stock_uom"] = account.get("default_uom") or "Nos"
+        erpnext_fields["stock_uom"] = (
+            _known_stock_uom(sku) or account.get("default_uom") or "Nos"
+        )
 
     # Locate the wrapper Item (for bundles, the comparable content
     # lives on the wrapper, not the Product Bundle's own fields).
@@ -1880,12 +1940,19 @@ def _process_combo_product(
     flag_reasons: list[str] = []
     raw_uom = erpnext_fields.get("stock_uom")
     if not raw_uom or not frappe.db.exists("UOM", raw_uom):
-        substituted = account.get("default_uom") or "Nos"
-        flag_reasons.append(
-            f"dirty/unknown accounting_unit {raw_uom!r}; substituted "
-            f"default UOM {substituted!r}."
-        )
-        erpnext_fields["stock_uom"] = substituted
+        # gh#236: adopt the wrapper Item's known stock_uom on re-pull (EE
+        # never persists accounting_unit); only substitute+flag when there
+        # is no trusted UOM (first creation of the bundle).
+        known_uom = _known_stock_uom(sku)
+        if known_uom:
+            erpnext_fields["stock_uom"] = known_uom
+        else:
+            substituted = account.get("default_uom") or "Nos"
+            flag_reasons.append(
+                f"dirty/unknown accounting_unit {raw_uom!r}; substituted "
+                f"default UOM {substituted!r}."
+            )
+            erpnext_fields["stock_uom"] = substituted
 
     # === Step 4: resolve sub_products via component map rows ===
     sub_products = (product or {}).get("sub_products") or []
