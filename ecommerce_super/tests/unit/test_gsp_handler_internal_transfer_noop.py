@@ -139,6 +139,232 @@ class TestShouldNoopHelper(unittest.TestCase):
 
 
 # ============================================================
+# gh#243: Company resolution fallback chain
+# ============================================================
+
+
+class TestCompanyResolutionFallback(unittest.TestCase):
+    """gh#243 — the original shim (PR #233) short-circuited when
+    `EasyEcom Account.company` was empty, silently disabling the
+    no-op for MMPL live (where that field is None). Fix: try
+    multiple resolution paths.
+
+    Fallback order:
+      1. EasyEcom Account.company        (original)
+      2. ee_row.assigned_company_name / company_name (payload hint,
+         matched exact or prefix)
+      3. Transfer Map source_warehouse → Warehouse.company
+
+    These lock: (a) each path works in isolation; (b) later paths
+    fire when earlier ones fail; (c) shim still returns False if
+    every path fails.
+    """
+
+    def _run(self, *, get_value_side, exists_side=None,
+             sql_side=None, ee_row=None, ee_account="MMPL"):
+        with (
+            patch.object(mod.frappe.db, "get_value", side_effect=get_value_side),
+            patch.object(mod.frappe.db, "exists",
+                         side_effect=(exists_side or (lambda *a, **kw: True))),
+            patch.object(mod.frappe.db, "sql",
+                         side_effect=(sql_side or (lambda *a, **kw: []))),
+        ):
+            return mod._should_noop_for_internal_transfer(
+                "DL-261528", ee_account=ee_account, ee_row=ee_row,
+            )
+
+    # ---- Path 1: EasyEcom Account.company (original) ----
+
+    def test_path1_account_company_wins_when_set(self):
+        """When Account.company IS populated, shim uses it directly —
+        payload/Transfer Map paths not consulted."""
+        calls = []
+
+        def _get_value(*args, **kwargs):
+            doctype = kwargs.get("doctype") or (args[0] if args else None)
+            calls.append(doctype)
+            if doctype == "EasyEcom Account":
+                return "MMPL Company"
+            if doctype == "EasyEcom Company Settings":
+                return 1  # flag ON
+            return None
+        result = self._run(get_value_side=_get_value)
+        self.assertTrue(result)
+        # Path 1 short-circuits — Warehouse.company lookup never runs
+        self.assertNotIn("Warehouse", calls)
+
+    # ---- Path 2: payload company_name ----
+
+    def test_path2_payload_assigned_company_name_exact_match(self):
+        """MMPL live shape: Account.company is None. Payload has
+        assigned_company_name that exact-matches a Frappe Company."""
+
+        def _get_value(*args, **kwargs):
+            doctype = kwargs.get("doctype") or (args[0] if args else None)
+            if doctype == "EasyEcom Account":
+                return None  # path 1 miss
+            if doctype == "Company":
+                return "Modern Marwar Pvt Ltd"  # prefix-match would fire
+            if doctype == "EasyEcom Company Settings":
+                return 1
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Company":
+                return True  # exact match hits
+            if doctype == "EasyEcom Transfer Map":
+                return True
+            return False
+
+        result = self._run(
+            get_value_side=_get_value,
+            exists_side=_exists,
+            ee_row={"assigned_company_name": "Modern Marwar Pvt Ltd"},
+        )
+        self.assertTrue(result)
+
+    def test_path2_payload_company_name_prefix_match(self):
+        """EE-side names are abbreviated (`Modern Marwar Pvt Ltd`) vs
+        Frappe's full form (`Modern Marwar Private Limited`) — the
+        prefix match on Company.company_name catches this."""
+
+        def _get_value(*args, **kwargs):
+            doctype = kwargs.get("doctype") or (args[0] if args else None)
+            filters = kwargs.get("filters") or (args[1] if len(args) > 1 else None)
+            if doctype == "EasyEcom Account":
+                return None
+            if doctype == "Company" and isinstance(filters, dict) and \
+                    "company_name" in filters:
+                # Prefix match: "Modern Marwar Pvt%" matches "Modern Marwar Private Limited"
+                return "Modern Marwar Private Limited"
+            if doctype == "EasyEcom Company Settings":
+                return 1
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Company":
+                return False  # exact-match miss → forces prefix path
+            if doctype == "EasyEcom Transfer Map":
+                return True
+            return False
+
+        result = self._run(
+            get_value_side=_get_value,
+            exists_side=_exists,
+            ee_row={"assigned_company_name": "Modern Marwar Pvt Ltd"},
+        )
+        self.assertTrue(result)
+
+    def test_path2_falls_back_to_company_name_key(self):
+        """Payload sometimes has `company_name` instead of
+        `assigned_company_name` — try both."""
+
+        def _get_value(*args, **kwargs):
+            doctype = kwargs.get("doctype") or (args[0] if args else None)
+            if doctype == "EasyEcom Account":
+                return None
+            if doctype == "EasyEcom Company Settings":
+                return 1
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Company" and name == "Modern Marwar":
+                return True
+            if doctype == "EasyEcom Transfer Map":
+                return True
+            return False
+
+        result = self._run(
+            get_value_side=_get_value,
+            exists_side=_exists,
+            ee_row={"company_name": "Modern Marwar"},  # only this key
+        )
+        self.assertTrue(result)
+
+    # ---- Path 3: Transfer Map source_warehouse → Warehouse.company ----
+
+    def test_path3_transfer_map_source_warehouse_fallback(self):
+        """Account.company empty, no payload — derive Company from
+        the Transfer Map's source_warehouse."""
+
+        def _get_value(*args, **kwargs):
+            doctype = kwargs.get("doctype") or (args[0] if args else None)
+            filters = kwargs.get("filters") or (args[1] if len(args) > 1 else None)
+            field = kwargs.get("field") or (args[2] if len(args) > 2 else None)
+            if doctype == "EasyEcom Account":
+                return None  # path 1 miss
+            if doctype == "EasyEcom Transfer Map" and field == "source_warehouse":
+                return "Factory Main - MMPL"  # path 3 hit
+            if doctype == "Warehouse" and filters == "Factory Main - MMPL":
+                return "Modern Marwar Private Limited"
+            if doctype == "EasyEcom Company Settings":
+                return 1
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "EasyEcom Transfer Map":
+                return True
+            return False
+
+        result = self._run(
+            get_value_side=_get_value,
+            exists_side=_exists,
+            ee_row=None,  # NO payload — forces path 3
+        )
+        self.assertTrue(result)
+
+    # ---- Failure mode: all paths fail ----
+
+    def test_all_paths_fail_returns_false(self):
+        """No Account.company, no payload hint, no Transfer Map source —
+        shim safely returns False (doesn't crash, doesn't block normal
+        path). Regression guard against removing any of the paths."""
+
+        def _get_value(*args, **kwargs):
+            return None  # everything returns None
+
+        def _exists(doctype, name):
+            return False
+
+        result = self._run(
+            get_value_side=_get_value,
+            exists_side=_exists,
+            ee_row={"assigned_company_name": "Unknown Company"},
+        )
+        self.assertFalse(result)
+
+    def test_path1_exception_falls_through_to_path2(self):
+        """Defensive: exception on Path 1 doesn't halt the chain —
+        try Path 2. Locks that a broken EE Account row doesn't
+        disable the shim if payload can still resolve Company."""
+        state = {"path1_tried": False}
+
+        def _get_value(*args, **kwargs):
+            doctype = kwargs.get("doctype") or (args[0] if args else None)
+            if doctype == "EasyEcom Account":
+                state["path1_tried"] = True
+                raise RuntimeError("Account row corrupted")
+            if doctype == "EasyEcom Company Settings":
+                return 1
+            return None
+
+        def _exists(doctype, name):
+            if doctype == "Company" and name == "Modern Marwar":
+                return True
+            if doctype == "EasyEcom Transfer Map":
+                return True
+            return False
+
+        result = self._run(
+            get_value_side=_get_value,
+            exists_side=_exists,
+            ee_row={"assigned_company_name": "Modern Marwar"},
+        )
+        self.assertTrue(state["path1_tried"])
+        self.assertTrue(result)  # path 2 saved us
+
+
+# ============================================================
 # Handler-level integration: find_or_create_si_for_gsp
 # ============================================================
 
