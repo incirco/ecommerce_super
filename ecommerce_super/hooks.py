@@ -9,14 +9,18 @@ after_install hook.
 from __future__ import annotations
 
 app_name = "ecommerce_super"
-app_title = "EasyEcom"
+# app_title = "eCommerce Super" — the folder-tile caption on the v16
+# apps screen (mirrors the pattern India Compliance uses to group
+# GST India + Income Tax under one folder). See #246.
+app_title = "eCommerce Super"
 app_publisher = "Incirco"
 app_description = "ERPNext-native EasyEcom integration"
 app_email = "nikhil@incirco.com"
 app_license = "mit"
 app_color = "blue"
 app_home = "/app/easyecom"
-app_logo_url = "/assets/ecommerce_super/images/easyecom.svg"
+# Family/folder logo shown on the apps screen. See #247.
+app_logo_url = "/assets/ecommerce_super/images/ecommerce-super-logo.svg"
 
 # §8e Stage 6 — full-width layout override for the EasyEcom workspace.
 # The default Frappe desk centers workspace content with side gutters
@@ -35,13 +39,21 @@ app_include_css = "/assets/ecommerce_super/css/easyecom_workspace.css"
 # the workspace visibility stay aligned.
 
 add_to_apps_screen = [
+    # Single entry per Frappe v16 behavior (create_desktop_icons_from_
+    # installed_apps in frappe/desk/doctype/desktop_icon/desktop_icon.py
+    # reads only app_details[0]). The "folder-like" grouping pattern
+    # used by India Compliance (GST India + Income Tax India) is
+    # actually workspace-sidebar hierarchy, not multi-entry
+    # add_to_apps_screen — one apps-screen tile ("eCommerce Super")
+    # lands the user in the EasyEcom workspace; a sibling "Recon"
+    # workspace appears in the sidebar alongside it. See #246.
     {
         "name": "ecommerce_super",
-        "logo": "/assets/ecommerce_super/images/easyecom.svg",
-        "title": "EasyEcom",
+        "logo": "/assets/ecommerce_super/images/ecommerce-super-logo.svg",
+        "title": "eCommerce Super",
         "route": "/app/easyecom",
         "has_permission": "ecommerce_super.easyecom.permissions.has_app_screen_permission",
-    }
+    },
 ]
 
 
@@ -50,6 +62,13 @@ add_to_apps_screen = [
 # ============================================================
 
 after_install = "ecommerce_super.install.after_install"
+
+# Runs on every `bench migrate` so the apps-screen folder tile
+# (parent "eCommerce Super" + children EasyEcom + Recon) survives
+# Frappe's "Removing orphan Desktop Icons" pass and its automatic
+# workspace-icon regeneration. See ecommerce_super/apps_screen_folder.py
+# and #246.
+after_migrate = "ecommerce_super.apps_screen_folder.setup_apps_screen_folder"
 
 
 # ============================================================
