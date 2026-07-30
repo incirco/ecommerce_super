@@ -50,6 +50,7 @@ def setup_apps_screen_folder() -> None:
     """Idempotent setup — safe to run on every after_migrate."""
     _ensure_parent_folder_icon()
     _ensure_recon_sidebar_has_link()
+    _drop_auto_recon_workspace_sidebar()
     _relink_children_to_parent()
     _clear_desktop_icon_caches()
 
@@ -128,6 +129,32 @@ def _ensure_recon_sidebar_has_link() -> None:
         item.link_type = desired_type
         item.link_to = desired_to
         sb.save(ignore_permissions=True)
+
+
+def _drop_auto_recon_workspace_sidebar() -> None:
+    """When the recon app is installed, Frappe's
+    `create_workspace_sidebar_for_workspaces` auto-generates a
+    Workspace Sidebar named "eCommerce Super Recon" (a duplicate of
+    the workspace, with a single Home link back to itself). That
+    duplicate is what refresh on /app/ecommerce-super-recon picks up,
+    producing a different sidebar than the one shown when the user
+    clicked in via our Recon sidebar (verified live 2026-07-31).
+
+    We want only the "Recon" Workspace Sidebar to exist post-install
+    so both click and refresh land on the same sidebar. Frappe's
+    `set_sidebar_for_page` fallback (get_workspace_sidebars) then
+    finds our Recon sidebar via its item's link_to and renders it.
+    """
+    if RECON_APP_NAME not in (frappe.get_installed_apps() or []):
+        return  # not installed → no auto-sidebar to drop
+    if not frappe.db.exists("Workspace Sidebar", RECON_WORKSPACE_NAME):
+        return  # already gone → idempotent no-op
+    frappe.delete_doc(
+        "Workspace Sidebar",
+        RECON_WORKSPACE_NAME,
+        ignore_permissions=True,
+        force=True,
+    )
 
 
 def _relink_children_to_parent() -> None:
