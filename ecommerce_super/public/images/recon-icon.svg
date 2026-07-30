@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Recon">
+  <!-- Recon entry icon for the v16 apps-screen tile.
+       Rounded-square (radius 112) on indigo background.
+       Glyph: two opposing horizontal arrows (top right, bottom left)
+       with a small check mark centred between them — reads as
+       "two sides matched". Stroke-based, round caps. -->
+  <rect x="0" y="0" width="512" height="512" rx="112" ry="112" fill="#4F46E5"/>
+
+  <g fill="none" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Top arrow: pointing RIGHT, y=180 -->
+    <line x1="112" y1="180" x2="400" y2="180"/>
+    <polyline points="336,124 400,180 336,236"/>
+
+    <!-- Bottom arrow: pointing LEFT, y=332 -->
+    <line x1="112" y1="332" x2="400" y2="332"/>
+    <polyline points="176,276 112,332 176,388"/>
+
+    <!-- Check mark centred between the two arrows (around y=256) -->
+    <polyline points="216,258 246,286 300,232"/>
+  </g>
+</svg>

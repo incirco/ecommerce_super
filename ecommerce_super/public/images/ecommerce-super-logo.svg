@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="eCommerce Super">
+  <!-- Family/folder logo for the v16 apps-screen tile.
+       Rounded-square (radius 112) on teal background.
+       White hexagon outline nods to the EasyEcom mark. -->
+  <rect x="0" y="0" width="512" height="512" rx="112" ry="112" fill="#0F766E"/>
+  <!-- Regular hexagon centred at (256, 256), circumradius 148 -->
+  <polygon
+    points="256,108 384,182 384,330 256,404 128,330 128,182"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="24"
+    stroke-linejoin="round"/>
+</svg>

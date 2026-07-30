@@ -1,0 +1,54 @@
+{
+ "app": "ecommerce_super",
+ "charts": [],
+ "content": "[{\"id\": \"recon-header\", \"type\": \"header\", \"data\": {\"text\": \"<div style=\\\"margin:8px 0 16px 0;\\\"><div style=\\\"font-size:22px;font-weight:700;color:#111827;letter-spacing:-0.01em;\\\">Marketplace Reconciliation</div><div style=\\\"font-size:13px;color:#6b7280;margin-top:4px;\\\">Settlement ingest \\u00b7 expected-vs-actual per order \\u00b7 claim-ready diff reports</div></div>\", \"col\": 12}}, {\"id\": \"recon-open\", \"type\": \"paragraph\", \"data\": {\"text\": \"<div style=\\\"background:#eef2ff;border:1px solid #c7d2fe;border-radius:12px;padding:20px 20px;\\\"><div style=\\\"font-size:14px;line-height:1.6;color:#1e293b;\\\">Marketplace sellers typically lose 0.5\\u20131.5% of GMV to unreconciled deductions \\u2014 commission overcharges, missing refund reversals, and returns never received.</div><div style=\\\"margin-top:14px;\\\"><a href=\\\"/app/recon-launch\\\" class=\\\"btn btn-primary btn-sm\\\">Open Recon</a></div></div>\", \"col\": 12}}]",
+ "creation": "2026-07-31 00:00:00",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "sync",
+ "idx": 0,
+ "indicator_color": "",
+ "is_hidden": 0,
+ "label": "Recon",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Marketplace Reconciliation",
+   "link_count": 0,
+   "link_to": "recon-launch",
+   "link_type": "Page",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-07-31 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "Recon",
+ "number_cards": [],
+ "onboarding": "",
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 20.0,
+ "shortcuts": [
+  {
+   "color": "Blue",
+   "doc_view": "",
+   "format": "",
+   "label": "Open Recon Launcher",
+   "link_to": "recon-launch",
+   "stats_filter": "",
+   "type": "Page"
+  }
+ ],
+ "title": "Recon",
+ "type": "Workspace"
+}
