@@ -18,7 +18,7 @@ import frappe
 # Single rename point. If the recon app is published under a different
 # Frappe app name, change this one constant — every reference below
 # reads from it.
-RECON_APP_NAME: str = "easyecom_recon"
+RECON_APP_NAME: str = "ecommerce_super_recon"
 
 # The recon app must ship a Workspace whose route resolves to this URL
 # (contract fixed in #246). We hard-code it here so the redirect works
