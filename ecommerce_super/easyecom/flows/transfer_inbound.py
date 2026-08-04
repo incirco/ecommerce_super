@@ -396,15 +396,23 @@ def process_inbound_grn(
     )
 
     if submit_decision["action"] == "submit":
+        # gh#252: isolate the submit behind a savepoint. A GL/valuation
+        # failure (e.g. "Incorrect number of General Ledger Entries") would
+        # otherwise (a) leave the failed submit's partial Stock Ledger / GL
+        # entries in the transaction — committed at the page boundary — and
+        # (b) the failure-recording below writes a Sync Record whose entity
+        # link is the GRN Map (ECS-GRN-<id>); writing it BEFORE the Map row
+        # existed raised LinkValidationError which, with no per-GRN
+        # isolation, aborted the whole pull. So: roll the failed submit
+        # back, then record Failed with the Map FIRST (link resolves), then
+        # the Sync Record. The Draft PR (inserted before the savepoint)
+        # survives for FDE follow-up.
+        _ipr_submit_sp = f"ipr_submit_{ee_grn_id}"
+        frappe.db.savepoint(_ipr_submit_sp)
         try:
             pr_doc.submit()
         except Exception as exc:
-            sr = write_grn_drift_sync_record(
-                ee_grn_id=ee_grn_id,
-                company=company,
-                status=STATUS_FAILED,
-                last_error=f"IPR submit: {type(exc).__name__}: {exc}",
-            )
+            frappe.db.rollback(save_point=_ipr_submit_sp)
             _upsert_grn_map_for_transfer(
                 ee_grn_id=ee_grn_id,
                 grn_row=grn_row,
@@ -414,6 +422,12 @@ def process_inbound_grn(
                 transfer_map_name=transfer_map_name,
                 status="Failed",
                 flag_reason=f"IPR submit: {exc}"[:1000],
+            )
+            sr = write_grn_drift_sync_record(
+                ee_grn_id=ee_grn_id,
+                company=company,
+                status=STATUS_FAILED,
+                last_error=f"IPR submit: {type(exc).__name__}: {exc}",
             )
             return GRNOutcome(
                 ee_grn_id=ee_grn_id,
