@@ -111,10 +111,46 @@ def process_inbound_grn(
 
     # Idempotency: if this Transfer Map already has an IPR linked to
     # this ee_grn_id, no-op (re-pull).
-    existing_pr = _find_existing_ipr_for_grn(
+    existing = _find_existing_ipr_for_grn(
         transfer_map=transfer_map_name, ee_grn_id=ee_grn_id
     )
-    if existing_pr:
+    if existing:
+        existing_pr = existing["name"]
+        if existing["docstatus"] == 1:
+            # A SUBMITTED IPR — the transfer was genuinely received.
+            _upsert_grn_map_for_transfer(
+                ee_grn_id=ee_grn_id,
+                grn_row=grn_row,
+                inwarded_wh_c_id=inwarded_wh_c_id,
+                vendor_c_id=vendor_c_id,
+                pr_name=existing_pr,
+                transfer_map_name=transfer_map_name,
+                status="Receipted",
+            )
+            return GRNOutcome(
+                ee_grn_id=ee_grn_id,
+                operation="noop",
+                grn_map_status="Receipted",
+                purchase_receipt=existing_pr,
+            )
+        # gh#252 follow-up: a DRAFT IPR (docstatus=0) means a prior run left
+        # the receipt un-submitted — its auto-IPR submit failed on valuation
+        # (same-GSTIN GL mismatch), or it is awaiting the §10 SI (different-
+        # GSTIN "Pending"). The stock is NOT in the destination warehouse.
+        # Reporting "Receipted" here (the pre-fix behaviour) was a silent
+        # false-success: the gh#234 look-back re-pulls the failing GRN, finds
+        # this Draft, and flipped the Map Failed -> Receipted with nothing
+        # received. Instead PRESERVE the existing GRN Map status (Failed /
+        # Pending) so the FDE signal survives. Re-submitting is owned
+        # elsewhere — the SI-submit hook for the different-GSTIN path, or the
+        # valuation fix (PR-B) / manual action for same-GSTIN — never this
+        # idempotent re-pull.
+        preserved_status = (
+            frappe.db.get_value(
+                "EasyEcom GRN Map", {"ee_grn_id": ee_grn_id}, "status"
+            )
+            or "Pending"
+        )
         _upsert_grn_map_for_transfer(
             ee_grn_id=ee_grn_id,
             grn_row=grn_row,
@@ -122,12 +158,12 @@ def process_inbound_grn(
             vendor_c_id=vendor_c_id,
             pr_name=existing_pr,
             transfer_map_name=transfer_map_name,
-            status="Receipted",
+            status=preserved_status,
         )
         return GRNOutcome(
             ee_grn_id=ee_grn_id,
             operation="noop",
-            grn_map_status="Receipted",
+            grn_map_status=preserved_status,
             purchase_receipt=existing_pr,
         )
 
@@ -585,22 +621,31 @@ def _resolve_git_warehouse(company: str) -> str | None:
 
 def _find_existing_ipr_for_grn(
     *, transfer_map: str, ee_grn_id: int
-) -> str | None:
+) -> dict | None:
     """Idempotency hinge: a PR linked to this transfer with matching
-    ee_easyecom_grn_id (the §9 back-ref) is the re-pull case."""
+    ee_easyecom_grn_id (the §9 back-ref) is the re-pull case.
+
+    Returns ``{"name", "docstatus"}`` (or None) so the caller can tell a
+    SUBMITTED receipt (docstatus=1 — the transfer was genuinely received,
+    report Receipted) apart from a leftover DRAFT (docstatus=0 — a prior
+    auto-IPR submit failed or is still pending; stock is NOT received, so
+    it must NOT be reported Receipted). ``ORDER BY docstatus DESC`` makes a
+    submitted PR win if both a submitted and a stray draft somehow exist.
+    """
     rows = frappe.db.sql(
         """
-        SELECT pr.name
+        SELECT pr.name, pr.docstatus
         FROM `tabPurchase Receipt` pr
         WHERE pr.ecs_section10_transfer_map = %s
           AND pr.ecs_easyecom_grn_id = %s
           AND pr.docstatus IN (0, 1)
+        ORDER BY pr.docstatus DESC
         LIMIT 1
         """,
         (transfer_map, str(ee_grn_id)),
         as_dict=True,
     )
-    return rows[0]["name"] if rows else None
+    return rows[0] if rows else None
 
 
 def _upsert_grn_map_for_transfer(
