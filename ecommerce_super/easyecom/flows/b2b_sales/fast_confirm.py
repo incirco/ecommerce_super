@@ -9,10 +9,14 @@ Fast-confirm closes that gap. EE typically finishes queue jobs in
 2-5 seconds. We poll `/getQueueStatus` up to 6 times at 5s intervals
 (30s total ceiling). On status_id=3 (Finished), we backfill IDs
 from the polling response IMMEDIATELY. On status_id=4 (Error), we
-mark the Map → Drift and surface EE's error-report CSV URL in the
-Sync Record. On timeout (still NEW/processing after 30s), we fall
-through silently; the existing */5 polling cron + PR #101 backfill
-catch up later.
+mark the Map → Failed (gh#254 — a distinct terminal status, no longer
+the ambiguous "Drift"), parse EE's error-report CSV for the failing
+SKUs + reason, write that onto last_error, mirror it to the Sales
+Order timeline, and raise a "B2B Push Failed" Integration Discrepancy
+so the rejection is visible + actionable (not buried in an audit
+field). On timeout (still NEW/processing after 30s), we fall through
+silently; the existing */5 polling cron + PR #101 backfill catch up
+later.
 
 Grounded against Thuraya 2026-06-28 (SAL-ORD-2026-00022):
   - getQueueStatus response carries `notes` field with
@@ -63,7 +67,7 @@ def fast_confirm_new_b2b(
     location_key: str,
 ) -> dict[str, Any]:
     """Poll EE queue until terminal status or timeout. Backfill Map
-    row IDs on Finished. Mark Map → Drift on Error.
+    row IDs on Finished. Mark Map → Failed on Error (gh#254).
 
     Returns a structured outcome dict with:
       - terminal_status_id: str ("3", "4", or None on timeout)
@@ -126,7 +130,7 @@ def fast_confirm_new_b2b(
 
         if status_id == QUEUE_STATUS_ERROR:
             error_csv = data.get("result") or None
-            _mark_map_drift(
+            _mark_map_failed(
                 map_name=map_name,
                 queue_status_data=data,
                 error_csv_url=error_csv,
@@ -252,33 +256,176 @@ def _backfill_from_queue_finished(
     return updates
 
 
-def _mark_map_drift(
+def _mark_map_failed(
     *,
     map_name: str,
     queue_status_data: dict,
     error_csv_url: str | None,
 ) -> None:
-    """On status_id=4 (Error), transition Map status → Drift and
-    persist the error CSV URL on last_error so the FDE can pull
-    EE's detailed rejection report."""
+    """gh#254 — on status_id=4 (Error), transition Map status → **Failed**
+    (a distinct terminal status, not the ambiguous "Drift" that looked
+    identical to an in-progress order), and make the rejection visible:
+
+      1. Parse EE's error-report CSV for the failing SKUs + reason and
+         put a human-readable summary on `last_error` (so the FDE sees
+         *which* SKUs failed and *why* without downloading the CSV).
+      2. Mirror that reason to the Sales Order timeline and raise a
+         "B2B Push Failed" Integration Discrepancy so the FDE/user sees
+         it where they look.
+
+    The status + last_error write is the single deterministic side
+    effect. The SO-facing surfacing (step 2) is isolated in
+    `_surface_rejection_on_so` and fully guarded, so a failure there can
+    never leave the Map without its Failed status.
+    """
     error_msg = queue_status_data.get("message") or "EE queue rejected the order"
-    last_error_parts = [
-        f"EE queue Finished with Error: {error_msg}",
-    ]
+
+    # Best-effort: fetch + parse EE's per-line error CSV into a readable
+    # "reason: SKU, SKU" summary. Never raises.
+    parsed_summary = _parse_ee_error_csv(error_csv_url) if error_csv_url else None
+
+    last_error_parts = [f"EE queue Finished with Error: {error_msg}"]
+    if parsed_summary:
+        last_error_parts.append(f"Failing lines — {parsed_summary}")
     if error_csv_url:
         last_error_parts.append(f"Error report CSV: {error_csv_url}")
     if queue_status_data.get("upload_file"):
         last_error_parts.append(
             f"Original payload CSV: {queue_status_data['upload_file']}"
         )
+    last_error = " | ".join(last_error_parts)[:5000]
 
     frappe.db.set_value(
         "EasyEcom B2B Order Map",
         map_name,
         {
-            "status": "Drift",
-            "last_error": " | ".join(last_error_parts)[:5000],
+            "status": "Failed",
+            "last_error": last_error,
         },
         update_modified=False,
+    )
+    frappe.db.commit()
+
+    # Surface to the user — SO timeline comment + FDE Discrepancy.
+    # Fully guarded: the Map is already Failed regardless of what happens
+    # here, so a surfacing failure degrades gracefully to the audit field.
+    try:
+        _surface_rejection_on_so(
+            map_name=map_name,
+            error_msg=error_msg,
+            parsed_summary=parsed_summary,
+            error_csv_url=error_csv_url,
+        )
+    except Exception:
+        frappe.log_error(
+            title=f"gh#254: could not surface EE rejection for {map_name}",
+            message=frappe.get_traceback(),
+        )
+
+
+def _parse_ee_error_csv(url: str) -> str | None:
+    """Best-effort: GET EE's error-report CSV and summarise the failing
+    lines as "<reason>: <sku>, <sku> | <reason>: <sku>". Returns None on
+    any failure (missing lib, network error, unexpected shape) — the
+    caller falls back to just linking the raw CSV. Never raises.
+
+    EE's CSV columns (observed): OrderItemId, Sku, Quantity, Price, Message.
+    """
+    try:
+        import csv as _csv
+        import io as _io
+
+        import requests  # bundled with Frappe
+
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        reader = _csv.DictReader(_io.StringIO(resp.text))
+        by_reason: dict[str, list[str]] = {}
+        for row in reader:
+            # Tolerate header-case / whitespace variance.
+            norm = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+            reason = norm.get("message") or "Unspecified error"
+            sku = norm.get("sku") or norm.get("orderitemid") or "?"
+            by_reason.setdefault(reason, [])
+            if sku not in by_reason[reason]:
+                by_reason[reason].append(sku)
+        if not by_reason:
+            return None
+        # Cap to keep last_error readable; note if truncated.
+        parts = []
+        for reason, skus in by_reason.items():
+            shown = skus[:20]
+            suffix = f" (+{len(skus) - 20} more)" if len(skus) > 20 else ""
+            parts.append(f"{reason}: {', '.join(shown)}{suffix}")
+        return " | ".join(parts)[:2000]
+    except Exception:
+        return None
+
+
+def _surface_rejection_on_so(
+    *,
+    map_name: str,
+    error_msg: str,
+    parsed_summary: str | None,
+    error_csv_url: str | None,
+) -> None:
+    """Make the rejection visible where the user will actually see it:
+    a comment on the Sales Order timeline + a "B2B Push Failed" Integration
+    Discrepancy (which flows into the existing B2B push-failures worklist).
+    Idempotent-ish: skips re-adding if an identical rejection comment
+    already exists on the SO."""
+    map_row = frappe.db.get_value(
+        "EasyEcom B2B Order Map",
+        map_name,
+        ["sales_order", "company", "easyecom_account"],
+        as_dict=True,
+    )
+    if not map_row or not map_row.get("sales_order"):
+        return
+    so_name = map_row["sales_order"]
+
+    reason_line = (
+        f"Failing lines — {parsed_summary}" if parsed_summary
+        else (f"See EE error report: {error_csv_url}" if error_csv_url else error_msg)
+    )
+    comment_text = (
+        f"<b>EasyEcom rejected this order.</b> The SO was submitted and pushed, "
+        f"but EasyEcom's queue did not create the order.<br>"
+        f"Reason: {frappe.utils.escape_html(error_msg)}<br>"
+        f"{frappe.utils.escape_html(reason_line)}<br>"
+        f"<i>Fix the flagged SKU(s) in EasyEcom, then re-submit / re-push. "
+        f"See B2B Order Map {map_name} (status=Failed) for full details.</i>"
+    )
+
+    # De-dupe: don't spam the timeline if polling/retry re-enters.
+    already = frappe.db.exists(
+        "Comment",
+        {
+            "reference_doctype": "Sales Order",
+            "reference_name": so_name,
+            "comment_type": "Comment",
+            "content": ["like", "%EasyEcom rejected this order.%"],
+        },
+    )
+    if not already:
+        so_doc = frappe.get_doc("Sales Order", so_name)
+        so_doc.add_comment("Comment", text=comment_text)
+
+    # FDE-actionable Discrepancy — reuse the existing "B2B Push Failed"
+    # kind so it lands in the current B2B push-failures worklist card.
+    from ecommerce_super.easyecom.flows.grn_pull import _raise_discrepancy
+
+    _raise_discrepancy(
+        kind="B2B Push Failed",
+        reference_doctype="Sales Order",
+        reference_name=so_name,
+        company=map_row.get("company"),
+        reason=(
+            f"§11 New B2B: EasyEcom's async queue REJECTED SO {so_name} "
+            f"(Map {map_name}, account {map_row.get('easyecom_account')}). "
+            f"EE message: {error_msg}. "
+            + (f"{reason_line}. " if parsed_summary else "")
+            + "Order was not created in EasyEcom. Fix the SKU(s) in EE and re-push."
+        ),
     )
     frappe.db.commit()

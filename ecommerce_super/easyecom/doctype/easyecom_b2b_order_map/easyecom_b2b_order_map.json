@@ -75,7 +75,7 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
-   "options": "Pushed\nQueued\nInvoice Pending\nInvoice Generated\nCancelled\nDrift",
+   "options": "Pushed\nQueued\nInvoice Pending\nInvoice Generated\nCancelled\nDrift\nFailed",
    "default": "Pushed",
    "reqd": 1,
    "in_list_view": 1,
