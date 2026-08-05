@@ -67,6 +67,7 @@ from ecommerce_super.easyecom.flows._grn_sync_records import (
     write_grn_drift_sync_record,
     write_grn_pull_sync_record,
 )
+from ecommerce_super.easyecom.flows._isolation import for_each_record
 from ecommerce_super.easyecom.flows.po_push import (
     PO_STATUS_COMPLETED,
     PING_PONG_FLAG as PO_PUSH_PING_PONG_FLAG,
@@ -192,15 +193,46 @@ def pull_grns_for_location(
         sweep.pages_walked = pages
 
         data = (page or {}).get("data") or []
-        for grn_row in data:
-            outcome = process_one_grn(
-                grn_row,
-                account_name=account_name,
-                client=client,
+        # gh#252: run each GRN inside its own savepoint via the §7.1
+        # isolation primitive (the same helper every other batch flow
+        # uses), so one bad GRN — e.g. a §10 IPR that fails on GL/valuation,
+        # or a failure-recording that itself raises — can NEVER abort the
+        # whole sweep. process_one_grn is contracted to "never raise through
+        # the boundary"; this keeps the guarantee even if a helper violates
+        # it, so healthy GRNs on the same page still pull. Each GRN's
+        # GRNOutcome is captured into `page_outcomes`; an unexpected raise is
+        # rolled back and recorded OUTSIDE the savepoint by
+        # `_record_isolated_grn_failure`.
+        page_outcomes: list[GRNOutcome] = []
+
+        def _handle_grn(grn_row: dict) -> None:
+            page_outcomes.append(
+                process_one_grn(
+                    grn_row, account_name=account_name, client=client,
+                )
             )
-            sweep.outcomes.append(outcome)
-            sweep.grns_processed += 1
-            # Track high-water from grn_created_at on the row.
+
+        def _on_grn_failure(grn_row: dict, exc: BaseException) -> None:
+            page_outcomes.append(
+                _record_isolated_grn_failure(
+                    ee_grn_id=int((grn_row or {}).get("grn_id") or 0),
+                    grn_row=grn_row,
+                    exc=exc,
+                )
+            )
+
+        for_each_record(
+            data,
+            handler=_handle_grn,
+            on_failure=_on_grn_failure,
+            flow_name="grn_pull",
+        )
+        sweep.outcomes.extend(page_outcomes)
+        sweep.grns_processed += len(page_outcomes)
+        # Track high-water from grn_created_at across every row on the page
+        # (advances even for failed GRNs — the gh#234 look-back re-scans the
+        # last N days, so a failed GRN is retried on the next sweep, not lost).
+        for grn_row in data:
             row_dt = grn_row.get("grn_created_at")
             if row_dt and (max_observed_dt is None or row_dt > max_observed_dt):
                 max_observed_dt = row_dt
@@ -656,6 +688,47 @@ def grn_pull_queue_handler(qj: Any) -> None:
 # ============================================================
 # Per-GRN chain
 # ============================================================
+
+
+def _record_isolated_grn_failure(
+    *, ee_grn_id: int, grn_row: dict, exc: Exception
+) -> GRNOutcome:
+    """gh#252 safety net. A per-GRN exception was caught at the sweep
+    boundary (its savepoint already rolled back). Best-effort: record a
+    Failed GRN Map (so the row stays FDE-visible) and an Error Log, then
+    return a Failed outcome so the sweep continues. NEVER re-raises — the
+    whole point is that a single bad GRN can't abort the pull. Its own
+    write is savepoint-guarded so even a failure here can't break the page.
+    """
+    reason = f"{type(exc).__name__}: {exc}"
+    _iso_sp = f"grn_isofail_{ee_grn_id}"
+    try:
+        frappe.db.savepoint(_iso_sp)
+        _upsert_grn_map_failed(
+            ee_grn_id=ee_grn_id,
+            grn_row=grn_row,
+            inwarded_wh_c_id=int((grn_row or {}).get("inwarded_warehouse_c_id") or 0),
+            vendor_c_id=int((grn_row or {}).get("vendor_c_id") or 0),
+            reason=reason[:1000],
+        )
+    except Exception:
+        try:
+            frappe.db.rollback(save_point=_iso_sp)
+        except Exception:
+            pass
+    try:
+        frappe.log_error(
+            title=f"GRN {ee_grn_id} isolated per-GRN failure (gh#252)",
+            message=reason,
+        )
+    except Exception:
+        pass
+    return GRNOutcome(
+        ee_grn_id=int(ee_grn_id or 0),
+        operation="failed",
+        grn_map_status="Failed",
+        flag_reasons=[reason],
+    )
 
 
 def process_one_grn(
