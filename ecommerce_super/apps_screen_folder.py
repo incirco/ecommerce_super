@@ -33,17 +33,24 @@ from __future__ import annotations
 
 import frappe
 
+from ecommerce_super.api.recon_launch import RECON_APP_NAME
+
 
 PARENT_FOLDER_LABEL = "eCommerce Super"
 CHILD_LABELS = ("EasyEcom", "Recon")
 RECON_WORKSPACE = "Recon"
 RECON_LAUNCH_PAGE = "recon-launch"
 
+# Matches the recon app's Workspace `name` (ecommerce_super_recon
+# ships it as "eCommerce Super Recon"). Resolves to /app/ecommerce-super-recon.
+RECON_WORKSPACE_NAME = "eCommerce Super Recon"
+
 
 def setup_apps_screen_folder() -> None:
     """Idempotent setup — safe to run on every after_migrate."""
     _ensure_parent_folder_icon()
     _ensure_recon_sidebar_has_link()
+    _drop_auto_recon_workspace_sidebar()
     _relink_children_to_parent()
     _clear_desktop_icon_caches()
 
@@ -67,15 +74,32 @@ def _ensure_parent_folder_icon() -> None:
     icon.insert(ignore_permissions=True)
 
 
+def _pick_recon_sidebar_target() -> tuple[str, str]:
+    """Return (link_type, link_to) for the Recon sidebar item.
+
+    Installed     → route direct to the recon workspace, skipping the
+                    dispatcher (avoids the two-hop flash + back-button
+                    loop from #246 follow-up).
+    Not-installed → point at the dispatcher Page, which renders the
+                    upsell.
+    """
+    installed = RECON_APP_NAME in (frappe.get_installed_apps() or [])
+    if installed:
+        return "Workspace", RECON_WORKSPACE_NAME
+    return "Page", RECON_LAUNCH_PAGE
+
+
 def _ensure_recon_sidebar_has_link() -> None:
     """Recon's Workspace Sidebar record must carry at least one Link
     item (that isn't a Section Break) for the Desktop Icon permission
     check to admit it into the folder modal.
 
     Creates the Workspace Sidebar record if missing (bench migrate
-    doesn't auto-create it for workspaces installed via JSON) and
-    appends the Marketplace Reconciliation Link if the sidebar has
-    zero real items.
+    doesn't auto-create it for workspaces installed via JSON), then
+    ensures the single real Link item points at the right target for
+    the current install state — direct workspace if the recon app is
+    installed, dispatcher Page otherwise. Flipping install state
+    across a migrate cycle rewrites the item accordingly.
     """
     if not frappe.db.exists("Workspace Sidebar", RECON_WORKSPACE):
         sb = frappe.new_doc("Workspace Sidebar")
@@ -87,16 +111,50 @@ def _ensure_recon_sidebar_has_link() -> None:
         it for it in (sb.items or [])
         if (it.type or "") != "Section Break"
     ]
-    if real_items:
-        return  # already has a real item — nothing to do
 
-    sb.append("items", {
-        "label": "Marketplace Reconciliation",
-        "link_to": RECON_LAUNCH_PAGE,
-        "link_type": "Page",
-        "type": "Link",
-    })
-    sb.save(ignore_permissions=True)
+    desired_type, desired_to = _pick_recon_sidebar_target()
+
+    if not real_items:
+        sb.append("items", {
+            "label": "Marketplace Reconciliation",
+            "link_to": desired_to,
+            "link_type": desired_type,
+            "type": "Link",
+        })
+        sb.save(ignore_permissions=True)
+        return
+
+    item = real_items[0]
+    if item.link_type != desired_type or item.link_to != desired_to:
+        item.link_type = desired_type
+        item.link_to = desired_to
+        sb.save(ignore_permissions=True)
+
+
+def _drop_auto_recon_workspace_sidebar() -> None:
+    """When the recon app is installed, Frappe's
+    `create_workspace_sidebar_for_workspaces` auto-generates a
+    Workspace Sidebar named "eCommerce Super Recon" (a duplicate of
+    the workspace, with a single Home link back to itself). That
+    duplicate is what refresh on /app/ecommerce-super-recon picks up,
+    producing a different sidebar than the one shown when the user
+    clicked in via our Recon sidebar (verified live 2026-07-31).
+
+    We want only the "Recon" Workspace Sidebar to exist post-install
+    so both click and refresh land on the same sidebar. Frappe's
+    `set_sidebar_for_page` fallback (get_workspace_sidebars) then
+    finds our Recon sidebar via its item's link_to and renders it.
+    """
+    if RECON_APP_NAME not in (frappe.get_installed_apps() or []):
+        return  # not installed → no auto-sidebar to drop
+    if not frappe.db.exists("Workspace Sidebar", RECON_WORKSPACE_NAME):
+        return  # already gone → idempotent no-op
+    frappe.delete_doc(
+        "Workspace Sidebar",
+        RECON_WORKSPACE_NAME,
+        ignore_permissions=True,
+        force=True,
+    )
 
 
 def _relink_children_to_parent() -> None:
