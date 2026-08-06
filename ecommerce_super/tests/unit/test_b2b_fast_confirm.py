@@ -3,7 +3,7 @@
 Verifies the four shapes:
   - Queue finishes on first poll → backfill IDs immediately
   - Queue finishes on later poll (NEW → Finished)
-  - Queue errors out → Map → Drift, error CSV URL captured
+  - Queue errors out → Map → Failed, error CSV parsed + SO surfaced (gh#254)
   - Queue still NEW after MAX_ATTEMPTS → timeout, fall through
 
 Mocks getQueueStatus + getOrderDetails responses (we don't hit
@@ -19,6 +19,8 @@ from unittest.mock import MagicMock, patch
 from ecommerce_super.easyecom.flows.b2b_sales.fast_confirm import (
     MAX_ATTEMPTS,
     POLL_INTERVAL_SEC,
+    _parse_ee_error_csv,
+    _surface_rejection_on_so,
     fast_confirm_new_b2b,
 )
 
@@ -136,10 +138,12 @@ class TestFastConfirmNewB2B(unittest.TestCase):
         self.assertEqual(result["terminal_status_id"], "3")
         self.assertEqual(result["attempts"], 2)
 
-    def test_queue_errors_marks_map_drift_with_error_csv(self) -> None:
-        """status_id=4 → Map status flips to Drift, error CSV URL
-        captured on last_error so FDE can download EE's rejection
-        report."""
+    def test_queue_errors_marks_map_failed_with_error_csv(self) -> None:
+        """gh#254: status_id=4 → Map status flips to **Failed** (not the old
+        ambiguous "Drift"), the error CSV URL is captured on last_error, and
+        the SO-facing surfacing helper is invoked. The CSV parse + surfacing
+        are patched here (their behaviour is covered in dedicated tests);
+        this locks the single deterministic Map write."""
         fake_client = MagicMock()
         fake_client.get.return_value = _queue_response(
             4, "Error", result_url="https://ee.example.com/error_report.csv",
@@ -151,6 +155,8 @@ class TestFastConfirmNewB2B(unittest.TestCase):
             patch("frappe.get_doc", return_value=fake_map),
             patch("frappe.db.set_value") as set_value,
             patch("frappe.db.commit"),
+            patch("ecommerce_super.easyecom.flows.b2b_sales.fast_confirm._parse_ee_error_csv", return_value=None),
+            patch("ecommerce_super.easyecom.flows.b2b_sales.fast_confirm._surface_rejection_on_so") as surface,
         ):
             result = fast_confirm_new_b2b(
                 map_name="ECS-B2B-SO-003",
@@ -161,13 +167,14 @@ class TestFastConfirmNewB2B(unittest.TestCase):
         self.assertEqual(result["terminal_status_id"], "4")
         self.assertEqual(result["error_csv_url"], "https://ee.example.com/error_report.csv")
         self.assertIsNone(result["backfilled"])
-        # set_value called with status=Drift + last_error containing CSV URL
+        # The single deterministic Map write: status=Failed + last_error w/ CSV.
         set_value.assert_called_once()
         update_args = set_value.call_args.args
         # Frappe's set_value signature: doctype, name, fieldname_or_dict, value
-        # When fieldname is a dict, value is unused
-        self.assertEqual(update_args[2]["status"], "Drift")
+        self.assertEqual(update_args[2]["status"], "Failed")
         self.assertIn("error_report.csv", update_args[2]["last_error"])
+        # The SO-facing surfacing (comment + Discrepancy) was invoked.
+        surface.assert_called_once()
 
     def test_queue_still_processing_after_max_attempts_times_out(self) -> None:
         """Worst case: queue still NEW after 30s ceiling. Return with
@@ -253,6 +260,112 @@ class TestFastConfirmNewB2B(unittest.TestCase):
         self.assertFalse(result["timed_out"])
         self.assertIsNone(result["terminal_status_id"])
         self.assertIsNone(result["backfilled"])
+
+
+class TestParseEeErrorCsv(unittest.TestCase):
+    """gh#254 — best-effort parse of EE's error-report CSV into a
+    human-readable "reason: sku, sku" summary. Never raises."""
+
+    _CSV = (
+        "OrderItemId,Sku,Quantity,Price,Message\n"
+        "SO-2610684-line-30,FG05015-102-2XL,1,619.5,Tax Rate Not Set\n"
+        "SO-2610684-line-46,FG05015-108-XL,1,619.5,Tax Rate Not Set\n"
+    )
+
+    def test_groups_skus_by_reason(self) -> None:
+        resp = MagicMock()
+        resp.text = self._CSV
+        resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=resp):
+            summary = _parse_ee_error_csv("https://ee.example.com/err.csv")
+        self.assertEqual(
+            summary, "Tax Rate Not Set: FG05015-102-2XL, FG05015-108-XL"
+        )
+
+    def test_network_error_returns_none(self) -> None:
+        with patch("requests.get", side_effect=RuntimeError("boom")):
+            self.assertIsNone(_parse_ee_error_csv("https://ee.example.com/err.csv"))
+
+    def test_empty_csv_returns_none(self) -> None:
+        resp = MagicMock()
+        resp.text = "OrderItemId,Sku,Quantity,Price,Message\n"
+        resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=resp):
+            self.assertIsNone(_parse_ee_error_csv("https://ee.example.com/err.csv"))
+
+    def test_caps_long_sku_list(self) -> None:
+        rows = "".join(
+            f"L{i},SKU-{i},1,10,Tax Rate Not Set\n" for i in range(25)
+        )
+        resp = MagicMock()
+        resp.text = "OrderItemId,Sku,Quantity,Price,Message\n" + rows
+        resp.raise_for_status = MagicMock()
+        with patch("requests.get", return_value=resp):
+            summary = _parse_ee_error_csv("https://ee.example.com/err.csv")
+        self.assertIn("(+5 more)", summary)
+
+
+class TestSurfaceRejectionOnSo(unittest.TestCase):
+    """gh#254 — a rejection must be visible where the user looks: a Sales
+    Order timeline comment + a 'B2B Push Failed' Discrepancy."""
+
+    def _run(self, *, already_commented=False):
+        map_row = {
+            "sales_order": "SO-2610684",
+            "company": "Modern Marwar Private Limited",
+            "easyecom_account": "Modern Marwar",
+        }
+        so_doc = MagicMock()
+        with (
+            patch("frappe.db.get_value", return_value=map_row),
+            patch(
+                "frappe.db.exists",
+                return_value=("Comment-1" if already_commented else None),
+            ),
+            patch("frappe.get_doc", return_value=so_doc),
+            patch("frappe.db.commit"),
+            patch(
+                "ecommerce_super.easyecom.flows.grn_pull._raise_discrepancy"
+            ) as raise_disc,
+        ):
+            _surface_rejection_on_so(
+                map_name="ECS-B2B-SO-2610684",
+                error_msg="Error",
+                parsed_summary="Tax Rate Not Set: FG05015-102-2XL, FG05015-108-XL",
+                error_csv_url="https://ee.example.com/err.csv",
+            )
+        return so_doc, raise_disc
+
+    def test_adds_so_comment_and_raises_discrepancy(self) -> None:
+        so_doc, raise_disc = self._run(already_commented=False)
+        so_doc.add_comment.assert_called_once()
+        # The comment carries the failing SKUs.
+        comment_text = so_doc.add_comment.call_args.kwargs.get("text") or (
+            so_doc.add_comment.call_args.args[1]
+            if len(so_doc.add_comment.call_args.args) > 1 else ""
+        )
+        self.assertIn("EasyEcom rejected this order", comment_text)
+        self.assertIn("FG05015-102-2XL", comment_text)
+        raise_disc.assert_called_once()
+        self.assertEqual(raise_disc.call_args.kwargs["kind"], "B2B Push Failed")
+        self.assertEqual(
+            raise_disc.call_args.kwargs["reference_name"], "SO-2610684"
+        )
+
+    def test_dedupes_so_comment_when_already_present(self) -> None:
+        so_doc, _ = self._run(already_commented=True)
+        so_doc.add_comment.assert_not_called()
+
+    def test_no_sales_order_is_a_noop(self) -> None:
+        with (
+            patch("frappe.db.get_value", return_value={"sales_order": None}),
+            patch("frappe.get_doc") as get_doc,
+        ):
+            _surface_rejection_on_so(
+                map_name="ECS-B2B-SO-X", error_msg="Error",
+                parsed_summary=None, error_csv_url=None,
+            )
+        get_doc.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -19,6 +19,16 @@ Status lifecycle:
                        polling + by /einvoice/update in Mode 1.
   Cancelled          — explicit cancel (ERPNext-initiated or
                        EE-initiated via inbound webhook).
+  Failed             — EE's async queue REJECTED the order (New B2B;
+                       getQueueStatus status_id=4). Terminal: never
+                       re-polled. The rejection reason (+ failing SKUs
+                       parsed from EE's error CSV) is on `last_error`,
+                       mirrored to the Sales Order timeline, and raised
+                       as a "B2B Push Failed" Integration Discrepancy.
+                       Set by fast_confirm._mark_map_failed (gh#254).
+  Drift              — legacy value formerly written on queue rejection
+                       (pre-gh#254); retained for backward-compatibility
+                       with existing rows. New rejections use `Failed`.
 """
 
 from __future__ import annotations
@@ -35,6 +45,13 @@ VALID_STATUS_VALUES: frozenset[str] = frozenset(
         "Invoice Pending",
         "Invoice Generated",
         "Cancelled",
+        # gh#254: "Failed" (EE queue rejected the order) is a first-class
+        # terminal status. "Drift" was already a live DocType option +
+        # written by the pre-gh#254 rejection path, but was missing here —
+        # so a UI save of such a row would wrongly fail validation. Both
+        # are now allowed to keep this set in sync with the Select options.
+        "Drift",
+        "Failed",
     }
 )
 
@@ -182,6 +199,17 @@ def get_lifecycle(map_name: str) -> list[dict]:
         id_bits.append(f"ee_suborder_id={map_doc.ee_suborder_id}")
     if has_invoice_id:
         id_bits.append(f"ee_invoice_id={map_doc.ee_invoice_id}")
+    # gh#254: a rejected (Failed) order never gets IDs — show the
+    # rejection plainly instead of the misleading "backfill via polling".
+    if map_doc.status == "Failed" and not (has_order_id or has_invoice_id):
+        ee_accepted_detail = (
+            "Rejected by EasyEcom — the order was not created. See "
+            "'Last Error' below and the Sales Order timeline for the reason."
+        )
+    elif id_bits:
+        ee_accepted_detail = ", ".join(id_bits)
+    else:
+        ee_accepted_detail = "Not yet — New B2B queued orders backfill via polling"
     stages.append({
         "stage": "EE Accepted (IDs assigned)",
         "ok": has_order_id or has_invoice_id,
@@ -190,10 +218,7 @@ def get_lifecycle(map_name: str) -> list[dict]:
         ),
         "link_doctype": None,
         "link_name": None,
-        "detail": (
-            ", ".join(id_bits) if id_bits
-            else "Not yet — New B2B queued orders backfill via polling"
-        ),
+        "detail": ee_accepted_detail,
     })
 
     # --- Stage 4: SI Mirrored ---

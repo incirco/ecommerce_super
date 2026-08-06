@@ -427,8 +427,9 @@ def _handle_new_b2b_response(
     # within 30s (typical: 2-5s), the Map row gets backfilled with
     # OrderID/SuborderID/InvoiceID immediately. If queue exceeds
     # 30s, we fall through silently and the */5 polling cron
-    # (+ PR #101 backfill) catches up later. No error path —
-    # fast-confirm is purely additive.
+    # (+ PR #101 backfill) catches up later. On a queue rejection
+    # (status_id=4) fast_confirm marks the Map → Failed and surfaces
+    # the reason (gh#254); we reflect that in the return below.
     fast_confirm_result = None
     if queue_id:
         from ecommerce_super.easyecom.flows.b2b_sales.fast_confirm import (
@@ -461,6 +462,21 @@ def _handle_new_b2b_response(
             "ee_order_id": backfilled.get("ee_order_id"),
             "ee_suborder_id": backfilled.get("ee_suborder_id"),
             "ee_invoice_id": backfilled.get("ee_invoice_id"),
+            "ee_queue_id": queue_id,
+            "fast_confirm": fast_confirm_result,
+        }
+
+    # gh#254: EE queue rejected the order — fast_confirm already marked the
+    # Map "Failed" + surfaced the reason. Reflect it in the diagnostic
+    # outcome so trace_b2b_so / callers don't report a bare "Queued".
+    if fast_confirm_result and fast_confirm_result.get("terminal_status_id") == "4":
+        return {
+            "operation": "rejected",
+            "status": "Failed",
+            "map_name": map_doc.name,
+            "ee_order_id": None,
+            "ee_suborder_id": None,
+            "ee_invoice_id": None,
             "ee_queue_id": queue_id,
             "fast_confirm": fast_confirm_result,
         }
