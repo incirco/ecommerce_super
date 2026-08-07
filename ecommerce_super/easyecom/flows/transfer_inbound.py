@@ -363,32 +363,50 @@ def process_inbound_grn(
         # ERPNext's is_internal_supplier validate requires each PR line
         # to reference the source-side DN line via `delivery_note` +
         # `dn_detail`. Resolve the matching DN line per item_code.
-        dn_lines_by_item: dict[str, str] = {}
+        # Also carry `incoming_rate` (the true transit cost) so we can
+        # overwrite the tax-inclusive rate that _append_pr_line set
+        # from EE's `grn_detail_price` — see gh#256.
+        dn_lines_by_item: dict[str, dict] = {}
         for ln in frappe.db.sql(
-            """SELECT name, item_code FROM `tabDelivery Note Item`
-               WHERE parent = %s""",
+            """SELECT name, item_code, incoming_rate
+               FROM `tabDelivery Note Item` WHERE parent = %s""",
             (tm.delivery_note,),
             as_dict=True,
         ):
             # First match wins for multi-line same-SKU DNs — Stage 4
             # can refine this with explicit grn_detail_id → dn_detail
             # pairing if real Harmony shows the multi-line case.
-            dn_lines_by_item.setdefault(
-                ln["item_code"], ln["name"]
-            )
+            dn_lines_by_item.setdefault(ln["item_code"], ln)
         for pr_line in pr_doc.items:
-            dn_detail = dn_lines_by_item.get(pr_line.item_code)
-            if dn_detail:
+            dn_line = dn_lines_by_item.get(pr_line.item_code)
+            if dn_line:
                 pr_line.delivery_note = tm.delivery_note
-                pr_line.delivery_note_item = dn_detail
+                pr_line.delivery_note_item = dn_line["name"]
+                # gh#256 §10 valuation fix. _append_pr_line reused §9's
+                # rate = grn_detail_price / qty, which is the tax-inclusive
+                # unit price transfer_push grosses up before sending to EE.
+                # For a §10 internal transfer stock MUST carry the source-
+                # side cost through unchanged — GST must not bake into
+                # destination valuation. Overwrite with the source DN
+                # line's incoming_rate (system-computed transit cost from
+                # the stock ledger, tax-exclusive by construction).
+                transit_rate = flt(dn_line.get("incoming_rate"))
+                if transit_rate:
+                    pr_line.rate = transit_rate
             # ERPNext internal-transfer line invariant: from_warehouse
             # is the GIT (the line WAS in GIT after DN-submit; IPR
             # pulls FROM it to the destination warehouse).
             pr_line.from_warehouse = git_warehouse
-            # §10 IPR: stock was already valued at the source-side DN
-            # submit; this IPR is a transfer, not a fresh purchase, so
-            # zero-valuation is acceptable at the line level. ERPNext
-            # would otherwise refuse submit on a zero-rate line.
+            # Belt-and-braces on `valuation_rate` (ERPNext's stock-
+            # ledger-derived rate, separate from the line `rate` set
+            # above). For edge cases where the GIT has no ledger
+            # history (e.g. first-ever transfer of a new SKU, or a
+            # test scenario without real stock parked in the source
+            # warehouse), ERPNext would otherwise refuse submit with
+            # "Valuation Rate is required". The transit cost we set
+            # on `rate` (via incoming_rate — gh#256) is the correct
+            # cost basis; permit ERPNext to accept it as valuation
+            # too in the zero-ledger case.
             pr_line.allow_zero_valuation_rate = 1
     except _RejectedWarehouseMissingError as exc:
         _upsert_grn_map_for_transfer(

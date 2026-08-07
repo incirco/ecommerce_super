@@ -644,6 +644,80 @@ class TestSameGstinIprAutoSubmit(FrappeTestCase):
         ]
         self.assertIn(pr.name, pr_links)
 
+    def test_gh256_ipr_rate_uses_transit_cost_not_tax_inclusive_grn_price(self) -> None:
+        """gh#256 §10 valuation fix. transfer_push grosses the DN rate up
+        by GST before sending to EE (tax-inclusive `unitPrice`); EE echoes
+        it back as `grn_detail_price`; the §9 _append_pr_line divides that
+        by qty to derive rate. That's correct for a real §9 purchase but
+        for a §10 internal transfer it bakes GST into destination stock
+        valuation. Post-fix: the IPR line rate must equal the source DN
+        line's `incoming_rate` (the tax-exclusive transit cost), never
+        the tax-inclusive rate implied by grn_detail_price."""
+        # Belt-and-braces on the Item Map state — the shared
+        # _ensure_item_map helper (setUpClass) short-circuits on any
+        # pre-existing row and doesn't refresh status / ee_product_id,
+        # so re-runs after an aborted test can leave the map in a state
+        # that fails the §10 pre-submit DN guard. Force a clean state
+        # so the DN insert below passes.
+        frappe.db.set_value(
+            "EasyEcom Item Map",
+            {"erpnext_name": self.item},
+            {"status": "Mapped", "ee_product_id": "999002"},
+            update_modified=False,
+        )
+        frappe.db.commit()
+
+        dn_name = self._make_minimal_dn()
+        # Force a non-zero incoming_rate on the DN line — the test infra
+        # allow_negative_stock=1 shortcuts real stock parking, so the
+        # ledger-derived incoming_rate would otherwise be 0 and the fix's
+        # `if transit_rate:` guard would skip the overwrite.
+        frappe.db.set_value(
+            "Delivery Note Item",
+            {"parent": dn_name, "item_code": self.item},
+            "incoming_rate",
+            100,
+            update_modified=False,
+        )
+        frappe.db.commit()
+        tm_name = _make_transfer_map(
+            dn_name=dn_name,
+            source_wh=self.src_wh,
+            target_wh=self.tgt_wh,
+            sales_invoice=None,
+            gstin_different=0,
+            status="EE-Pushed",
+        )
+        from ecommerce_super.easyecom.flows.grn_pull import process_one_grn
+
+        c_id = self.ee_company_id
+        # Tax-inclusive line total EE echoes back: 100 × 1.05 × qty 5 = 525.
+        # If the fix is missing, PR line.rate = 525 / 5 = 105 (GST baked in).
+        # With the fix, PR line.rate = incoming_rate = 100 (transit cost).
+        outcome = process_one_grn(
+            _make_grn_payload(
+                grn_id=500002,
+                inwarded_warehouse_c_id=c_id,
+                vendor_c_id=c_id + 1,
+                po_ref_num=dn_name,
+                sku=f"{_PREFIX}SKU-SAME",
+                received_qty=5,
+                grn_detail_price=525,
+            )
+        )
+        self.assertEqual(outcome.operation, "receipted")
+        pr = frappe.get_doc("Purchase Receipt", outcome.purchase_receipt)
+        self.assertEqual(len(pr.items), 1)
+        self.assertEqual(
+            flt(pr.items[0].rate),
+            100.0,
+            "IPR line rate must equal source DN incoming_rate (transit "
+            "cost, tax-exclusive), not the tax-inclusive grn_detail_price "
+            "unit — that's the gh#256 GST-into-valuation defect.",
+        )
+        # Sanity: the Transfer Map link is still established.
+        self.assertEqual(pr.ecs_section10_transfer_map, tm_name)
+
     def _make_minimal_dn(self) -> str:
         """Insert a Submitted DN with Internal Customer + target_warehouse."""
         price_list = frappe.db.get_value(
