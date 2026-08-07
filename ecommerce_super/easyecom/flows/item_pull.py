@@ -645,6 +645,36 @@ def mark_mapped_override(
 
 
 @frappe.whitelist()
+def re_evaluate_from_ee_by_item(item_code: str) -> dict[str, Any]:
+    """gh#245 — whitelisted wrapper so the ERPNext Item form's
+    "Re-evaluate from EasyEcom" button can trigger the pull-side
+    re-evaluation directly, without the FDE first navigating to the
+    Item Map row.
+
+    Resolves the Item's EasyEcom Item Map (erpnext_doctype='Item')
+    and delegates to `re_evaluate_one_product`. Same permission model
+    and same return shape — the JS handler is symmetrical to the
+    Item Map form's Re-evaluate button.
+    """
+    if not item_code:
+        return {"ok": False, "message": "item_code required"}
+    map_name = frappe.db.get_value(
+        "EasyEcom Item Map",
+        {"erpnext_doctype": "Item", "erpnext_name": item_code},
+        "name",
+    )
+    if not map_name:
+        return {
+            "ok": False,
+            "message": (
+                f"No EasyEcom Item Map for Item {item_code!r} — "
+                f"push the Item to EasyEcom first."
+            ),
+        }
+    return re_evaluate_one_product(map_name)
+
+
+@frappe.whitelist()
 def re_evaluate_one_product(item_map_name: str) -> dict[str, Any]:
     """Re-pull a single Item from EE and re-run the flag-evaluation
     on it. Lets the FDE refresh ONE row without triggering the

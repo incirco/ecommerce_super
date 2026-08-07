@@ -841,6 +841,8 @@ def _do_update_bundle(
     _save_push_snapshot(
         item_code=wrapper_item.item_code, payload=full_payload,
     )
+    # gh#245: auto-clear Created-Flagged on the bundle map row too.
+    _maybe_enqueue_reevaluate_if_flagged(existing_map)
     return PushOutcome(
         item_code=wrapper_item.item_code,
         pushed=True,
@@ -1757,6 +1759,12 @@ def _do_update(
     # diff needs the complete known-EE state, not just the last delta.
     _save_push_snapshot(item_code=item.item_code, payload=full_payload)
 
+    # gh#245: if the map row is currently Created-Flagged, enqueue a
+    # re-evaluate so the flag clears without waiting for the nightly
+    # Discover Products pull. Guard on current status so a bulk push
+    # of already-Mapped items doesn't tsunami the queue.
+    _maybe_enqueue_reevaluate_if_flagged(existing_map)
+
     return PushOutcome(
         item_code=item.item_code,
         pushed=True,
@@ -1764,6 +1772,36 @@ def _do_update(
         ee_product_id=ee_product_id,
         ee_payload=sparse_payload,
     )
+
+
+def _maybe_enqueue_reevaluate_if_flagged(
+    existing_map: dict | None,
+) -> None:
+    """gh#245 helper. On a successful update-push, if the target
+    map row is Created-Flagged, enqueue re_evaluate_one_product so
+    the flag clears async — without waiting for the nightly pull.
+    No-op on Mapped rows (nothing to clear) and on the create path
+    (which sets Mapped directly). Never raises."""
+    if not (existing_map and existing_map.get("name")):
+        return
+    try:
+        current_status = frappe.db.get_value(
+            "EasyEcom Item Map", existing_map["name"], "status"
+        )
+        if current_status != "Created-Flagged":
+            return
+        frappe.enqueue(
+            "ecommerce_super.easyecom.flows.item_pull.re_evaluate_one_product",
+            queue="long",
+            job_name=f"gh245-reevaluate-{existing_map['name']}",
+            enqueue_after_commit=True,
+            item_map_name=existing_map["name"],
+        )
+    except Exception:
+        frappe.log_error(
+            title="gh#245: could not enqueue re-evaluate after push",
+            message=frappe.get_traceback(),
+        )
 
 
 def _resolve_update_write_id(
