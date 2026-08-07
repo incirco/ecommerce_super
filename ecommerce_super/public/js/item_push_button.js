@@ -36,6 +36,16 @@ frappe.ui.form.on("Item", {
             () => _pushItemLifecycleToEasyEcom(frm),
             __("EasyEcom")
         );
+        // gh#245: expose the pull-side Re-evaluate here so the FDE can
+        // trigger it right after fixing the Item, without having to
+        // navigate to the EasyEcom Item Map form. The push already
+        // enqueues a re-evaluate on success for Created-Flagged rows;
+        // this button covers the impatient / diagnostic case.
+        frm.add_custom_button(
+            __("Re-evaluate from EasyEcom"),
+            () => _reevaluateItemFromEasyEcom(frm),
+            __("EasyEcom")
+        );
         // gh#37: diagnostic for "I updated this Item but EE didn't see
         // it" — walks every gate (auto-push toggle, master mode,
         // has_variants, disabled) AND surfaces the existing Map row,
@@ -234,6 +244,57 @@ function _pushItemToEasyEcom(frm) {
             });
         }
     );
+}
+
+function _reevaluateItemFromEasyEcom(frm) {
+    frappe.show_alert({
+        message: __("Walking GetProductMaster for {0}…", [frm.doc.item_code]),
+        indicator: "blue",
+    });
+    frappe.call({
+        method: "ecommerce_super.easyecom.flows.item_pull.re_evaluate_from_ee_by_item",
+        args: {item_code: frm.doc.item_code},
+        freeze: true,
+        freeze_message: __("Re-evaluating {0} from EE…", [frm.doc.item_code]),
+        callback(r) {
+            const result = r.message || {};
+            if (!result.ok) {
+                frappe.msgprint({
+                    title: __("Re-evaluate Failed"),
+                    message: result.message || __("Unknown error."),
+                    indicator: "red",
+                });
+                return;
+            }
+            const lines = [__("Status: <b>{0}</b>", [result.status])];
+            if ((result.flag_reasons || []).length) {
+                lines.push(
+                    "<br><br><b>Flags still set:</b><br>" +
+                        result.flag_reasons
+                            .map((s) => frappe.utils.escape_html(s))
+                            .join("<br>")
+                );
+            } else if (result.status === "Mapped") {
+                lines.push(
+                    "<br><br><i>All flags cleared — this Item is now Mapped in EasyEcom.</i>"
+                );
+            }
+            frappe.msgprint({
+                title: __("Re-evaluate Result"),
+                message: lines.join(""),
+                indicator: result.status === "Mapped" ? "green" : "orange",
+            });
+        },
+        error() {
+            frappe.msgprint({
+                title: __("Re-evaluate Failed"),
+                message: __(
+                    "The re-evaluate call itself failed (network or permission)."
+                ),
+                indicator: "red",
+            });
+        },
+    });
 }
 
 function _pushItemLifecycleToEasyEcom(frm) {
