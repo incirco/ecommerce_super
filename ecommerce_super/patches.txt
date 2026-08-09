@@ -173,3 +173,8 @@ ecommerce_super.patches.v0_1.add_ecs_correlation_id_to_b2b_order_map
 # EasyEcom Account — pauses outbound polling per-account when
 # inbound is 5xxing (defends EE + our own recovery).
 ecommerce_super.patches.v0_1.add_gsp_circuit_breaker_fields
+
+# UAT backfill (2026-08-09): structured buyer + shipping address
+# fields on Sales Invoice so §12 B2C SIs (created against pool
+# customers) can hold + filter by the actual buyer address.
+ecommerce_super.patches.v0_1.add_ecs_ee_buyer_address_si_fields
