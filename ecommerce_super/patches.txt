@@ -178,3 +178,8 @@ ecommerce_super.patches.v0_1.add_gsp_circuit_breaker_fields
 # fields on Sales Invoice so §12 B2C SIs (created against pool
 # customers) can hold + filter by the actual buyer address.
 ecommerce_super.patches.v0_1.add_ecs_ee_buyer_address_si_fields
+
+# 2026-08-10: move ecs_ee_billing_* / ecs_ee_shipping_* SI
+# Custom Fields into a Table child (EasyEcom Address) so their
+# columns no longer inflate the already-heavy tabSales Invoice row.
+ecommerce_super.patches.v0_1.move_ecs_ee_address_fields_to_child_table

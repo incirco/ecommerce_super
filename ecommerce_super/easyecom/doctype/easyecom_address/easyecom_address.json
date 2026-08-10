@@ -1,0 +1,131 @@
+{
+ "actions": [],
+ "creation": "2026-08-10 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "buyer_section",
+  "billing_name",
+  "billing_address_1",
+  "billing_address_2",
+  "billing_city",
+  "billing_state",
+  "billing_pincode",
+  "billing_country",
+  "shipping_col_break",
+  "shipping_address_1",
+  "shipping_address_2",
+  "shipping_city",
+  "shipping_state",
+  "shipping_pincode",
+  "shipping_country"
+ ],
+ "fields": [
+  {
+   "fieldname": "buyer_section",
+   "fieldtype": "Section Break",
+   "label": "Billing"
+  },
+  {
+   "fieldname": "billing_name",
+   "fieldtype": "Data",
+   "label": "Billing Name",
+   "in_list_view": 0,
+   "description": "Buyer's name as supplied by EE (billing_name). May be empty on marketplaces that suppress buyer PII (e.g., Amazon Easyship)."
+  },
+  {
+   "fieldname": "billing_address_1",
+   "fieldtype": "Data",
+   "label": "Billing Address 1"
+  },
+  {
+   "fieldname": "billing_address_2",
+   "fieldtype": "Data",
+   "label": "Billing Address 2"
+  },
+  {
+   "fieldname": "billing_city",
+   "fieldtype": "Data",
+   "label": "Billing City",
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "billing_state",
+   "fieldtype": "Data",
+   "label": "Billing State",
+   "in_list_view": 1,
+   "search_index": 1,
+   "description": "Buyer's state — the canonical Place-of-Supply spelling written by invoice_builder._canonical_state_name."
+  },
+  {
+   "fieldname": "billing_pincode",
+   "fieldtype": "Data",
+   "label": "Billing Pincode",
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "billing_country",
+   "fieldtype": "Data",
+   "label": "Billing Country",
+   "default": "India"
+  },
+  {
+   "fieldname": "shipping_col_break",
+   "fieldtype": "Column Break",
+   "label": "Shipping"
+  },
+  {
+   "fieldname": "shipping_address_1",
+   "fieldtype": "Data",
+   "label": "Shipping Address 1",
+   "description": "Shipping address as supplied by EE (address_line_1). Usually matches billing for online orders; may differ for gift orders or corporate B2B ship-to."
+  },
+  {
+   "fieldname": "shipping_address_2",
+   "fieldtype": "Data",
+   "label": "Shipping Address 2"
+  },
+  {
+   "fieldname": "shipping_city",
+   "fieldtype": "Data",
+   "label": "Shipping City",
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "shipping_state",
+   "fieldtype": "Data",
+   "label": "Shipping State",
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "shipping_pincode",
+   "fieldtype": "Data",
+   "label": "Shipping Pincode",
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "shipping_country",
+   "fieldtype": "Data",
+   "label": "Shipping Country",
+   "default": "India"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-10 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Address",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}
