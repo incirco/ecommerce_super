@@ -285,11 +285,35 @@ def build_si_from_ee_order(
         ] if x
     )
     ee_invoice_date_raw = order_row.get("invoice_date") or ""
+    canonical_billing_state = _canonical_state_name(
+        order_row.get("billing_state") or ""
+    )
+    buyer_gst_raw = (order_row.get("buyer_gst") or "").strip()
+    gst_category = _derive_gst_category(buyer_gst_raw)
+    place_of_supply = _derive_place_of_supply(order_row)
     si_dict.update({
         # Accounting Dimension: Channel = Marketplace. Required for
         # channel-wise GL / P&L reports (Puresta has this dimension
         # defined; SIs without it don't show up in the channel slice).
         "channel": marketplace_account.marketplace,
+
+        # India Compliance — Place of Supply + GST category.
+        # gst_category defaults to "Unregistered" (URP) when EE returns
+        # blank / NA / URP for buyer_gst — that's the correct GST
+        # treatment for sales to non-GSTIN buyers (still reported to
+        # GSTN under the B2C schedule, not blocked). Real 15-char
+        # GSTINs land as "Registered Regular" and populate
+        # billing_address_gstin so IC can render the buyer's GSTIN
+        # on the invoice PDF.
+        "gst_category": gst_category,
+        "billing_address_gstin": (
+            buyer_gst_raw if gst_category == "Registered Regular" else ""
+        ),
+        # `place_of_supply` value is "NN-CanonicalStateName" — passes
+        # IC's Autocomplete validation and drives the CGST+SGST vs IGST
+        # split. None when EE omits billing_state; IC then derives
+        # from the customer's default address (pool customer has one).
+        "place_of_supply": place_of_supply,
 
         # Puresta custom app — "Market Place Customer Details" section
         # (empty on SI form before this fix because we never wrote to it).
@@ -297,10 +321,13 @@ def build_si_from_ee_order(
         "market_place_customer_billing_address_display": billing_display,
         "market_place_customer_shipping_address_display": shipping_display,
 
-        # Puresta custom app — "EasyEcom Details" section
-        "custom_ee_state": order_row.get("billing_state") or "",
+        # Puresta custom app — "EasyEcom Details" section.
+        # Both custom_ee_state and ee_state get the canonical name so
+        # list-view filters group correctly (variant spellings would
+        # split "Gujarat" and "gujarat" into two rows).
+        "custom_ee_state": canonical_billing_state,
         "custom_ee_selling_price": (str(ee_grand_total) if ee_grand_total else ""),
-        "ee_state": order_row.get("billing_state") or "",
+        "ee_state": canonical_billing_state,
         "ee_invoice_date": (ee_invoice_date_raw[:19] if ee_invoice_date_raw else None),
         "ee_is_return": 1 if (order_row.get("order_status") == "Returned") else 0,
         "ee_collectable_amount": float(
@@ -565,10 +592,80 @@ def _normalise_state(state: str) -> str:
     return (state or "").strip().lower()
 
 
+# EE-supplied state-name variants → ERPNext / India Compliance canonical
+# names. IC's Place-of-Supply autocomplete rejects the variant on the
+# LHS ("01-Jammu & Kashmir" — verified failure on backfill batch 2).
+# When a variant lands, we substitute the canonical spelling before
+# constructing `place_of_supply` and before writing `ee_state`.
+STATE_NAME_ALIASES = {
+    "jammu & kashmir": "Jammu and Kashmir",
+    "j&k": "Jammu and Kashmir",
+    # Post-2020 merger — DNH + DD are one UT (state code 26)
+    "dadra & nagar haveli": "Dadra and Nagar Haveli and Daman and Diu",
+    "daman & diu": "Dadra and Nagar Haveli and Daman and Diu",
+    "dadra and nagar haveli": "Dadra and Nagar Haveli and Daman and Diu",
+    "daman and diu": "Dadra and Nagar Haveli and Daman and Diu",
+    "dadra & nagar haveli and daman & diu": "Dadra and Nagar Haveli and Daman and Diu",
+    "andaman & nicobar islands": "Andaman and Nicobar Islands",
+    "andaman & nicobar": "Andaman and Nicobar Islands",
+}
+
+
+def _canonical_state_name(state: str) -> str:
+    """Return the ERPNext / IC canonical Place-of-Supply state name
+    for an EE-supplied state string. Passes untouched if already
+    canonical."""
+    s = (state or "").strip()
+    if not s:
+        return ""
+    return STATE_NAME_ALIASES.get(s.lower(), s)
+
+
+def _derive_gst_category(buyer_gst: str) -> str:
+    """Map EE `buyer_gst` → India Compliance `gst_category`.
+
+    URP (Unregistered Person) is the default when there's no valid
+    GSTIN on the buyer — EE sometimes sends "NA" / "URP" / blank for
+    B2C and for B2B customers who haven't shared their GSTIN. Per
+    Indian GST law, sales to URPs are still valid — they're just
+    reported under the B2C schedule instead of B2B.
+
+    Returns "Registered Regular" only when the string looks like a
+    real 15-char GSTIN (state-code + PAN-shape). Everything else →
+    "Unregistered" (which IC accepts as the URP catch-all)."""
+    g = (buyer_gst or "").strip().upper()
+    if not g or g in ("NA", "URP", "N/A", "NONE", "-"):
+        return "Unregistered"
+    # GSTIN structure: 2-digit state code + 10-char PAN + 3-char suffix
+    if len(g) == 15 and g[:2].isdigit() and g[2:7].isalpha():
+        return "Registered Regular"
+    return "Unregistered"
+
+
+def _derive_place_of_supply(order_row: dict) -> str | None:
+    """Compose `NN-StateName` for IC's Place-of-Supply field, using
+    the canonical ERPNext state name (not EE's variant spelling).
+    Returns None if state code or name is missing — IC then derives
+    from the customer's default address."""
+    code = (order_row.get("billing_state_code") or "").strip()
+    state = _canonical_state_name(order_row.get("billing_state") or "")
+    if not code or not state:
+        return None
+    # Pad single-digit state codes to two chars (EE sometimes sends "6"
+    # instead of "06" for Haryana).
+    if len(code) == 1:
+        code = "0" + code
+    return f"{code}-{state}"
+
+
 def _gstin_state_code_to_name(code: str) -> str | None:
     """Minimal GSTIN state-code → state-name lookup. Covers the
-    Indian-state GSTIN prefixes; returns None for unknown codes."""
+    Indian-state GSTIN prefixes; returns None for unknown codes.
+
+    Returns ERPNext canonical Place-of-Supply names — safe to feed
+    directly into `place_of_supply` construction."""
     # GSTIN state codes per Income Tax / GST Council assignment.
+    # 26 is the post-2020 DNH+DD combined UT (25 is obsolete).
     mapping = {
         "01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
         "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana",
@@ -578,7 +675,7 @@ def _gstin_state_code_to_name(code: str) -> str | None:
         "16": "Tripura", "17": "Meghalaya", "18": "Assam",
         "19": "West Bengal", "20": "Jharkhand", "21": "Odisha",
         "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
-        "25": "Daman and Diu", "26": "Dadra and Nagar Haveli",
+        "26": "Dadra and Nagar Haveli and Daman and Diu",
         "27": "Maharashtra", "28": "Andhra Pradesh", "29": "Karnataka",
         "30": "Goa", "31": "Lakshadweep", "32": "Kerala",
         "33": "Tamil Nadu", "34": "Puducherry", "35": "Andaman and Nicobar Islands",
