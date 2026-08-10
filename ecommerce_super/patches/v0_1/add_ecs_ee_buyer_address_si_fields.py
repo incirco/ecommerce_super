@@ -72,7 +72,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_name",
                     "label": "Billing Name",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_buyer_address_section",
                     "read_only": 1,
                     "no_copy": 1,
@@ -85,7 +85,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_address_1",
                     "label": "Billing Address 1",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_billing_name",
                     "read_only": 1,
                     "no_copy": 1,
@@ -93,7 +93,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_address_2",
                     "label": "Billing Address 2",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_billing_address_1",
                     "read_only": 1,
                     "no_copy": 1,
@@ -101,7 +101,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_city",
                     "label": "Billing City",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_billing_address_2",
                     "read_only": 1,
                     "no_copy": 1,
@@ -112,7 +112,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_state",
                     "label": "Billing State",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_billing_city",
                     "read_only": 1,
                     "no_copy": 1,
@@ -126,7 +126,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_pincode",
                     "label": "Billing Pincode",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_billing_state",
                     "read_only": 1,
                     "no_copy": 1,
@@ -136,7 +136,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_billing_country",
                     "label": "Billing Country",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_billing_pincode",
                     "read_only": 1,
                     "no_copy": 1,
@@ -151,7 +151,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_shipping_address_1",
                     "label": "Shipping Address 1",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_shipping_col_break",
                     "read_only": 1,
                     "no_copy": 1,
@@ -164,7 +164,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_shipping_address_2",
                     "label": "Shipping Address 2",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_shipping_address_1",
                     "read_only": 1,
                     "no_copy": 1,
@@ -172,7 +172,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_shipping_city",
                     "label": "Shipping City",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_shipping_address_2",
                     "read_only": 1,
                     "no_copy": 1,
@@ -182,7 +182,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_shipping_state",
                     "label": "Shipping State",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_shipping_city",
                     "read_only": 1,
                     "no_copy": 1,
@@ -192,7 +192,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_shipping_pincode",
                     "label": "Shipping Pincode",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_shipping_state",
                     "read_only": 1,
                     "no_copy": 1,
@@ -202,7 +202,7 @@ def execute() -> None:
                 {
                     "fieldname": "ecs_ee_shipping_country",
                     "label": "Shipping Country",
-                    "fieldtype": "Data",
+                    "fieldtype": "Small Text",
                     "insert_after": "ecs_ee_shipping_pincode",
                     "read_only": 1,
                     "no_copy": 1,
