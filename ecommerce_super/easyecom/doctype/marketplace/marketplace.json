@@ -148,7 +148,9 @@
    "export": 1
   }
  ],
+ "search_fields": "marketplace_name,channel_type",
  "sort_field": "marketplace_id",
  "sort_order": "ASC",
- "states": []
+ "states": [],
+ "title_field": "marketplace_name"
 }
