@@ -41,8 +41,26 @@ def build_si_from_ee_order(
     order_row: dict,
     marketplace_account: Any,
     correlation_id: str,
+    backfill_mode: bool = False,
 ) -> dict:
     """Create SI + Sync Record audit trail from one EE order row.
+
+    Args:
+        backfill_mode: When True, treats the run as a historical
+            re-materialisation (not a fresh live order). Concretely:
+              - update_stock = 0 — the stock has already moved via EE
+                weeks/months ago; a live insert now would double-count
+                the depletion and drift the ERPNext ledger from reality.
+              - _attach_ee_documents runs in reference-only mode — File
+                records store the EE-hosted S3 URL instead of downloading
+                the PDF locally, saving ~1-3s per SI × N orders. If EE
+                later prunes the S3 objects, live re-download can be
+                triggered by a follow-up sweep.
+              - Variance checks (_check_variance, _check_total_variance)
+                log warnings instead of raising Integration Discrepancies.
+                Historical rows tend to trip these on stale HSN configs,
+                but they aren't actionable during backfill; the recon
+                engine catches real variance from settlement lines.
 
     Returns:
         {
@@ -148,7 +166,10 @@ def build_si_from_ee_order(
         "customer": pool_choice["customer"],
         "company": marketplace_account.company,
         "posting_date": posting_date,
-        "update_stock": 1,
+        # backfill_mode: skip Stock Ledger movement. The stock has
+        # already moved via EE in real time; a historical SI insert
+        # with update_stock=1 would double-deplete the ERPNext ledger.
+        "update_stock": 0 if backfill_mode else 1,
         "items": [
             {
                 "item_code": li["item_code"],
@@ -294,7 +315,10 @@ def build_si_from_ee_order(
     # documents dict from getAllOrders payload — presigned S3 URLs
     # that can be fetched without EE auth. Two attachments per SI:
     # the customer's invoice PDF and the courier shipping label.
-    _attach_ee_documents(si, order_row)
+    #
+    # backfill_mode: reference-only. Store S3 URL on the File record
+    # instead of downloading PDF content. Saves ~1-3s per SI × N.
+    _attach_ee_documents(si, order_row, download_pdf=not backfill_mode)
 
     # ---- 7. Sync Record — audit trail (replaces Marketplace Order Map) ----
     sync_record_name = _write_sync_record(
@@ -306,6 +330,10 @@ def build_si_from_ee_order(
     )
 
     # ---- 8. Variance checks (Path 2 alert mechanism) ----
+    # backfill_mode: log-only. Historical SIs frequently trip these
+    # on stale HSN configs / catalog drift; a Discrepancy per row
+    # floods the FDE inbox and isn't actionable during backfill.
+    # The recon engine still catches real variance later.
     tax_variance = _check_variance(
         si=si,
         marketplace_account=marketplace_account,
@@ -313,6 +341,7 @@ def build_si_from_ee_order(
         ee_tax_total=ee_tax_total,
         erpnext_tax_check=erpnext_tax_check,
         correlation_id=correlation_id,
+        raise_discrepancy=not backfill_mode,
     )
 
     # §12.9 line 2821: 1-paisa total variance check.
@@ -325,6 +354,7 @@ def build_si_from_ee_order(
         ee_invoice_id=ee_invoice_id,
         ee_grand_total=ee_grand_total,
         correlation_id=correlation_id,
+        raise_discrepancy=not backfill_mode,
     )
 
     return {
@@ -738,7 +768,9 @@ def _ensure_batch(
 # ============================================================
 
 
-def _attach_ee_documents(si, order_row: dict) -> dict:
+def _attach_ee_documents(
+    si, order_row: dict, *, download_pdf: bool = True
+) -> dict:
     """Fetch invoice + label PDFs from EE's presigned S3 URLs and
     attach them as File records on the SI. URLs live in the
     `documents` dict of the getAllOrders payload:
@@ -748,6 +780,16 @@ def _attach_ee_documents(si, order_row: dict) -> dict:
         documents.marketplaceinvoice / marketplace_tax_invoice /
         marketplace_b2c_invoice     → marketplace-billed invoices
                                       (Flipkart, Amazon, etc.)
+
+    Args:
+        download_pdf: When True (default, live flow), downloads the
+            PDF content from S3 and stores it in Frappe's file storage
+            (is_private=1). Self-contained but ~1-3s per SI. When
+            False (backfill), stores the S3 URL as a reference on the
+            File record (is_private=0, file_url=<url>). File.file_url
+            has `?request-content-type=application/force-download`
+            stripped so Chrome renders the PDF inline instead of
+            triggering a download.
 
     Returns a summary of what was attached / skipped / failed.
     """
@@ -782,21 +824,34 @@ def _attach_ee_documents(si, order_row: dict) -> dict:
             out["failed"].append({"key": source_key, "reason": "not a URL"})
             continue
         try:
-            r = requests.get(url, timeout=30)
-            if r.status_code != 200 or not r.content:
-                out["failed"].append({
-                    "key": source_key,
-                    "reason": f"HTTP {r.status_code}, {len(r.content)} bytes",
+            if download_pdf:
+                # Live flow — download + store locally
+                r = requests.get(url, timeout=30)
+                if r.status_code != 200 or not r.content:
+                    out["failed"].append({
+                        "key": source_key,
+                        "reason": f"HTTP {r.status_code}, {len(r.content)} bytes",
+                    })
+                    continue
+                file_doc = frappe.get_doc({
+                    "doctype": "File",
+                    "file_name": f"{prefix}-{si.name}.pdf",
+                    "attached_to_doctype": "Sales Invoice",
+                    "attached_to_name": si.name,
+                    "content": r.content,
+                    "is_private": 1,
                 })
-                continue
-            file_doc = frappe.get_doc({
-                "doctype": "File",
-                "file_name": f"{prefix}-{si.name}.pdf",
-                "attached_to_doctype": "Sales Invoice",
-                "attached_to_name": si.name,
-                "content": r.content,
-                "is_private": 1,
-            })
+            else:
+                # Backfill — reference S3 URL directly, no download.
+                # Strip the force-download query so Chrome renders inline.
+                file_doc = frappe.get_doc({
+                    "doctype": "File",
+                    "file_name": f"{prefix}-{si.name}.pdf",
+                    "attached_to_doctype": "Sales Invoice",
+                    "attached_to_name": si.name,
+                    "file_url": url.split("?")[0],
+                    "is_private": 0,
+                })
             file_doc.flags.ignore_permissions = True
             file_doc.insert()
             out["attached"].append({"key": source_key, "file": file_doc.name})
@@ -1004,6 +1059,7 @@ def _check_variance(
     ee_tax_total: float,
     erpnext_tax_check: float,
     correlation_id: str,
+    raise_discrepancy: bool = True,
 ) -> dict:
     """Path 2 variance check: compare EE-supplied tax against the
     ERPNext-computed cross-check. >1% delta raises an Integration
@@ -1013,6 +1069,12 @@ def _check_variance(
     GST HSN Code rows incomplete), we skip the alert — better than
     a false-positive flood on fresh installs.
 
+    Args:
+        raise_discrepancy: When False (backfill), the >1% variance
+            is logged via frappe.logger() instead of raising an
+            Integration Discrepancy. Prevents Discrepancy flood on
+            historical rows that trip on stale HSN configs.
+
     Returns:
         {"tax_variance_pct": <float>, "discrepancy_raised": <bool>}
     """
@@ -1021,6 +1083,15 @@ def _check_variance(
 
     variance_pct = abs(ee_tax_total - erpnext_tax_check) / ee_tax_total * 100
     if variance_pct <= 1.0:
+        return {"tax_variance_pct": round(variance_pct, 2), "discrepancy_raised": False}
+
+    if not raise_discrepancy:
+        frappe.logger().warning(
+            f"§12 backfill tax variance (log-only): {si.name} "
+            f"EE={ee_tax_total:.2f} ERPNext={erpnext_tax_check:.2f} "
+            f"delta={variance_pct:.2f}% ee_invoice_id={ee_invoice_id} "
+            f"correlation_id={correlation_id}"
+        )
         return {"tax_variance_pct": round(variance_pct, 2), "discrepancy_raised": False}
 
     # Variance > 1% — raise as upstream alert
@@ -1063,6 +1134,7 @@ def _check_total_variance(
     ee_invoice_id: str,
     ee_grand_total: float,
     correlation_id: str,
+    raise_discrepancy: bool = True,
 ) -> dict:
     """§12.9 line 2821 — EE order total vs ERPNext SI.grand_total must
     match within 1 paisa (₹0.01). Mismatch raises an Integration
@@ -1075,6 +1147,11 @@ def _check_total_variance(
     Skipped when ee_grand_total is 0 (zero-amount orders are edge
     cases — refunds-only, promotional, etc.; no alert).
 
+    Args:
+        raise_discrepancy: When False (backfill), the > 1 paisa
+            variance is logged via frappe.logger() instead of
+            raising an Integration Discrepancy.
+
     Returns:
         {"total_variance_paise": <int>, "discrepancy_raised": <bool>}
     """
@@ -1086,6 +1163,15 @@ def _check_total_variance(
     variance_paise = round(delta * 100)  # 1 paisa = ₹0.01
 
     if variance_paise <= 1:
+        return {"total_variance_paise": variance_paise, "discrepancy_raised": False}
+
+    if not raise_discrepancy:
+        frappe.logger().warning(
+            f"§12 backfill total variance (log-only): {si.name} "
+            f"EE=₹{ee_grand_total:.2f} SI=₹{si_grand_total:.2f} "
+            f"delta={variance_paise} paise ee_invoice_id={ee_invoice_id} "
+            f"correlation_id={correlation_id}"
+        )
         return {"total_variance_paise": variance_paise, "discrepancy_raised": False}
 
     try:
