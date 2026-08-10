@@ -228,6 +228,84 @@ def build_si_from_ee_order(
     if warehouse:
         si_dict["set_warehouse"] = warehouse
 
+    # ---- 5b. Buyer address, Puresta-app fields, Channel dimension ----
+    # These are structured EE-supplied fields the client ops team needs
+    # for reporting + printing. Some (contact_mobile, contact_email,
+    # market_place_customer_name, market_place_customer_billing_address)
+    # are usually NULL from EE for B2C because Amazon/Flipkart/Shopify
+    # suppress buyer PII at the /orders/V2/getAllOrders layer — those
+    # only populate for tenants whose EE token has PII access enabled.
+    # We still write what EE DOES return (city / state / pin / country)
+    # so the SI address block, list-view filters, and channel-wise GL
+    # reports work end-to-end.
+    billing_display = "\n".join(
+        x for x in [
+            order_row.get("billing_name") or "",
+            order_row.get("billing_address_1") or "",
+            order_row.get("billing_address_2") or "",
+            order_row.get("billing_city") or "",
+            " - ".join(x for x in [
+                order_row.get("billing_state") or "",
+                order_row.get("billing_pin_code") or "",
+            ] if x),
+            order_row.get("billing_country") or "",
+        ] if x
+    )
+    shipping_display = "\n".join(
+        x for x in [
+            order_row.get("address_line_1") or "",
+            order_row.get("address_line_2") or "",
+            order_row.get("city") or "",
+            " - ".join(x for x in [
+                order_row.get("state") or "",
+                order_row.get("pin_code") or "",
+            ] if x),
+            order_row.get("country") or "",
+        ] if x
+    )
+    ee_invoice_date_raw = order_row.get("invoice_date") or ""
+    si_dict.update({
+        # Accounting Dimension: Channel = Marketplace. Required for
+        # channel-wise GL / P&L reports (Puresta has this dimension
+        # defined; SIs without it don't show up in the channel slice).
+        "channel": marketplace_account.marketplace,
+
+        # Puresta custom app — "Market Place Customer Details" section
+        # (empty on SI form before this fix because we never wrote to it).
+        "market_place_customer_name": order_row.get("billing_name") or "",
+        "market_place_customer_billing_address_display": billing_display,
+        "market_place_customer_shipping_address_display": shipping_display,
+
+        # Puresta custom app — "EasyEcom Details" section
+        "custom_ee_state": order_row.get("billing_state") or "",
+        "custom_ee_selling_price": (str(ee_grand_total) if ee_grand_total else ""),
+        "ee_state": order_row.get("billing_state") or "",
+        "ee_invoice_date": (ee_invoice_date_raw[:19] if ee_invoice_date_raw else None),
+        "ee_is_return": 1 if (order_row.get("order_status") == "Returned") else 0,
+        "ee_collectable_amount": float(
+            order_row.get("collectable_amount") or ee_grand_total or 0
+        ),
+
+        # Standard SI: contact + Customer PO reference. `po_no` /
+        # `po_date` mirror the marketplace order id + date so ops can
+        # search "customer PO = SQ-440390821" and find the invoice.
+        "contact_mobile": (
+            order_row.get("billing_mobile") or order_row.get("contact_num") or ""
+        ),
+        "contact_email": order_row.get("email") or "",
+        "po_no": marketplace_order_id,
+        "po_date": posting_date,
+
+        # EE-hosted invoice PDF URL. Query string
+        # `?request-content-type=application/force-download` stripped so
+        # the file opens inline in Chrome instead of being downloaded
+        # (the same S3 object is public without the query param).
+        "ecs_easyecom_invoice_pdf_url": (
+            ((order_row.get("documents") or {}).get("easyecom_invoice") or "")
+            .split("?")[0]
+        ),
+    })
+
     # EE-supplied tax → SI.taxes (a single 'Actual' row carrying EE's
     # total). Per Path 2: this is the GL truth, not ERPNext-derived.
     if ee_tax_total:
