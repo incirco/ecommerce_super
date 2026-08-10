@@ -523,7 +523,28 @@ class TestCheckTotalVariance(unittest.TestCase):
 
 class TestResolvePostingDate(unittest.TestCase):
 
-    def test_uses_order_date(self):
+    def test_prefers_invoice_date_over_order_date(self):
+        # invoice_date wins — GST §31 requires posting_date to be the
+        # date the invoice was issued, not the date the customer placed
+        # the order. Straddling orders (placed month N, invoiced month
+        # N+1) must post in month N+1.
+        self.assertEqual(
+            str(_resolve_posting_date({
+                "order_date": "2026-06-30",
+                "invoice_date": "2026-07-02",
+            })),
+            "2026-07-02",
+        )
+
+    def test_uses_invoice_date_when_only_that_is_present(self):
+        self.assertEqual(
+            str(_resolve_posting_date({"invoice_date": "2026-06-15"})),
+            "2026-06-15",
+        )
+
+    def test_falls_back_to_order_date_when_no_invoice_date(self):
+        # Cancelled-before-invoice case — EE never minted an
+        # invoice_date, so order_date is the best available signal.
         self.assertEqual(
             str(_resolve_posting_date({"order_date": "2026-06-15"})),
             "2026-06-15",
@@ -531,7 +552,7 @@ class TestResolvePostingDate(unittest.TestCase):
 
     def test_accepts_camelcase(self):
         self.assertEqual(
-            str(_resolve_posting_date({"orderDate": "2026-06-15"})),
+            str(_resolve_posting_date({"invoiceDate": "2026-06-15"})),
             "2026-06-15",
         )
 

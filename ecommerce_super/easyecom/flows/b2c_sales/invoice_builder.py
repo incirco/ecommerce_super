@@ -337,12 +337,15 @@ def build_si_from_ee_order(
         # Standard SI: contact + Customer PO reference. `po_no` /
         # `po_date` mirror the marketplace order id + date so ops can
         # search "customer PO = SQ-440390821" and find the invoice.
+        # `po_date` deliberately uses order_date (not posting_date) —
+        # posting_date now tracks EE invoice_date for GST timing, but a
+        # customer's PO reference date is when they placed the order.
         "contact_mobile": (
             order_row.get("billing_mobile") or order_row.get("contact_num") or ""
         ),
         "contact_email": order_row.get("email") or "",
         "po_no": marketplace_order_id,
-        "po_date": posting_date,
+        "po_date": _resolve_po_date(order_row),
 
         # EE-hosted invoice PDF URL. Query string
         # `?request-content-type=application/force-download` stripped so
@@ -1584,7 +1587,47 @@ def _check_total_variance(
 
 
 def _resolve_posting_date(order_row: dict):
-    """Posting date for the SI — prefer order_date, fall back to today."""
+    """Posting date for the SI — EE `invoice_date` drives GST-legal timing.
+
+    Why invoice_date, not order_date: `posting_date` on the SI is the
+    date GSTR-1 files under, the date GL entries hit, and the date all
+    invoice-date-based accounting views (including EE's own tax export
+    at `Sale (Month) Easycom.xlsx`) group by. GST §31 requires the tax
+    invoice date to be the date the invoice was issued, not the date
+    the customer placed the order. Using order_date creates silent
+    drift versus EE's tax export and versus GSTR-1 for any order that
+    straddles a month boundary between placement and invoicing.
+
+    The B2B mirror (b2b_sales/invoice_mirror.py:_parse_posting_date)
+    already uses invoice_date — this brings B2C in line.
+
+    Fallback chain: invoice_date → order_date → today. order_date
+    fallback covers cancelled-before-invoice cases where EE never
+    minted an invoice_date.
+    """
+    raw = (
+        order_row.get("invoice_date")
+        or order_row.get("invoiceDate")
+        or order_row.get("order_date")
+        or order_row.get("orderDate")
+    )
+    if raw:
+        try:
+            return getdate(raw)
+        except Exception:
+            pass
+    return getdate(now_datetime())
+
+
+def _resolve_po_date(order_row: dict):
+    """PO date on the SI — the customer's marketplace order date.
+
+    `po_no` / `po_date` mirror the marketplace order (SQ-440390821 +
+    the moment the customer clicked buy). Kept on `order_date` even
+    though `posting_date` is now `invoice_date` — a customer's PO
+    reference date is when they placed the order, not when EE later
+    minted the invoice. Falls back to invoice_date when order_date
+    is missing (extremely rare)."""
     raw = (
         order_row.get("order_date")
         or order_row.get("orderDate")
