@@ -1,213 +1,46 @@
-"""Custom Fields on Sales Invoice for EasyEcom buyer + shipping
-address data.
+"""Neutralised — schema work moved to
+`move_ecs_ee_address_fields_to_child_table` (#266).
 
-CONTEXT
+WHY THIS FILE STILL EXISTS
 
-The B2C polling flow (§12) creates SIs against per-marketplace pool
-Customers (e.g., "B2C Customer - Shopify (26) - Inter State") because
-buyer privacy rules on most marketplaces forbid holding real buyer PII
-against a real Customer record. That leaves the SI itself with no
-structured place to record the actual buyer / shipping address —
-`customer_address` is optional and would require creating an Address
-record per SI (5,000+ Addresses/month bloats the master).
+  The original version of this patch (#259) added 13 flat
+  ecs_ee_billing_* / ecs_ee_shipping_* varchar Custom Fields to
+  Sales Invoice. On fat benches (Puresta prod, Puresta UAT after
+  many app installs) that ALTER TABLE overflowed MariaDB's 65535-
+  byte in-row limit and the migration halted.
 
-The client operations team also needs to filter / report SIs by buyer
-city, state, pincode (e.g., "how much Shopify revenue landed in
-Karnataka?"), which is not answerable from `address_display` (HTML text
-blob) alone.
+  The permanent fix (#266) re-homes those 13 fields on a new
+  child DocType (EasyEcom Address, istable=1) attached to SI via
+  a Table Custom Field — zero DB columns on tabSales Invoice.
 
-DECISION
+  Because Frappe's Patch Log is per-patch-module, we can't
+  simply delete this patch entry from patches.txt: on sites where
+  this patch NEVER ran, removing the entry would leave a gap in
+  the log. Keeping it as a no-op is the safe path:
 
-Store the EE-supplied buyer + shipping address as **structured Data
-fields on the SI itself** under a new "EasyEcom Buyer Address"
-collapsible section. Two columns:
+    - Sites where this patch is already in Patch Log (successful
+      earlier run OR successful Small Text hotfix run) → Frappe
+      skips it; the follow-on move_ecs_ee_address... patch handles
+      the actual work (data migration + cleanup).
 
-  BILLING                   SHIPPING
-  ----------------------    ----------------------
-  Name                      Address 1
-  Address 1                 Address 2
-  Address 2                 City
-  City                      State
-  State                     Pincode
-  Pincode                   Country
-  Country
+    - Sites where this patch is NOT in Patch Log (failed at the
+      failing ALTER TABLE, never got recorded) → this no-op runs,
+      succeeds, gets logged, and the follow-on
+      move_ecs_ee_address... patch runs next.
 
-The high-signal fields (city, state, pincode) get `in_standard_filter=1`
-so list-view filtering is one click. All fields are `read_only=1` +
-`no_copy=1` — the source of truth is EE, and copying an SI shouldn't
-duplicate the buyer's address into a new invoice.
-
-Contact (email, mobile) reuses ERPNext standard fields (contact_email,
-contact_mobile) rather than duplicating — those are already writable
-on SI without needing a linked Contact record.
-
-Idempotent — `create_custom_fields` skips fields that already exist.
+DO NOT restore the original ALTER-TABLE-adding logic here. Any new
+address-related fields go on EasyEcom Address (the child DocType),
+not on tabSales Invoice.
 """
 from __future__ import annotations
 
-from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
-
-from ecommerce_super.easyecom._schema_utils import ensure_dynamic_row_format
-
 
 def execute() -> None:
-    ensure_dynamic_row_format("tabSales Invoice")
-    create_custom_fields(
-        {
-            "Sales Invoice": [
-                {
-                    "fieldname": "ecs_ee_buyer_address_section",
-                    "label": "EasyEcom Buyer Address",
-                    "fieldtype": "Section Break",
-                    "insert_after": "ecs_settlement_completed_at",
-                    "collapsible": 1,
-                    "description": (
-                        "Structured billing + shipping address as supplied by "
-                        "EasyEcom for the actual buyer. Populated by the §12 "
-                        "B2C polling flow (and by any backfill runs). Filterable "
-                        "by city / state / pincode from the list view."
-                    ),
-                },
-                # ---------- Column 1: Billing ----------
-                {
-                    "fieldname": "ecs_ee_billing_name",
-                    "label": "Billing Name",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_buyer_address_section",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "description": (
-                        "Buyer's name as supplied by EE (billing_name). May be "
-                        "empty on marketplaces that suppress buyer PII "
-                        "(e.g., Amazon Easyship)."
-                    ),
-                },
-                {
-                    "fieldname": "ecs_ee_billing_address_1",
-                    "label": "Billing Address 1",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_billing_name",
-                    "read_only": 1,
-                    "no_copy": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_billing_address_2",
-                    "label": "Billing Address 2",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_billing_address_1",
-                    "read_only": 1,
-                    "no_copy": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_billing_city",
-                    "label": "Billing City",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_billing_address_2",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "in_standard_filter": 1,
-                    "search_index": 1,
-                    "description": "Filterable in list view.",
-                },
-                {
-                    "fieldname": "ecs_ee_billing_state",
-                    "label": "Billing State",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_billing_city",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "in_standard_filter": 1,
-                    "search_index": 1,
-                    "description": (
-                        "Buyer's state — the raw EE-supplied string (used by "
-                        "the recon engine when Place of Supply is unset)."
-                    ),
-                },
-                {
-                    "fieldname": "ecs_ee_billing_pincode",
-                    "label": "Billing Pincode",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_billing_state",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "in_standard_filter": 1,
-                    "search_index": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_billing_country",
-                    "label": "Billing Country",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_billing_pincode",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "default": "India",
-                },
-                # ---------- Column 2: Shipping ----------
-                {
-                    "fieldname": "ecs_ee_shipping_col_break",
-                    "fieldtype": "Column Break",
-                    "insert_after": "ecs_ee_billing_country",
-                },
-                {
-                    "fieldname": "ecs_ee_shipping_address_1",
-                    "label": "Shipping Address 1",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_shipping_col_break",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "description": (
-                        "Shipping address as supplied by EE (address_line_1). "
-                        "Usually matches billing for online orders; may differ "
-                        "for gift orders or corporate B2B ship-to."
-                    ),
-                },
-                {
-                    "fieldname": "ecs_ee_shipping_address_2",
-                    "label": "Shipping Address 2",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_shipping_address_1",
-                    "read_only": 1,
-                    "no_copy": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_shipping_city",
-                    "label": "Shipping City",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_shipping_address_2",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "in_standard_filter": 1,
-                    "search_index": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_shipping_state",
-                    "label": "Shipping State",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_shipping_city",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "in_standard_filter": 1,
-                    "search_index": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_shipping_pincode",
-                    "label": "Shipping Pincode",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_shipping_state",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "in_standard_filter": 1,
-                    "search_index": 1,
-                },
-                {
-                    "fieldname": "ecs_ee_shipping_country",
-                    "label": "Shipping Country",
-                    "fieldtype": "Data",
-                    "insert_after": "ecs_ee_shipping_pincode",
-                    "read_only": 1,
-                    "no_copy": 1,
-                    "default": "India",
-                },
-            ],
-        }
-    )
+    # Deliberate no-op — see module docstring.
+    #
+    # The schema work this patch used to do (add 13 flat address
+    # varchar Custom Fields to Sales Invoice) has been superseded
+    # by move_ecs_ee_address_fields_to_child_table, which creates
+    # EasyEcom Address (child DocType) and attaches it to SI via a
+    # single Table Custom Field.
+    return
