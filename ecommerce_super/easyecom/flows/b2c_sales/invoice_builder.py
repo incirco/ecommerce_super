@@ -354,6 +354,39 @@ def build_si_from_ee_order(
         ),
     })
 
+    # Structured billing + shipping address as a Table child row on
+    # EasyEcom Address (istable=1). Lives off the SI row so its
+    # columns don't inflate tabSales Invoice past MariaDB's 65535-byte
+    # in-row limit (see patch
+    # move_ecs_ee_address_fields_to_child_table for context). Only
+    # add the child row when we actually have at least one non-empty
+    # value from EE — creating an empty child on every SI just adds
+    # noise to tabEasyEcom Address.
+    address_child = {
+        "billing_name":       order_row.get("billing_name") or "",
+        "billing_address_1":  order_row.get("billing_address_1") or "",
+        "billing_address_2":  order_row.get("billing_address_2") or "",
+        "billing_city":       order_row.get("billing_city") or "",
+        "billing_state":      canonical_billing_state,
+        "billing_pincode":    order_row.get("billing_pin_code") or "",
+        "billing_country":    order_row.get("billing_country") or "India",
+        "shipping_address_1": order_row.get("address_line_1") or "",
+        "shipping_address_2": order_row.get("address_line_2") or "",
+        "shipping_city":      order_row.get("city") or "",
+        "shipping_state":     _canonical_state_name(order_row.get("state") or ""),
+        "shipping_pincode":   order_row.get("pin_code") or "",
+        "shipping_country":   order_row.get("country") or "India",
+    }
+    # `India` defaults are always present — filter them out when
+    # deciding "any real content" so a country-only row doesn't get
+    # created.
+    non_default_values = {
+        k: v for k, v in address_child.items()
+        if v and not (k.endswith("_country") and v == "India")
+    }
+    if non_default_values:
+        si_dict["ecs_ee_address"] = [address_child]
+
     # EE-supplied tax → SI.taxes (a single 'Actual' row carrying EE's
     # total). Per Path 2: this is the GL truth, not ERPNext-derived.
     if ee_tax_total:
