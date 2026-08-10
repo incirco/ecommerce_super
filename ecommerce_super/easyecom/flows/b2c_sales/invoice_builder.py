@@ -425,6 +425,43 @@ def build_si_from_ee_order(
     # instead of downloading PDF content. Saves ~1-3s per SI × N.
     _attach_ee_documents(si, order_row, download_pdf=not backfill_mode)
 
+    # ---- 6c. Credit Note for Returned / Cancelled orders ----
+    # When the order is already in a reversed state at time of insert
+    # (typical for backfill of historical orders that have completed
+    # their full lifecycle), create a paired Credit Note (Sales Invoice
+    # with is_return=1) referencing this original SI.
+    #
+    # GST parity: GSTR-1 must show both the original sale AND the
+    # credit note reversing it. Net effect is zero but the audit trail
+    # is complete. Without this, backfilled Returned/Cancelled orders
+    # would show up as active sales in GSTR-1 without a matching
+    # reversal, over-reporting sales to GSTN.
+    #
+    # Only in backfill_mode. In live flow, the polling loop that
+    # observes an order_status transition to Returned/Cancelled owns
+    # the Credit Note creation via a separate step (§13 Returns
+    # Inwards) and this branch stays off.
+    credit_note_name = None
+    if (
+        backfill_mode
+        and order_row.get("order_status") in ("Returned", "Cancelled")
+        and ee_grand_total
+    ):
+        try:
+            credit_note = _build_credit_note_for_reversed_order(
+                original_si=si,
+                order_row=order_row,
+            )
+            credit_note_name = credit_note.name
+        except Exception as exc:
+            # Never let a CN failure fail the original SI backfill —
+            # a follow-up sweep can retry the CN.
+            frappe.logger().warning(
+                f"§12 backfill: could not create Credit Note for "
+                f"{order_row.get('order_status')} SI {si.name}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
     # ---- 7. Sync Record — audit trail (replaces Marketplace Order Map) ----
     sync_record_name = _write_sync_record(
         si=si,
@@ -470,6 +507,8 @@ def build_si_from_ee_order(
         "tax_discrepancy_raised": tax_variance["discrepancy_raised"],
         "total_variance_paise": total_variance["total_variance_paise"],
         "total_discrepancy_raised": total_variance["discrepancy_raised"],
+        # Paired Credit Note (backfill_mode + Returned/Cancelled only)
+        "credit_note": credit_note_name,
         # Back-compat: any variance => discrepancy_raised True
         "discrepancy_raised": (
             tax_variance["discrepancy_raised"]
@@ -936,6 +975,129 @@ def _ensure_batch(
             {"item": item_code, "batch_id": batch_code},
             "name",
         )
+
+
+# ============================================================
+# Credit Note for Returned / Cancelled orders (backfill_mode)
+# ============================================================
+
+
+def _build_credit_note_for_reversed_order(
+    *,
+    original_si: Any,
+    order_row: dict,
+) -> Any:
+    """Create a paired Credit Note (Sales Invoice with is_return=1)
+    referencing an original SI, with negative qty per line.
+
+    Called from build_si_from_ee_order when backfill_mode is True
+    AND the EE order_status is "Returned" or "Cancelled". The
+    Credit Note is inserted as Draft (docstatus=0) so the user can
+    review and submit both together.
+
+    IMPORTANT — return_against + Draft semantics:
+        ERPNext validates that `return_against` points to a submitted
+        SI at CREDIT NOTE SUBMIT time, not at insert. Insert as Draft
+        succeeds even when the original is also Draft. Users need to
+        submit the original SI first, then submit the CN.
+
+    Posting date derivation:
+        - EE `shipping_last_update_date` (when EE last updated
+          shipping status — best proxy for when the return happened)
+        - EE `manifest_date` (when the courier picked up — earlier
+          fallback)
+        - original_si.posting_date + 1 day (last-resort)
+    """
+    # Return posting date — best guess from EE's timestamps
+    return_dt_raw = (
+        order_row.get("shipping_last_update_date")
+        or order_row.get("manifest_date")
+        or ""
+    )
+    if return_dt_raw and len(return_dt_raw) >= 10:
+        return_date = return_dt_raw[:10]
+    else:
+        return_date = frappe.utils.add_days(original_si.posting_date, 1)
+
+    reason = order_row.get("order_status") or "Reversed"
+
+    cn_dict: dict[str, Any] = {
+        "doctype": "Sales Invoice",
+        "customer": original_si.customer,
+        "company": original_si.company,
+        "posting_date": return_date,
+        "set_posting_time": 1,
+        # Backfill: no stock movement (stock was already reversed on EE
+        # side; ledger stays clean).
+        "update_stock": 0,
+        # Credit-note contract
+        "is_return": 1,
+        "return_against": original_si.name,
+        "currency": original_si.currency or "INR",
+        "conversion_rate": 1,
+        "ignore_pricing_rule": 1,
+        # Mirror the header dimensions from the original — recon /
+        # channel-wise reports treat the reversal on the same axes.
+        "channel": original_si.get("channel"),
+        "gst_category": original_si.get("gst_category"),
+        "billing_address_gstin": original_si.get("billing_address_gstin"),
+        "place_of_supply": original_si.get("place_of_supply"),
+        "taxes_and_charges": original_si.get("taxes_and_charges"),
+        "items": [
+            {
+                "item_code": it.item_code,
+                # ERPNext Credit Note convention: negative qty. Same
+                # rate — ERPNext computes amount = qty × rate as
+                # negative automatically.
+                "qty": -abs(float(it.qty)),
+                "rate": float(it.rate),
+                "price_list_rate": float(it.rate),
+                "discount_amount": 0,
+                "discount_percentage": 0,
+                "warehouse": it.warehouse,
+                "gst_hsn_code": it.get("gst_hsn_code"),
+                "sales_invoice_item": it.name,  # link back to original line
+            }
+            for it in original_si.items
+        ],
+        # Traceability back-refs. Prefix invoice_id with "CN-" so
+        # backfill_mode's dupe-check keys don't collide with the
+        # original SI's ecs_easyecom_invoice_id.
+        "ecs_easyecom_invoice_id": (
+            f"CN-{original_si.get('ecs_easyecom_invoice_id')}"
+        ),
+        "ecs_easyecom_order_id": original_si.get("ecs_easyecom_order_id"),
+        "ecs_marketplace": original_si.get("ecs_marketplace"),
+        "ecs_marketplace_order_id": original_si.get("ecs_marketplace_order_id"),
+        "ecs_easyecom_dispatch_status": reason,
+        "remarks": (
+            f"Credit Note for EE {reason} order — original SI "
+            f"{original_si.name} (ee_invoice_id "
+            f"{original_si.get('ecs_easyecom_invoice_id')})"
+        ),
+    }
+
+    # Mirror EE-supplied taxes with negative amounts. If original had a
+    # single Actual tax row (Path 2), the CN carries the negation of
+    # that row so the reversal exactly matches the tax that was raised.
+    if original_si.taxes:
+        cn_dict["taxes"] = [
+            {
+                "charge_type": t.charge_type,
+                "account_head": t.account_head,
+                "tax_amount": -abs(float(t.tax_amount or 0)),
+                "description": (
+                    f"Credit Note reversal — {t.description or ''}"
+                ),
+            }
+            for t in original_si.taxes
+        ]
+
+    cn = frappe.get_doc(cn_dict)
+    cn.flags.ignore_permissions = True
+    cn.insert()
+    frappe.db.commit()
+    return cn
 
 
 # ============================================================
