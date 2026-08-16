@@ -216,6 +216,24 @@ def build_si_from_ee_order(
                 # Also mark 0-rate lines as free items — extra defense
                 # against downstream pricing hooks
                 **({"is_free_item": 1} if li.get("is_free_item") else {}),
+                # PR G' — per-line Item Tax Template drives IC's IGST/
+                # CGST/SGST split at set_missing_values() time. Only
+                # attached when a matching template exists (see
+                # _resolve_item_tax_template — returns None for non-
+                # standard rates so IC falls back to Item defaults).
+                **(
+                    {
+                        "item_tax_template": _resolve_item_tax_template(
+                            company=marketplace_account.company,
+                            tax_rate=li.get("tax_rate", 0),
+                        )
+                    }
+                    if _resolve_item_tax_template(
+                        company=marketplace_account.company,
+                        tax_rate=li.get("tax_rate", 0),
+                    )
+                    else {}
+                ),
             }
             for li in line_items
         ],
@@ -390,21 +408,31 @@ def build_si_from_ee_order(
     if non_default_values:
         si_dict["ecs_ee_address"] = [address_child]
 
-    # EE-supplied tax → SI.taxes (a single 'Actual' row carrying EE's
-    # total). Per Path 2: this is the GL truth, not ERPNext-derived.
-    if ee_tax_total:
-        tax_account = _resolve_default_sales_tax_account(marketplace_account.company)
-        si_dict["taxes"] = [
-            {
-                "charge_type": "Actual",
-                "account_head": tax_account,
-                "tax_amount": ee_tax_total,
-                "description": (
-                    f"EE-supplied tax (Path 2 — source: marketplace adapter; "
-                    f"see ecs_erpnext_tax_check_total for variance signal)"
-                ),
-            }
-        ]
+    # PR G' — IC-native tax injection (replaces the legacy flat
+    # charge_type="Actual" pattern that violated CLAUDE.md #206).
+    #
+    # We attach `taxes_and_charges` (Sales Taxes and Charges Template)
+    # and per-item `item_tax_template` (see items[] block above). India
+    # Compliance's set_missing_values() at insert time then generates
+    # the correct IGST (inter-state) or CGST+SGST (intra-state) rows
+    # using the SI's `place_of_supply` (set by _derive_place_of_supply,
+    # PR #263) vs the seller's `pickup_state`.
+    #
+    # The variance check (§8 below) still runs post-insert to catch
+    # drift between EE's authoritative `total_tax` and IC's computed
+    # total — Path 2's safety net is preserved.
+    #
+    # When either template lookup returns None (template missing on
+    # the site), the SI still inserts — with no tax rows — and the
+    # variance check raises a Discrepancy so ops can add the missing
+    # template. Better than blocking the SI creation entirely.
+    sales_tax_template = _resolve_gst_sales_taxes_template(
+        company=marketplace_account.company,
+        place_of_supply=place_of_supply,
+        seller_state=order_row.get("pickup_state"),
+    )
+    if sales_tax_template:
+        si_dict["taxes_and_charges"] = sales_tax_template
 
     si = frappe.get_doc(si_dict)
     si.flags.ignore_permissions = True
@@ -938,6 +966,12 @@ def _resolve_line_items(order_row: dict) -> list[dict]:
                 "gst_hsn_code": hsn,
                 "ee_batch_code": batch_code,
                 "ee_batch_expiry": expiry_date,
+                # PR G' — carry EE's line-level tax_rate through so the
+                # SI builder can resolve the right Item Tax Template.
+                # Enables India Compliance to compute IGST/CGST/SGST
+                # split natively at set_missing_values() time, replacing
+                # the flat charge_type="Actual" pattern (CLAUDE.md #206).
+                "tax_rate": float(line.get("tax_rate") or 0),
             }
             # BOGO / promo / bundle free items — EE sends selling_price=None
             # (rate resolves to 0). Without is_free_item=1, ERPNext's
@@ -1419,6 +1453,105 @@ def _resolve_default_sales_tax_account(company: str) -> str:
         "Compliance, or create a generic 'Output Tax' / 'Sales Taxes' "
         "Account."
     )
+
+
+# ============================================================
+# PR G' — IC-native tax template resolvers
+# ============================================================
+#
+# Replaces the legacy charge_type="Actual" flat-row pattern (which
+# bypassed India Compliance's line-level IGST/CGST/SGST split and
+# violated CLAUDE.md #206). The new pattern:
+#
+#   SI.taxes_and_charges = "<Sales Taxes and Charges Template name>"
+#   SI.items[].item_tax_template = "<Item Tax Template name>"
+#
+# India Compliance's set_missing_values() then generates the correct
+# tax rows (IGST for inter-state, CGST+SGST for intra-state) using
+# the SI's place_of_supply (already set by _derive_place_of_supply).
+#
+# The existing _check_variance still runs post-insert to catch drift
+# between EE's authoritative total_tax and IC's computed total — that
+# safety net is preserved.
+
+
+def _resolve_gst_sales_taxes_template(
+    *, company: str, place_of_supply: str | None, seller_state: str | None
+) -> str | None:
+    """Return the Sales Taxes and Charges Template name matching this
+    company + direction (intra vs inter state). Naming convention on
+    Puresta + Health Q sites:
+
+        Output GST In-state - {abbr}      (intra-state = CGST + SGST)
+        Output GST Out-state - {abbr}     (inter-state = IGST)
+
+    Direction derived from place_of_supply vs the seller's state.
+    Returns None (caller falls back to no template + variance-check-only)
+    when the template doesn't exist — safer than raising, which would
+    block SI creation for a config gap.
+    """
+    abbr = frappe.get_cached_value("Company", company, "abbr")
+    if not abbr:
+        return None
+
+    # Place of supply format is "NN-CanonicalStateName" (per PR #263).
+    # Strip the numeric prefix to compare state names.
+    pos_state = ""
+    if place_of_supply and "-" in place_of_supply:
+        pos_state = place_of_supply.split("-", 1)[1].strip().lower()
+
+    is_intra = bool(
+        seller_state and pos_state
+        and _canonical_state_name(seller_state).lower() == pos_state
+    )
+    direction = "In-state" if is_intra else "Out-state"
+    template_name = f"Output GST {direction} - {abbr}"
+
+    if frappe.db.exists("Sales Taxes and Charges Template", template_name):
+        return template_name
+
+    frappe.logger().warning(
+        f"§12 PR G': Sales Taxes and Charges Template {template_name!r} "
+        f"not found for company={company!r}. SI will insert without a "
+        f"template — variance check will still run against EE's total_tax."
+    )
+    return None
+
+
+def _resolve_item_tax_template(*, company: str, tax_rate: float) -> str | None:
+    """Return the Item Tax Template name matching this company + rate.
+    Naming convention:
+
+        GST 5% - {abbr}, GST 12% - {abbr}, GST 18% - {abbr}, GST 28% - {abbr}
+        Nil-Rated - {abbr}          (for rate=0)
+
+    Returns None for non-standard rates (IC then falls back to the
+    Item Master's default tax template).
+    """
+    abbr = frappe.get_cached_value("Company", company, "abbr")
+    if not abbr:
+        return None
+
+    rate_int = int(round(tax_rate))
+    if rate_int in (5, 12, 18, 28):
+        template_name = f"GST {rate_int}% - {abbr}"
+    elif rate_int == 0:
+        template_name = f"Nil-Rated - {abbr}"
+    else:
+        # Non-standard rate — IC will use the Item Master's default
+        frappe.logger().warning(
+            f"§12 PR G': non-standard tax_rate {tax_rate!r} — no "
+            f"matching Item Tax Template. Falling back to Item's default."
+        )
+        return None
+
+    if frappe.db.exists("Item Tax Template", template_name):
+        return template_name
+    frappe.logger().warning(
+        f"§12 PR G': Item Tax Template {template_name!r} not found — "
+        f"falling back to Item's default tax template."
+    )
+    return None
 
 
 # ============================================================
