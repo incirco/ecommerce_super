@@ -198,9 +198,9 @@
    "fieldname": "conversion_rate_source",
    "fieldtype": "Select",
    "label": "Conversion Rate Source",
-   "options": "\nERPNext Currency Exchange\nEE Tax Export (manual)\nEE API (native)\nManual override",
+   "options": "\nERPNext Currency Exchange\nEE Tax Export (manual)\nEE API (native)\nManual override\nBackfill from existing SI",
    "default": "",
-   "description": "Provenance of the conversion_rate field. Set at SI creation time by the builder. 'ERPNext Currency Exchange' is the default source until EE adds conversion_rate to getAllOrders — then flips to 'EE API (native)' and confirmation becomes automatic."
+   "description": "Provenance of the conversion_rate field. Set at SI creation time by the builder. 'ERPNext Currency Exchange' is the default source until EE adds conversion_rate to getAllOrders — then flips to 'EE API (native)' and confirmation becomes automatic. 'Backfill from existing SI' marks Shipment rows created retrospectively by the PR #278 backfill patch (rate copied from the SI's existing conversion_rate field, no EE-side verification possible)."
   },
   {
    "fieldname": "currency_col_break",

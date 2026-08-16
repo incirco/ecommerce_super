@@ -414,5 +414,23 @@ class TestFxConfirmationGate(unittest.TestCase):
         mock_handle.assert_called_once()
 
 
+# ============================================================
+# Post-audit HIGH-3: sweeper query must exclude Credit Notes
+# ============================================================
+
+
+class TestSweeperExcludesCreditNotes(unittest.TestCase):
+    """The `_find_pending_shipments` SQL must include
+    `AND si.is_return = 0`. Without it, Draft CNs waiting for their
+    forward SI to submit would be dispatched to `_handle_manifested`
+    → si.submit() fails because return_against is still Draft →
+    retry every hour indefinitely."""
+
+    def test_query_string_filters_out_credit_notes(self):
+        import inspect
+        src = inspect.getsource(mod._find_pending_shipments)
+        self.assertIn("is_return = 0", src)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1234,21 +1234,27 @@ def _build_credit_note_for_reversed_order(
         ),
     }
 
-    # Mirror EE-supplied taxes with negative amounts. If original had a
-    # single Actual tax row (Path 2), the CN carries the negation of
-    # that row so the reversal exactly matches the tax that was raised.
-    if original_si.taxes:
-        cn_dict["taxes"] = [
-            {
-                "charge_type": t.charge_type,
-                "account_head": t.account_head,
-                "tax_amount": -abs(float(t.tax_amount or 0)),
-                "description": (
-                    f"Credit Note reversal — {t.description or ''}"
-                ),
-            }
-            for t in original_si.taxes
-        ]
+    # Post-audit LOW-1 fix 2026-08-17: previously mirrored original_si.
+    # taxes verbatim with negated tax_amount. That worked when originals
+    # used the flat charge_type="Actual" pattern, but PR G' switched
+    # originals to `taxes_and_charges` template + per-item item_tax_
+    # template. IC-generated tax rows have `charge_type="On Net Total"`
+    # (or similar) with `rate` populated by IC — copying those with
+    # only `tax_amount` set and `rate` missing produces zero-tax rows
+    # on the CN (ERPNext re-derives from rate).
+    #
+    # Fix: rely on cn_dict["taxes_and_charges"] already set above to
+    # the original SI's template. ERPNext's set_missing_values() at
+    # CN insert time regenerates the tax rows fresh, using the
+    # per-item item_tax_template mirrored via `sales_invoice_item`
+    # back-refs in the items[] list. Negative qty → negative
+    # taxable amount → negative tax amount naturally.
+    #
+    # For legacy CNs against SIs still carrying the old flat-Actual
+    # tax pattern (submitted pre-PR-#275), the same template on the
+    # CN will produce IC-style rows that may over/under-count
+    # slightly vs the original's Actual row. Accept the small delta
+    # — those SIs will be re-issued via the backfill flow if needed.
 
     cn = frappe.get_doc(cn_dict)
     cn.flags.ignore_permissions = True
@@ -1839,17 +1845,27 @@ def _build_shipment_row(
         "conversion_rate": float(
             getattr(si, "conversion_rate", None) or 1
         ),
-        # PR D — Auto-confirm the rate for INR invoices (no FX drift
-        # possible). Non-INR invoices land with confirmed=0 → the
-        # pending-manifest sweeper (PR #274) will NOT submit them
-        # until ops verifies the rate against EE's tax export/portal
-        # and ticks the box. Guards against FX drift between our
-        # Currency Exchange DocType and EE's locked-in rate.
+        # PR D — Auto-confirm rate for:
+        #   - INR invoices (no FX drift possible), OR
+        #   - Credit Notes (inherit rate from an already-confirmed
+        #     original SI — no separate ops verification possible or
+        #     needed. Post-audit HIGH-2 fix 2026-08-17.)
+        #
+        # Non-INR original SIs land with confirmed=0 → the pending-
+        # manifest sweeper (PR #274) will NOT submit them until ops
+        # verifies the rate against EE's tax export/portal and ticks
+        # the box. Guards against FX drift between our Currency
+        # Exchange DocType and EE's locked-in rate.
         "conversion_rate_confirmed": (
             1 if (
-                (order_row.get("invoice_currency_code") or "").strip().upper()
-                or "INR"
-            ) == "INR" else 0
+                # INR = no FX to confirm
+                (
+                    (order_row.get("invoice_currency_code") or "").strip().upper()
+                    or "INR"
+                ) == "INR"
+                # OR this is a Credit Note (rate inherited from source)
+                or bool(original_sales_invoice)
+            ) else 0
         ),
         "conversion_rate_source": "ERPNext Currency Exchange",
         "total_amount_native": float(

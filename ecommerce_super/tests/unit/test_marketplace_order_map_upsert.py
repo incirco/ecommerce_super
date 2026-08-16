@@ -243,6 +243,46 @@ class TestBuildShipmentRow(unittest.TestCase):
         self.assertEqual(row["original_sales_invoice"], "SI-2026-00099")
         self.assertEqual(row["ecs_easyecom_event_type"], "Sold(cancelled)")
 
+    def test_foreign_currency_cn_row_auto_confirms(self):
+        """Post-audit HIGH-2 fix: a Credit Note's Shipment child must
+        NOT sit at awaiting_fx_confirmation. The CN inherits its rate
+        from the original SI (already confirmed there); ops has
+        nothing separate to verify on the CN.
+
+        Without this behaviour, foreign-currency CNs would block the
+        sweeper's cancel/return path forever."""
+        row = _build_shipment_row(
+            si=_si("SI-2026-00099-CN"),
+            order_row={
+                "invoice_number": "CHR62627-10245",
+                "invoice_currency_code": "CAD",
+            },
+            ee_invoice_id="CN-500",
+            event_type="Returned",
+            original_sales_invoice="SI-2026-00099",  # CN back-ref present
+        )
+        # CAD → NOT INR, but the presence of original_sales_invoice
+        # marks this as a CN → auto-confirm.
+        self.assertEqual(row["invoice_currency_code"], "CAD")
+        self.assertEqual(row["conversion_rate_confirmed"], 1)
+
+    def test_foreign_currency_original_si_row_stays_unconfirmed(self):
+        """Regression guard: a NON-CN foreign SI (original_sales_invoice
+        is None) still lands unconfirmed — the sweeper's FX gate must
+        still catch these for ops verification."""
+        row = _build_shipment_row(
+            si=_si("SI-2026-00100"),
+            order_row={
+                "invoice_number": "BHR52627-489",
+                "invoice_currency_code": "CAD",
+            },
+            ee_invoice_id="687108535",
+            event_type="Sold",
+            original_sales_invoice=None,  # not a CN
+        )
+        self.assertEqual(row["invoice_currency_code"], "CAD")
+        self.assertEqual(row["conversion_rate_confirmed"], 0)
+
 
 # ============================================================
 # _upsert_marketplace_order_map
