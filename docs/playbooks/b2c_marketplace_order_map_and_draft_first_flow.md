@@ -165,6 +165,58 @@ Once EE adds `conversion_rate` to `getAllOrders` response:
 - Update `_build_shipment_row` to set `conversion_rate_source = "EE API (native)"` and auto-confirm
 - FX gate becomes a no-op for all newly-polled orders
 
+### 5e. Credit Note currency drift (post-audit MEDIUM-1)
+**Symptom**: rare — a Credit Note's Shipment child has `invoice_currency_code` differing from the parent Marketplace Order Map's original SI.
+**When it happens**: EE's payload on the return / cancel event carries a different `invoice_currency_code` than the payload on the original order. Extremely rare (EE normally emits currency consistently across an order's lifecycle) — but observed when the marketplace re-issues an invoice mid-cycle after a currency conversion policy change on their side.
+**Impact**: the CN's `conversion_rate` was inherited from the original SI's rate — safe unless the currency itself changed. If EE now reports a different currency, the inherited rate is nonsense.
+**Fix**:
+1. Query the anomaly:
+   ```sql
+   SELECT sh.parent AS mp_order_map, sh.sales_invoice, sh.invoice_currency_code,
+          orig.invoice_currency_code AS original_currency
+   FROM `tabEasyEcom Order Map Shipment` sh
+   JOIN `tabEasyEcom Order Map Shipment` orig ON orig.name = (
+       SELECT o2.name FROM `tabEasyEcom Order Map Shipment` o2
+       WHERE o2.parent = sh.parent AND o2.original_sales_invoice IS NULL
+       LIMIT 1
+   )
+   WHERE sh.original_sales_invoice IS NOT NULL
+     AND sh.invoice_currency_code != orig.invoice_currency_code;
+   ```
+2. For each result: verify with finance which currency is authoritative
+3. Cancel the CN (if Draft: delete; if Submitted: cancel + re-issue via backfill flow with correct currency)
+4. Manually re-book the reversal with the correct currency + rate
+
+### 5f. Legacy foreign-currency Drafts after backfill (post-audit MEDIUM-2)
+**Symptom**: pre-PR-#276 Draft foreign-currency SIs (created before the multi-currency wiring existed) get Shipment rows via the backfill patch with `conversion_rate_confirmed=0`. Sweeper won't submit them.
+**Why**: at the time these SIs were created, our code didn't know to set `SI.currency` or `SI.conversion_rate` — foreign-currency amounts landed as if they were INR (the 68x under-count problem PR #276 fixed). The backfill can only mirror what's on the SI; it can't retroactively fix the currency handling.
+**Recovery options**:
+
+**Option A — cancel + re-issue (recommended)**
+1. Query the affected SIs:
+   ```sql
+   SELECT sh.sales_invoice, sh.invoice_currency_code, sh.conversion_rate,
+          si.grand_total, si.creation
+   FROM `tabEasyEcom Order Map Shipment` sh
+   JOIN `tabSales Invoice` si ON si.name = sh.sales_invoice
+   WHERE sh.conversion_rate_source = 'Backfill from existing SI'
+     AND sh.invoice_currency_code != 'INR'
+     AND si.docstatus = 0
+     AND sh.conversion_rate_confirmed = 0;
+   ```
+2. For each row: verify EE's current state via `bench execute ecommerce_super.easyecom.smoke_prechecks._puresta_probe_one_order.run --kwargs '{"invoice_id": <n>}'`
+3. Delete the Draft SI (Draft = safe to delete)
+4. Re-poll the marketplace account (or the specific `invoice_id` via a targeted probe) — new SI lands with correct multi-currency handling per PR #276
+
+**Option B — accept + tick (only if the value is close to correct)**
+1. Same query as Option A
+2. For each row: compute `si.grand_total × <correct EE rate>` vs the current `si.base_grand_total`. If within 5%, may not be worth re-issuing.
+3. Update `Shipment.conversion_rate` to the correct EE rate
+4. Tick `Conversion Rate Confirmed by Ops`
+5. Note: this leaves the SI with wrong item-level `rate` values (still in the pre-#276 mis-interpreted form). Sub-line-level recon will show as mismatched — accept as legacy noise.
+
+**Puresta prod expectation**: ~0-4 rows affected (foreign B2C is rare, and most historical SIs are already submitted, not Draft). Ops action time: ~5 min per row via Option A.
+
 ---
 
 ## 6. GST compliance considerations
@@ -216,6 +268,9 @@ This is the safety net for template misconfiguration or EE-side computation drif
 - **#274** — pending-manifest sweeper (hourly cron)
 - **#275** — fix B2C tax injection to IC-native pattern (CLAUDE.md #206 compliance)
 - **#276** — multi-currency support + FX confirmation gate
+- **#277** — this playbook (initial version)
+- **#278** — backfill patch for pre-#273 SIs
+- **#279** — post-audit hotfix bundle (Select-option fix, is_return filters, CN auto-confirm)
 
 ## 9. SPEC amendment status
 
@@ -227,4 +282,4 @@ Methodology reviews + promotes to `spec_sections/SPEC_12_patch_notes.md` on thei
 
 ---
 
-*Last updated: 2026-08-17*
+*Last updated: 2026-08-17 (post-audit revision)*
