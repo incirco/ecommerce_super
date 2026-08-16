@@ -161,11 +161,38 @@ def build_si_from_ee_order(
     # ---- 6. Build the SI ----
     posting_date = _resolve_posting_date(order_row)
 
+    # PR D — multi-currency handling for foreign-currency B2C exports.
+    # EE getAllOrders returns `total_amount` + per-line `selling_price`
+    # in the invoice's NATIVE currency (SGD / CAD / NPR / etc.), NOT
+    # in INR. Discovered via Aug 2026 Puresta reconciliation: 4 export
+    # invoices reconciled to zero delta once native → INR conversion
+    # was applied. See drafts/spec_sections/spec_12_amendment_restore_
+    # mp_order_map.draft.md for the analysis.
+    invoice_currency = (
+        (order_row.get("invoice_currency_code") or "").strip().upper()
+        or "INR"
+    )
+    conversion_rate = _resolve_currency_conversion_rate(
+        from_currency=invoice_currency,
+        to_currency=frappe.get_cached_value(
+            "Company", marketplace_account.company, "default_currency"
+        ) or "INR",
+        transaction_date=posting_date,
+    )
+
     si_dict: dict[str, Any] = {
         "doctype": "Sales Invoice",
         "customer": pool_choice["customer"],
         "company": marketplace_account.company,
         "posting_date": posting_date,
+        # PR D — native invoice currency (usually INR; SGD/CAD/NPR for
+        # export orders). Ecommerce_super lets ERPNext do the INR
+        # conversion natively via SI.currency + SI.conversion_rate —
+        # matches Frappe-primitives-first rule (CLAUDE.md). Item rates
+        # in items[] stay in native currency; ERPNext computes
+        # base_grand_total = grand_total × conversion_rate.
+        "currency": invoice_currency,
+        "conversion_rate": conversion_rate,
         # backfill_mode: skip Stock Ledger movement. The stock has
         # already moved via EE in real time; a historical SI insert
         # with update_stock=1 would double-deplete the ERPNext ledger.
@@ -1154,8 +1181,17 @@ def _build_credit_note_for_reversed_order(
         # Credit-note contract
         "is_return": 1,
         "return_against": original_si.name,
+        # PR D — inherit currency + conversion_rate from the original
+        # SI. Credit Note reverses the invoice in the SAME currency +
+        # AT THE SAME rate so base amounts net to exactly zero on the
+        # INR ledger. Using a fresh conversion_rate here would leave a
+        # residual INR gain/loss from FX drift between the two dates.
         "currency": original_si.currency or "INR",
-        "conversion_rate": 1,
+        "conversion_rate": (
+            float(original_si.conversion_rate or 1)
+            if (original_si.currency or "INR") != "INR"
+            else 1
+        ),
         "ignore_pricing_rule": 1,
         # Mirror the header dimensions from the original — recon /
         # channel-wise reports treat the reversal on the same axes.
@@ -1555,6 +1591,81 @@ def _resolve_item_tax_template(*, company: str, tax_rate: float) -> str | None:
 
 
 # ============================================================
+# PR D — Multi-currency conversion resolver
+# ============================================================
+#
+# Foreign-currency B2C exports (SGD / CAD / NPR / USD etc.) come back
+# from getAllOrders with total_amount + line selling_prices in the
+# NATIVE currency, NOT INR. Puresta Aug 2026 reconciliation:
+# 4 export invoices had native-CAD/SGD/NPR values that our puller
+# was treating as INR, producing wildly wrong SI totals.
+#
+# The fix (Frappe-primitives-first): set SI.currency to the native
+# code + SI.conversion_rate to the FX rate. ERPNext then natively
+# computes base_grand_total = grand_total × conversion_rate for the
+# INR ledger. Everything downstream (GSTR-1 base amounts, GL entries,
+# variance checks) works correctly without custom conversion logic
+# in ecommerce_super.
+
+
+def _resolve_currency_conversion_rate(
+    *,
+    from_currency: str,
+    to_currency: str,
+    transaction_date: Any,
+) -> float:
+    """Look up the FX rate for from_currency → to_currency on the
+    transaction date, using ERPNext's native Currency Exchange lookup.
+
+    Same-currency short-circuit (INR → INR) returns 1.0 without a
+    DB call — the common case for domestic invoices.
+
+    For cross-currency lookups, defers to ERPNext's
+    `erpnext.setup.utils.get_exchange_rate`, which:
+      1. Checks the Currency Exchange doctype for a manually-entered
+         rate keyed on (date, from, to) — preferred source
+      2. Falls back to the currency_exchange_rate service configured
+         in System Settings (frappe.exchange APIs)
+      3. Returns 0 if nothing resolves
+
+    Raises B2CBuilderError when rate resolves to 0 for non-same-
+    currency case — a real gap that would silently produce wrong INR
+    base amounts. Ops adds a Currency Exchange row and re-polls.
+    """
+    if from_currency == to_currency:
+        return 1.0
+
+    try:
+        from erpnext.setup.utils import get_exchange_rate
+    except ImportError as exc:
+        raise B2CBuilderError(
+            f"§12 PR D: erpnext.setup.utils.get_exchange_rate not "
+            f"importable ({exc!s}). Cannot resolve {from_currency} → "
+            f"{to_currency} conversion — refusing to insert SI with "
+            f"a wrong INR base."
+        ) from exc
+
+    rate = get_exchange_rate(
+        from_currency=from_currency,
+        to_currency=to_currency,
+        transaction_date=transaction_date,
+    ) or 0
+
+    if not rate or rate <= 0:
+        raise B2CBuilderError(
+            f"§12 PR D: no Currency Exchange rate for {from_currency} → "
+            f"{to_currency} on {transaction_date}. Refusing to insert "
+            f"SI — a rate of 0 or 1 would land wildly-wrong INR base "
+            f"amounts on the ledger. Fix: add a Currency Exchange row "
+            f"for (date={transaction_date}, from={from_currency}, "
+            f"to={to_currency}, exchange_rate=<rate>) via Setup → "
+            f"Currency Exchange, then re-poll this order."
+        )
+
+    return float(rate)
+
+
+# ============================================================
 # Marketplace Order Map upsert (restored per PR #272 amendment)
 # ============================================================
 
@@ -1717,11 +1828,17 @@ def _build_shipment_row(
         "sales_channel": order_row.get("sales_channel") or None,
         "awb_number": order_row.get("awb_number") or None,
         "courier": order_row.get("courier") or None,
-        # Currency — captured but not converted here. PR D adds the
-        # SI.currency + SI.conversion_rate wiring for foreign currency
-        # invoices. Native amounts preserved on the child for audit.
-        "invoice_currency_code": order_row.get("invoice_currency_code") or "INR",
-        "conversion_rate": 1,
+        # Currency — native from EE + actual conversion rate the SI
+        # was created with. Native amounts preserved on the child for
+        # audit. Reading SI.currency / SI.conversion_rate keeps this
+        # in sync with what ERPNext will use for base_grand_total.
+        "invoice_currency_code": (
+            (order_row.get("invoice_currency_code") or "").strip().upper()
+            or "INR"
+        ),
+        "conversion_rate": float(
+            getattr(si, "conversion_rate", None) or 1
+        ),
         "total_amount_native": float(
             order_row.get("total_amount")
             or order_row.get("invoice_amount")
