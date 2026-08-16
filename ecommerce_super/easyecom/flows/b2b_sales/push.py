@@ -95,6 +95,14 @@ def on_submit_push(doc: Any, method: str | None = None) -> None:
     """
     if doc.doctype != "Sales Order":
         return
+    # Backfill escape hatch — when b2b_sales/backfill_from_ee is
+    # replaying a historical EE-side invoice into ERP, the SO already
+    # exists on EE's side (that's the whole point of retrofitting) and
+    # re-pushing would create duplicates. The backfill sets this flag
+    # around SO.submit() to skip the push cleanly.
+    if getattr(frappe.local, "flags", None) and \
+       frappe.local.flags.get("easyecom_b2b_backfill_in_flight"):
+        return
     if not is_section_11_gated(doc):
         return
     ee_account = get_ee_account_for_warehouse(doc.set_warehouse)
