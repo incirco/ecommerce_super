@@ -1,0 +1,219 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-08-17 00:00:00",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "title_field": "marketplace_order_id",
+ "field_order": [
+  "naming_series",
+  "marketplace_order_id",
+  "marketplace",
+  "marketplace_account",
+  "company",
+  "easyecom_order_id",
+  "settlement_section",
+  "settlement_status",
+  "expected_settlement_date",
+  "settlement_completed_at",
+  "recon_section",
+  "actual_net",
+  "variance_amount",
+  "variance_pct",
+  "total_shipments",
+  "shipments_section",
+  "shipments"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Naming Series",
+   "options": "MOM-.YYYY.-.#####",
+   "default": "MOM-.YYYY.-.#####",
+   "reqd": 1,
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "marketplace_order_id",
+   "fieldtype": "Data",
+   "label": "Marketplace Order ID",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "length": 140,
+   "description": "The marketplace-issued order number (e.g. Shopify SQ-440390821, B2B/2438421785483405985). The primary join key against Settlement Line.marketplace_order_id in the recon engine. Uniqueness enforced per (marketplace, marketplace_order_id, company) in controller validate()."
+  },
+  {
+   "fieldname": "marketplace",
+   "fieldtype": "Link",
+   "label": "Marketplace",
+   "options": "Marketplace",
+   "reqd": 1,
+   "search_index": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Flat channel list. Half of the composite uniqueness key. Drives recon Rate Card / Settlement Template resolution downstream."
+  },
+  {
+   "fieldname": "marketplace_account",
+   "fieldtype": "Link",
+   "label": "Marketplace Account",
+   "options": "EasyEcom Marketplace Account",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "The specific Marketplace Account (per-Company × per-Marketplace) the order was pulled through. Distinguishes multi-account setups on the same marketplace (e.g. two Amazon FBA accounts)."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "read_only": 1,
+   "search_index": 1,
+   "in_standard_filter": 1,
+   "description": "Third element of the composite uniqueness key. Enables permission_query_conditions to scope Maps to the user's companies (§31.8.3 pattern)."
+  },
+  {
+   "fieldname": "easyecom_order_id",
+   "fieldtype": "Data",
+   "label": "EasyEcom Order ID",
+   "search_index": 1,
+   "read_only": 1,
+   "length": 40,
+   "description": "EE's internal numeric order id (data.orders[].order_id from getAllOrders). Distinct from marketplace_order_id (which is the marketplace's own reference)."
+  },
+  {
+   "fieldname": "settlement_section",
+   "fieldtype": "Section Break",
+   "label": "Settlement Lifecycle",
+   "collapsible": 0
+  },
+  {
+   "fieldname": "settlement_status",
+   "fieldtype": "Select",
+   "label": "Settlement Status",
+   "options": "Forecast\nPartial\nSettled\nDisputed",
+   "default": "Forecast",
+   "reqd": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Recon engine (ecommerce_super_recon) writes this. Forecast (default at Map creation) → Partial → Settled | Disputed. Ecommerce_super never writes anything except the initial Forecast at Map creation time."
+  },
+  {
+   "fieldname": "expected_settlement_date",
+   "fieldtype": "Date",
+   "label": "Expected Settlement Date",
+   "description": "Computed at Map creation from marketplace-specific SLA (via Recon Marketplace Settings.pending_window_days). Recon may update on partial settlement. Used by Net Receivables view (PRD §10.3.1) to age unsettled orders."
+  },
+  {
+   "fieldname": "settlement_completed_at",
+   "fieldtype": "Datetime",
+   "label": "Settlement Completed At",
+   "read_only": 1,
+   "description": "Recon writes this when settlement_status transitions to Settled. Immutable thereafter."
+  },
+  {
+   "fieldname": "recon_section",
+   "fieldtype": "Section Break",
+   "label": "Recon Writeback",
+   "collapsible": 1,
+   "description": "All fields in this section are written by the recon engine (ecommerce_super_recon). Empty on non-recon sites."
+  },
+  {
+   "fieldname": "actual_net",
+   "fieldtype": "Currency",
+   "label": "Actual Net Settlement",
+   "read_only": 1,
+   "description": "Populated by the Recon module. Sum of settled amounts from Settlement Lines matched to this order's SIs."
+  },
+  {
+   "fieldname": "variance_amount",
+   "fieldtype": "Currency",
+   "label": "Variance Amount",
+   "read_only": 1,
+   "description": "Populated by the Recon module. actual_net minus expected_net (from expected-payout engine)."
+  },
+  {
+   "fieldname": "variance_pct",
+   "fieldtype": "Percent",
+   "label": "Variance %",
+   "read_only": 1,
+   "description": "Populated by the Recon module. variance_amount as a percentage of expected_net."
+  },
+  {
+   "fieldname": "total_shipments",
+   "fieldtype": "Int",
+   "label": "Total Shipments",
+   "read_only": 1,
+   "default": 0,
+   "description": "Auto-computed from len(shipments) in controller validate(). Denormalised for query performance (list view + Net Receivables grouping)."
+  },
+  {
+   "fieldname": "shipments_section",
+   "fieldtype": "Section Break",
+   "label": "Shipments (per Sales Invoice)"
+  },
+  {
+   "fieldname": "shipments",
+   "fieldtype": "Table",
+   "label": "Shipments",
+   "options": "EasyEcom Order Map Shipment",
+   "description": "One row per Sales Invoice for this marketplace order. Handles split-shipment cases (one marketplace order → many EE invoice_ids → many ERPNext SIs). Every EE metadata field (invoice_id, invoice_number, manifest_date, batch_id, invoice_currency_code, sales_channel, payment gateway, IRN cross-ref, e-way bill cross-ref) lives on the child, keeping row-size impact on tabSales Invoice at ZERO."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-17 00:00:00",
+ "modified_by": "Administrator",
+ "module": "EasyEcom",
+ "name": "EasyEcom Marketplace Order Map",
+ "naming_rule": "By \"Naming Series\" field",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "role": "EasyEcom Operator",
+   "permlevel": 0,
+   "read": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom FDE",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "EasyEcom System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  },
+  {
+   "role": "System Manager",
+   "permlevel": 0,
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}

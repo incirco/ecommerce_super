@@ -1,0 +1,281 @@
+{
+ "actions": [],
+ "creation": "2026-08-17 00:00:00",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "istable": 1,
+ "module": "EasyEcom",
+ "name": "EasyEcom Order Map Shipment",
+ "field_order": [
+  "sales_invoice",
+  "ecs_easyecom_event_type",
+  "original_sales_invoice",
+  "ee_identifiers_section",
+  "invoice_id",
+  "invoice_number",
+  "easyecom_invoice_pdf_url",
+  "ee_col_break_1",
+  "batch_id",
+  "batch_created_at",
+  "sales_channel",
+  "manifest_section",
+  "manifest_date",
+  "manifest_no",
+  "manifest_col_break",
+  "awb_number",
+  "courier",
+  "currency_section",
+  "invoice_currency_code",
+  "conversion_rate",
+  "currency_col_break",
+  "total_amount_native",
+  "total_tax_native",
+  "payment_section",
+  "payment_gateway_name",
+  "payment_gateway_transaction_number",
+  "compliance_section",
+  "irn",
+  "ack_no",
+  "ack_date",
+  "compliance_col_break",
+  "eway_bill_number",
+  "eway_bill_date"
+ ],
+ "fields": [
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "label": "Sales Invoice",
+   "options": "Sales Invoice",
+   "reqd": 1,
+   "in_list_view": 1,
+   "search_index": 1,
+   "description": "The ERPNext SI mirroring this EE shipment. Populated at SI creation time by the b2c invoice_builder / credit_note builder. One shipment row per SI."
+  },
+  {
+   "fieldname": "ecs_easyecom_event_type",
+   "fieldtype": "Select",
+   "label": "Event Type",
+   "options": "\nSold\nSold(cancelled)\nReturned\nRTO",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "description": "Synthesised from EE order_status + invoice_number presence, matching EE tax export Invoice Status column: Sold (Shipped/Confirmed/Manifest Scanned/Returned with a Credit Note pair), Sold(cancelled) (Cancelled after invoicing), Returned (post-manifest return with paired CN), RTO (returned-to-origin). Blank on Draft/pending SIs before terminal state resolves."
+  },
+  {
+   "fieldname": "original_sales_invoice",
+   "fieldtype": "Link",
+   "label": "Original Sales Invoice",
+   "options": "Sales Invoice",
+   "in_list_view": 0,
+   "description": "For Credit Note / Sales Return rows: the SI they reverse. Enables recon to net Forward (SI) against Reverse (CN) at order grain per RECON_SPEC §6.4. Null on original SIs (only populated on CN/SR shipment rows)."
+  },
+  {
+   "fieldname": "ee_identifiers_section",
+   "fieldtype": "Section Break",
+   "label": "EasyEcom Identifiers"
+  },
+  {
+   "fieldname": "invoice_id",
+   "fieldtype": "Data",
+   "label": "EE Invoice ID (numeric)",
+   "length": 40,
+   "search_index": 1,
+   "description": "EE's internal numeric invoice_id (data.orders[].invoice_id). Used by getAllOrders lookups. Distinct from invoice_number (which is the human-readable alphanumeric)."
+  },
+  {
+   "fieldname": "invoice_number",
+   "fieldtype": "Data",
+   "label": "EE Invoice Number",
+   "length": 60,
+   "search_index": 1,
+   "in_list_view": 1,
+   "description": "EE's alphanumeric invoice number (e.g. BHR52627-489, CHR62627-10167). Appears on the tax invoice PDF and in EE's tax export CSV EE Invoice No column. Primary reconciliation key against EE tax export."
+  },
+  {
+   "fieldname": "easyecom_invoice_pdf_url",
+   "fieldtype": "Small Text",
+   "label": "EE Invoice PDF URL",
+   "description": "S3 URL of the tax invoice PDF hosted by EE (documents.easyecom_invoice from getAllOrders). Small Text so URL length is unbounded and off-row storage."
+  },
+  {
+   "fieldname": "ee_col_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "batch_id",
+   "fieldtype": "Data",
+   "label": "Batch ID",
+   "length": 40,
+   "description": "EE's manifest batch identifier (batch_id from getAllOrders). Orders manifested together share a batch. Useful for correlating dispatch waves."
+  },
+  {
+   "fieldname": "batch_created_at",
+   "fieldtype": "Datetime",
+   "label": "Batch Created At",
+   "description": "When EE created the manifest batch (batch_created_at from getAllOrders). Distinct from manifest_date — batch_created_at is the operational grouping timestamp; manifest_date is when this specific shipment was marked manifested."
+  },
+  {
+   "fieldname": "sales_channel",
+   "fieldtype": "Data",
+   "label": "Sales Channel",
+   "length": 60,
+   "in_standard_filter": 1,
+   "description": "EE Sales Channel value (Marketplace B2C / Sample / ECOM / Offline GT / IIA / Offline MT / blank). Distinct from marketplace — same marketplace can have multiple sales channels (e.g. Shopify main vs Sample vs ECOM)."
+  },
+  {
+   "fieldname": "manifest_section",
+   "fieldtype": "Section Break",
+   "label": "Manifest / Dispatch"
+  },
+  {
+   "fieldname": "manifest_date",
+   "fieldtype": "Datetime",
+   "label": "Manifest Date",
+   "search_index": 1,
+   "in_list_view": 1,
+   "description": "When EE marked the shipment as manifested (goods physically left the warehouse). Blank means the shipment is pending manifest — SI stays in Draft until this populates."
+  },
+  {
+   "fieldname": "manifest_no",
+   "fieldtype": "Data",
+   "label": "Manifest No",
+   "length": 60,
+   "description": "LR / manifest document number (manifest_no from getAllOrders). Populated when a physical LR is printed (B2B / bulk shipments). Rarely populated for retail marketplace shipments."
+  },
+  {
+   "fieldname": "manifest_col_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "awb_number",
+   "fieldtype": "Data",
+   "label": "AWB Number",
+   "length": 60,
+   "search_index": 1,
+   "description": "Airway Bill / tracking number from the carrier (awb_number from getAllOrders)."
+  },
+  {
+   "fieldname": "courier",
+   "fieldtype": "Data",
+   "label": "Courier",
+   "length": 60,
+   "description": "Courier partner name (courier from getAllOrders — e.g. Delhivery, SelfShip, Bluedart)."
+  },
+  {
+   "fieldname": "currency_section",
+   "fieldtype": "Section Break",
+   "label": "Currency"
+  },
+  {
+   "fieldname": "invoice_currency_code",
+   "fieldtype": "Data",
+   "label": "Invoice Currency Code",
+   "length": 3,
+   "default": "INR",
+   "in_standard_filter": 1,
+   "description": "ISO currency code from getAllOrders (invoice_currency_code). For export invoices this will be SGD / CAD / NPR / USD etc. total_amount_native + conversion_rate reconcile back to INR-denominated SI.grand_total. Non-INR shipments must have conversion_rate populated or the SI must use ERPNext multi-currency (currency + conversion_rate on SI itself)."
+  },
+  {
+   "fieldname": "conversion_rate",
+   "fieldtype": "Float",
+   "label": "Conversion Rate to INR",
+   "precision": "9",
+   "default": "1",
+   "description": "Native currency → INR conversion rate. 1.0 when invoice_currency_code = INR. For foreign currency invoices, sourced from EE's tax export (when EE adds the field to getAllOrders response) or from ERPNext Currency Exchange DocType keyed by (from_currency, to_currency=INR, exchange_date=invoice_date). total_amount_native × conversion_rate = SI.base_grand_total."
+  },
+  {
+   "fieldname": "currency_col_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "total_amount_native",
+   "fieldtype": "Float",
+   "label": "Total Amount (Native Currency)",
+   "precision": "2",
+   "description": "getAllOrders total_amount as returned — in invoice_currency_code, NOT INR. Preserved verbatim for audit / recon against EE tax export. INR equivalent lives on SI.base_grand_total after multi-currency conversion."
+  },
+  {
+   "fieldname": "total_tax_native",
+   "fieldtype": "Float",
+   "label": "Total Tax (Native Currency)",
+   "precision": "2",
+   "description": "getAllOrders total_tax as returned. Foreign-currency exports are typically 0-tax (zero-rated under §16(1)(a) IGST Act)."
+  },
+  {
+   "fieldname": "payment_section",
+   "fieldtype": "Section Break",
+   "label": "Payment",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "payment_gateway_name",
+   "fieldtype": "Data",
+   "label": "Payment Gateway Name",
+   "length": 60,
+   "description": "Payment gateway name from getAllOrders (e.g. Gokwik UPI, Gokwik Wallets, Gokwik Cards, Stripe, Razorpay). Populated on Prepaid orders where the marketplace routed payment through a gateway."
+  },
+  {
+   "fieldname": "payment_gateway_transaction_number",
+   "fieldtype": "Data",
+   "label": "Payment Gateway Transaction Number",
+   "length": 100,
+   "description": "Gateway-issued transaction reference. Enables payment reconciliation against bank / PSP statements independent of marketplace payout reports."
+  },
+  {
+   "fieldname": "compliance_section",
+   "fieldtype": "Section Break",
+   "label": "GST Compliance Cross-references",
+   "collapsible": 1,
+   "description": "Values as REPORTED BY EE. Cross-check against India Compliance's E-Invoice Log / E-Waybill Log for the same SI — divergence signals that EE and IC generated different IRNs / e-way bills for the same invoice."
+  },
+  {
+   "fieldname": "irn",
+   "fieldtype": "Data",
+   "label": "IRN (from EE)",
+   "length": 100,
+   "search_index": 1,
+   "description": "Invoice Reference Number as reported by EE. Compare against India Compliance E-Invoice Log for the same SI to detect divergence."
+  },
+  {
+   "fieldname": "ack_no",
+   "fieldtype": "Data",
+   "label": "IRN Acknowledgement Number",
+   "length": 40,
+   "description": "GSTN acknowledgement number (ack_no) paired with the IRN."
+  },
+  {
+   "fieldname": "ack_date",
+   "fieldtype": "Datetime",
+   "label": "IRN Acknowledgement Date",
+   "description": "GSTN acknowledgement timestamp (ack_dt)."
+  },
+  {
+   "fieldname": "compliance_col_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "eway_bill_number",
+   "fieldtype": "Data",
+   "label": "E-Way Bill Number",
+   "length": 40,
+   "search_index": 1,
+   "description": "E-way bill number as reported by EE. Compare against India Compliance E-Waybill Log for the same SI."
+  },
+  {
+   "fieldname": "eway_bill_date",
+   "fieldtype": "Datetime",
+   "label": "E-Way Bill Date",
+   "description": "E-way bill generation timestamp."
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-08-17 00:00:00",
+ "modified_by": "Administrator",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}
