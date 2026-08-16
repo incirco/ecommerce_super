@@ -132,7 +132,18 @@ def _find_pending_shipments(marketplace_account: str | None) -> list[dict]:
     """Draft SIs whose Marketplace Order Map Shipment has NULL manifest_date.
     Joined query — no per-row iteration needed to filter.
     """
-    filters = ["si.docstatus = 0", "sh.manifest_date IS NULL"]
+    # is_return = 0 excludes Credit Notes / Sales Returns from the
+    # sweep. CNs are managed by _handle_manifested (paired with a
+    # forward SI submission) and by _handle_cancelled, not by
+    # independent sweep. Directly submitting a Draft CN can fail
+    # because its `return_against` may still be a Draft. Post-audit
+    # 2026-08-17: without this filter, Draft CNs from backfill_mode
+    # runs cause perpetual "still_pending" (int() on "CN-<n>" fails).
+    filters = [
+        "si.docstatus = 0",
+        "sh.manifest_date IS NULL",
+        "si.is_return = 0",
+    ]
     params: dict[str, Any] = {}
     if marketplace_account:
         filters.append("mom.marketplace_account = %(ma)s")

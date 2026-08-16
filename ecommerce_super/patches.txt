@@ -202,6 +202,13 @@ ecommerce_super.patches.v0_1.install_easyecom_marketplace_order_map
 # our Currency Exchange DocType and EE's locked-in rate. Idempotent.
 ecommerce_super.patches.v0_1.add_fx_confirmation_fields_to_shipment
 
+# 2026-08-17: hotfix — add 'Backfill from existing SI' to the
+# Select options on Shipment.conversion_rate_source. MUST run
+# BEFORE the backfill patch below; otherwise the backfill silently
+# no-ops on every SI (Frappe Select validation rejects the value,
+# per-SI try/except catches, all rows counted as errors).
+ecommerce_super.patches.v0_1.add_backfill_option_to_shipment_conversion_rate_source
+
 # 2026-08-17: PR F — retroactively create Marketplace Order Map +
 # Shipment child rows for existing B2C SIs that predate PR #273.
 # Without this, recon (RECON_SPEC §6.2) can't order-grain join on

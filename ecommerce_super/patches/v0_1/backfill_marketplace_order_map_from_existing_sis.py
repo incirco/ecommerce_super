@@ -106,6 +106,26 @@ def _iter_backfillable_sis():
     Batched via frappe.db.sql because the Puresta prod set is likely
     thousands of rows. as_dict=True for the small field list keeps
     Python-side memory bounded."""
+    # is_return = 0 excludes Credit Notes / Sales Returns.
+    #
+    # CNs share the tabSales Invoice table with SIs but are the REVERSAL
+    # side of the pair. The backfill must not create Shipment rows for
+    # them because:
+    #
+    #   1. ecs_easyecom_invoice_id on CNs is stored as "CN-<original>"
+    #      (namespace prefix from _build_credit_note_for_reversed_order
+    #      in invoice_builder.py). The sweeper's per-invoice re-check
+    #      does int(ee_invoice_id) → ValueError on "CN-...", caught,
+    #      returned as still_pending forever.
+    #
+    #   2. Live-flow CNs already get a Shipment row inserted via
+    #      _upsert_marketplace_order_map at CN creation time with
+    #      original_sales_invoice back-reference — that's the correct
+    #      row. Retro-creating another row here would duplicate.
+    #
+    #   3. Draft CNs from prior backfill_mode runs need their original
+    #      SI submitted first before CN submit can succeed — a Shipment
+    #      pointing sweeper at the CN causes indefinite retries.
     return frappe.db.sql(
         """
         SELECT
@@ -123,6 +143,7 @@ def _iter_backfillable_sis():
         FROM `tabSales Invoice`
         WHERE ecs_marketplace_order_id IS NOT NULL
           AND ecs_marketplace_order_id != ''
+          AND is_return = 0
         """,
         as_dict=True,
     )

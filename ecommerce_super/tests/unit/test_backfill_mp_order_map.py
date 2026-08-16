@@ -230,5 +230,67 @@ class TestResolveMarketplaceAccount(unittest.TestCase):
         )
 
 
+# ============================================================
+# Post-audit HIGH-1: backfill query must exclude Credit Notes
+# ============================================================
+
+
+class TestBackfillSelectOptionExists(unittest.TestCase):
+    """Post-audit BLOCKER-1: `_build_shipment_from_si` writes
+    conversion_rate_source = "Backfill from existing SI". That value
+    MUST be listed in the Select options on the DocType JSON, else
+    Frappe's field validation rejects on save and the per-SI
+    try/except silently no-ops the backfill on every row."""
+
+    def test_backfill_source_value_is_in_doctype_select_options(self):
+        import json
+        import pathlib
+        # mod.__file__ = <app>/ecommerce_super/patches/v0_1/<this>.py
+        #   parents[2] = <app>/ecommerce_super/ (inner module root)
+        json_path = pathlib.Path(mod.__file__).parents[2] / (
+            "easyecom/doctype/easyecom_order_map_shipment/"
+            "easyecom_order_map_shipment.json"
+        )
+        doctype = json.load(json_path.open())
+        source_field = next(
+            f for f in doctype["fields"]
+            if f["fieldname"] == "conversion_rate_source"
+        )
+        options = source_field["options"].split("\n")
+        # The value the backfill patch writes
+        self.assertIn(
+            "Backfill from existing SI", options,
+            f"'Backfill from existing SI' missing from Select options — "
+            f"backfill patch will silently reject every row. "
+            f"Current options: {options}"
+        )
+
+    def test_backfill_actually_writes_the_source_value(self):
+        """Sanity check: the constant the backfill code writes hasn't
+        drifted from what the test above checks."""
+        row = mod._build_shipment_from_si(_si_row())
+        self.assertEqual(
+            row["conversion_rate_source"],
+            "Backfill from existing SI"
+        )
+
+
+class TestBackfillExcludesCreditNotes(unittest.TestCase):
+    """The backfill SQL query must include `AND is_return = 0` so
+    Draft CNs from prior backfill_mode runs don't get Shipment rows
+    (their invoice_id is prefixed "CN-<n>" which the sweeper's
+    int() cast rejects; CNs are already handled by the live-flow
+    _upsert_marketplace_order_map at CN insert time)."""
+
+    def test_query_string_filters_out_credit_notes(self):
+        """Read the SQL string directly and assert the guard exists.
+        A regression here would silently reintroduce the HIGH-1 bug."""
+        import inspect
+        src = inspect.getsource(mod._iter_backfillable_sis)
+        # The guard must be present exactly like this
+        self.assertIn("is_return = 0", src)
+        self.assertIn("ecs_marketplace_order_id IS NOT NULL", src)
+
+
 if __name__ == "__main__":
     unittest.main()
