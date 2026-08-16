@@ -562,9 +562,20 @@ scheduler_events = {
         # Bounded by _HELD_PREQC_STALENESS_DAYS (30d) so we don't hammer
         # EE for GRNs that will never QC-complete. Idempotent — no-op
         # when there are no held rows.
+        #
+        # §12 B2C pending-manifest sweeper also on the hourly tick:
+        # scans Draft SIs with NULL Shipment.manifest_date, re-fetches
+        # each from EE, transitions to Submitted (manifest arrived) or
+        # Submitted+Cancelled (URP putaway cancel) or Submitted+CN
+        # (GSTIN cancel / Return). Ensures every EE invoice number
+        # eventually reaches a terminal state in ERP. Draft SIs stay
+        # Draft (no GL / stock impact) until this sweeper transitions
+        # them — see docstring of the sweeper module for the full
+        # branching table.
         "0 */1 * * *": [
             "ecommerce_super.easyecom.queue.workers.reclaim_orphaned_jobs",
             "ecommerce_super.easyecom.flows.grn_pull.resweep_held_pre_qc_grns",
+            "ecommerce_super.easyecom.flows.b2c_sales.pending_manifest_sweeper.sweep_pending_manifest_sis",
         ],
         # §10 Stage 4 — daily aged-GIT scan. Runs at 06:30 IST (after
         # the §8f supplier pull at 06:00, before business hours start).
