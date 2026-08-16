@@ -498,7 +498,58 @@ def build_si_from_ee_order(
                 f"{type(exc).__name__}: {exc}"
             )
 
-    # ---- 7. Sync Record — audit trail (replaces Marketplace Order Map) ----
+    # ---- 6b. Marketplace Order Map — order-grain recon bridge ----
+    # RESTORED post-PR #107 per Aug 2026 methodology decision (see
+    # drafts/spec_sections/spec_12_amendment_restore_mp_order_map.draft.md
+    # and PR #272). The Map + Shipment child give the recon engine the
+    # order-grain join it needs (RECON_SPEC §6.2) — critical for split
+    # shipments where one marketplace_order_id produces multiple SIs.
+    #
+    # This block is a strict superset of what Sync Record captures:
+    # Sync Record is entity-centric (one per SI-per-direction), Map is
+    # order-centric (one per marketplace_order_id, N shipments each).
+    # Both coexist.
+    try:
+        mp_order_map_name = _upsert_marketplace_order_map(
+            si=si,
+            marketplace_account=marketplace_account,
+            order_row=order_row,
+            ee_order_id=ee_order_id,
+            ee_invoice_id=ee_invoice_id,
+            event_type=_derive_invoice_status_event_type(order_row),
+            original_sales_invoice=None,
+        )
+        if credit_note_name:
+            # Paired Credit Note also gets its own shipment row on the
+            # same Map, pointing back to the original SI. Recon nets
+            # Forward (SI) against Reverse (CN) at order grain per
+            # RECON_SPEC §6.4.
+            _upsert_marketplace_order_map(
+                si=frappe.get_doc("Sales Invoice", credit_note_name),
+                marketplace_account=marketplace_account,
+                order_row=order_row,
+                ee_order_id=ee_order_id,
+                ee_invoice_id=f"CN-{ee_invoice_id}",
+                event_type=(
+                    "Returned" if order_row.get("order_status") == "Returned"
+                    else "Sold(cancelled)"
+                ),
+                original_sales_invoice=si.name,
+            )
+    except Exception as exc:
+        # Never let a Map upsert failure fail the SI insert — recon can
+        # still function on Sync Record data alone until the sweeper
+        # (PR F) backfills the Map row. Log for later manual repair.
+        mp_order_map_name = None
+        frappe.logger().warning(
+            f"§12: could not upsert Marketplace Order Map for SI {si.name}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+    # ---- 7. Sync Record — per-sync audit trail ----
+    # Sync Record captures the raw poll payload + hash + correlation id
+    # for every SI created / touched. Retained alongside Marketplace
+    # Order Map — different grain, different purpose (see 6b above).
     sync_record_name = _write_sync_record(
         si=si,
         marketplace_account=marketplace_account,
@@ -1371,7 +1422,196 @@ def _resolve_default_sales_tax_account(company: str) -> str:
 
 
 # ============================================================
-# Sync Record (audit trail — replaces Marketplace Order Map)
+# Marketplace Order Map upsert (restored per PR #272 amendment)
+# ============================================================
+
+
+def _derive_invoice_status_event_type(order_row: dict) -> str:
+    """Synthesise the EasyEcom Order Map Shipment.ecs_easyecom_event_type
+    from EE's order_status + invoice_number presence, matching the
+    EE tax export Invoice Status column.
+
+    Mapping (verified against EE CSV cross-tab, Aug 2026 Puresta data):
+      Sold             = { Shipped, Returned, Confirmed, Manifest Scanned }
+                         AND invoice_number populated
+      Sold(cancelled)  = { Cancelled } AND invoice_number populated
+      (empty)          = invoice_number blank OR unrecognised status
+
+    Returned is a distinct value here even though EE lumps it into
+    Sold — the recon engine needs to distinguish Forward (Shipped)
+    from Reverse (Returned) legs, so we surface Returned separately.
+    """
+    inv_num = (order_row.get("invoice_number") or "").strip()
+    if not inv_num:
+        return ""
+    st = order_row.get("order_status") or ""
+    if st == "Returned":
+        return "Returned"
+    if st in {"Shipped", "Confirmed", "Manifest Scanned"}:
+        return "Sold"
+    if st == "Cancelled":
+        return "Sold(cancelled)"
+    return ""
+
+
+def _upsert_marketplace_order_map(
+    *,
+    si: Any,
+    marketplace_account: Any,
+    order_row: dict,
+    ee_order_id: str | None,
+    ee_invoice_id: str,
+    event_type: str,
+    original_sales_invoice: str | None,
+) -> str | None:
+    """Ensure a Marketplace Order Map exists for this SI's marketplace
+    order, and append a Shipment child row for this SI.
+
+    Idempotency: keyed on (marketplace, marketplace_order_id, company)
+    at parent level and on `sales_invoice` at child level. Safe to
+    call multiple times for the same SI — the child upsert is a no-op
+    when a row for this SI already exists.
+
+    Split-shipment support: when a Map already exists (another SI for
+    the same marketplace_order_id was inserted earlier), this appends
+    a new Shipment row rather than raising a duplicate error.
+
+    Returns the Map name, or None if the marketplace_order_id was
+    missing (defensive — legitimate B2C orders always have one).
+    """
+    marketplace_order_id = (
+        order_row.get("reference_code")
+        or order_row.get("referenceCode")
+        or ""
+    ).strip()
+    if not marketplace_order_id:
+        frappe.logger().warning(
+            f"§12: SI {si.name} has no reference_code — skipping "
+            f"Marketplace Order Map upsert. This should never happen "
+            f"for a legitimate marketplace order."
+        )
+        return None
+
+    marketplace = marketplace_account.marketplace
+    company = marketplace_account.company
+
+    # Look up existing Map on the composite key
+    existing_name = frappe.db.get_value(
+        "EasyEcom Marketplace Order Map",
+        {
+            "marketplace": marketplace,
+            "marketplace_order_id": marketplace_order_id,
+            "company": company,
+        },
+        "name",
+    )
+
+    if existing_name:
+        mp_map = frappe.get_doc("EasyEcom Marketplace Order Map", existing_name)
+    else:
+        mp_map = frappe.get_doc({
+            "doctype": "EasyEcom Marketplace Order Map",
+            "marketplace_order_id": marketplace_order_id,
+            "marketplace": marketplace,
+            "marketplace_account": marketplace_account.name,
+            "company": company,
+            "easyecom_order_id": str(ee_order_id) if ee_order_id else None,
+            # settlement_status defaults to "Forecast" per JSON default;
+            # recon writes any transition. We never write to it here
+            # beyond the default, honoring the interface contract in
+            # RECON_SPEC §2.
+        })
+
+    # Idempotency at child level: skip if a Shipment row for this SI
+    # already exists. Handles re-runs without duplicating.
+    already_has_shipment = any(
+        (row.sales_invoice or "") == si.name
+        for row in (mp_map.shipments or [])
+    )
+    if not already_has_shipment:
+        mp_map.append("shipments", _build_shipment_row(
+            si=si,
+            order_row=order_row,
+            ee_invoice_id=ee_invoice_id,
+            event_type=event_type,
+            original_sales_invoice=original_sales_invoice,
+        ))
+
+    if existing_name:
+        mp_map.save(ignore_permissions=True)
+    else:
+        mp_map.insert(ignore_permissions=True)
+
+    return mp_map.name
+
+
+def _build_shipment_row(
+    *,
+    si: Any,
+    order_row: dict,
+    ee_invoice_id: str,
+    event_type: str,
+    original_sales_invoice: str | None,
+) -> dict:
+    """Assemble one EasyEcom Order Map Shipment child dict from an EE
+    order payload + the SI just created for it.
+
+    All fields default to None/empty when EE omits them — the child
+    doesn't require anything beyond `sales_invoice`.
+    """
+    documents = order_row.get("documents") or {}
+    if not isinstance(documents, dict):
+        documents = {}
+
+    return {
+        "doctype": "EasyEcom Order Map Shipment",
+        "sales_invoice": si.name,
+        "ecs_easyecom_event_type": event_type,
+        "original_sales_invoice": original_sales_invoice,
+        # EE identifiers
+        "invoice_id": str(ee_invoice_id) if ee_invoice_id else None,
+        "invoice_number": (
+            order_row.get("invoice_number") or order_row.get("invoiceNumber") or ""
+        ),
+        "easyecom_invoice_pdf_url": (
+            (documents.get("easyecom_invoice") or "").split("?")[0] or None
+        ),
+        # Manifest / dispatch
+        "manifest_date": (order_row.get("manifest_date") or "")[:19] or None,
+        "manifest_no": order_row.get("manifest_no") or None,
+        "batch_id": order_row.get("batch_id") or None,
+        "batch_created_at": (order_row.get("batch_created_at") or "")[:19] or None,
+        "sales_channel": order_row.get("sales_channel") or None,
+        "awb_number": order_row.get("awb_number") or None,
+        "courier": order_row.get("courier") or None,
+        # Currency — captured but not converted here. PR D adds the
+        # SI.currency + SI.conversion_rate wiring for foreign currency
+        # invoices. Native amounts preserved on the child for audit.
+        "invoice_currency_code": order_row.get("invoice_currency_code") or "INR",
+        "conversion_rate": 1,
+        "total_amount_native": float(
+            order_row.get("total_amount")
+            or order_row.get("invoice_amount")
+            or 0
+        ),
+        "total_tax_native": float(order_row.get("total_tax") or 0),
+        # Payment (populated on prepaid orders — usually null on COD / B2B)
+        "payment_gateway_name": order_row.get("payment_gateway_name") or None,
+        "payment_gateway_transaction_number": (
+            order_row.get("payment_gateway_transaction_number") or None
+        ),
+        # GST compliance cross-references (from EE side; may be blank
+        # when the order isn't e-invoice-eligible or e-way-bill-eligible)
+        "irn": order_row.get("irn") or None,
+        "ack_no": order_row.get("ack_no") or None,
+        "ack_date": (order_row.get("ack_dt") or order_row.get("ack_date") or "")[:19] or None,
+        "eway_bill_number": order_row.get("eway_bill_number") or None,
+        "eway_bill_date": (order_row.get("eway_bill_date") or "")[:19] or None,
+    }
+
+
+# ============================================================
+# Sync Record (per-sync audit trail — retained alongside MP Order Map)
 # ============================================================
 
 
