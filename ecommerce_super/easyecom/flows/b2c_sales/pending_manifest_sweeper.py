@@ -102,6 +102,10 @@ def sweep_pending_manifest_sis(
         "cancelled": 0,
         "credit_note": 0,
         "still_pending": 0,
+        # PR D — foreign-currency SIs held awaiting ops confirmation of
+        # the conversion_rate on the Shipment child. Non-zero here
+        # signals "ops action needed" on the dashboard.
+        "awaiting_fx_confirmation": 0,
         "errors": 0,
         "dry_run": dry_run,
     }
@@ -141,12 +145,15 @@ def _find_pending_shipments(marketplace_account: str | None) -> list[dict]:
             si.name                             AS sales_invoice,
             si.gst_category                     AS gst_category,
             si.company                          AS company,
+            si.currency                         AS si_currency,
             mom.name                            AS mp_order_map,
             mom.marketplace_account             AS marketplace_account,
             mom.marketplace_order_id            AS marketplace_order_id,
             sh.name                             AS shipment_row,
             sh.invoice_id                       AS ee_invoice_id,
-            sh.invoice_number                   AS invoice_number
+            sh.invoice_number                   AS invoice_number,
+            sh.invoice_currency_code            AS invoice_currency_code,
+            sh.conversion_rate_confirmed        AS conversion_rate_confirmed
         FROM `tabSales Invoice` si
         JOIN `tabEasyEcom Order Map Shipment` sh
              ON sh.sales_invoice = si.name
@@ -176,6 +183,16 @@ def _process_one_pending(row: dict, *, dry_run: bool) -> str:
     status = (ee_row.get("order_status") or "").strip()
     manifest_date = (ee_row.get("manifest_date") or "").strip()
 
+    # -- FX-confirmation gate (PR D) --
+    # For non-INR invoices, block submit until ops has verified our
+    # Currency Exchange rate matches EE's rate for that invoice_date.
+    # Cancelled putaway can proceed (cancellation is safe regardless
+    # of FX drift), and the "still_pending" no-op path also proceeds.
+    if _is_awaiting_fx_confirmation(row):
+        # Only gate the SUBMIT path (manifested). Cancel path is safe.
+        if status not in _CANCELLED_STATUSES and manifest_date:
+            return "awaiting_fx_confirmation"
+
     # -- Cancelled putaway path --
     if status in _CANCELLED_STATUSES:
         return _handle_cancelled(row, ee_row, dry_run=dry_run)
@@ -186,6 +203,17 @@ def _process_one_pending(row: dict, *, dry_run: bool) -> str:
 
     # -- Still transient (Confirmed / Manifest Scanned without manifest_date) --
     return "still_pending"
+
+
+def _is_awaiting_fx_confirmation(row: dict) -> bool:
+    """True when the SI is foreign-currency AND ops hasn't yet
+    confirmed the conversion_rate on the Shipment child. Returns
+    False for INR invoices (no FX drift possible → auto-confirmed
+    at Shipment child creation time)."""
+    currency = (row.get("invoice_currency_code") or "INR").strip().upper()
+    if currency == "INR":
+        return False
+    return not bool(row.get("conversion_rate_confirmed"))
 
 
 def _handle_manifested(

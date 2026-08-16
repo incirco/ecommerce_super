@@ -1839,6 +1839,19 @@ def _build_shipment_row(
         "conversion_rate": float(
             getattr(si, "conversion_rate", None) or 1
         ),
+        # PR D — Auto-confirm the rate for INR invoices (no FX drift
+        # possible). Non-INR invoices land with confirmed=0 → the
+        # pending-manifest sweeper (PR #274) will NOT submit them
+        # until ops verifies the rate against EE's tax export/portal
+        # and ticks the box. Guards against FX drift between our
+        # Currency Exchange DocType and EE's locked-in rate.
+        "conversion_rate_confirmed": (
+            1 if (
+                (order_row.get("invoice_currency_code") or "").strip().upper()
+                or "INR"
+            ) == "INR" else 0
+        ),
+        "conversion_rate_source": "ERPNext Currency Exchange",
         "total_amount_native": float(
             order_row.get("total_amount")
             or order_row.get("invoice_amount")

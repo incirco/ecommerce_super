@@ -35,12 +35,18 @@ def _row(**overrides) -> dict:
         "sales_invoice": "SI-2026-00001",
         "gst_category": "Unregistered",
         "company": "Puresta Lifestyle Private Limited",
+        "si_currency": "INR",
         "mp_order_map": "MOM-2026-00001",
         "marketplace_account": "ECS-MA-Puresta-Shopify",
         "marketplace_order_id": "SQ-440390821",
         "shipment_row": "shipment-row-name-1",
         "ee_invoice_id": "687108535",
         "invoice_number": "BHR52627-489",
+        "invoice_currency_code": "INR",
+        # INR invoices default to confirmed=1 (auto-set at Shipment
+        # child creation). Foreign-currency tests override to 0 to
+        # exercise the FX-confirmation gate.
+        "conversion_rate_confirmed": 1,
     }
     base.update(overrides)
     return base
@@ -324,6 +330,88 @@ class TestSweepPendingManifestSisIsolation(unittest.TestCase):
         self.assertEqual(result["checked"], 3)
         self.assertEqual(result["submitted"], 2)
         self.assertEqual(result["errors"], 1)
+
+
+# ============================================================
+# FX-confirmation gate (PR D)
+# ============================================================
+
+
+class TestFxConfirmationGate(unittest.TestCase):
+
+    def test_inr_invoice_never_awaits_fx_confirmation(self):
+        """INR invoices are auto-confirmed at Shipment child creation
+        time — no FX drift possible, no ops verification needed."""
+        row = _row(invoice_currency_code="INR", conversion_rate_confirmed=0)
+        # Even with confirmed=0 (defensive test), INR short-circuits
+        self.assertFalse(mod._is_awaiting_fx_confirmation(row))
+
+    def test_foreign_currency_unconfirmed_awaits(self):
+        """CAD invoice with confirmed=0 blocks submit."""
+        row = _row(invoice_currency_code="CAD", conversion_rate_confirmed=0)
+        self.assertTrue(mod._is_awaiting_fx_confirmation(row))
+
+    def test_foreign_currency_confirmed_proceeds(self):
+        """Once ops ticks the box, submit path unblocks."""
+        row = _row(invoice_currency_code="CAD", conversion_rate_confirmed=1)
+        self.assertFalse(mod._is_awaiting_fx_confirmation(row))
+
+    @patch.object(mod, "_fetch_ee_order")
+    def test_process_returns_awaiting_fx_for_unconfirmed_foreign_manifested(
+        self, mock_fetch
+    ):
+        """Foreign currency + manifest arrived + confirmed=0 → don't
+        submit, return awaiting_fx_confirmation."""
+        mock_fetch.return_value = {
+            "order_status": "Shipped",
+            "manifest_date": "2026-08-17 10:00:00",
+        }
+        row = _row(
+            invoice_currency_code="CAD",
+            conversion_rate_confirmed=0,
+        )
+        outcome = mod._process_one_pending(row, dry_run=False)
+        self.assertEqual(outcome, "awaiting_fx_confirmation")
+
+    @patch.object(mod, "_handle_manifested")
+    @patch.object(mod, "_fetch_ee_order")
+    def test_process_submits_when_foreign_confirmed(
+        self, mock_fetch, mock_handle
+    ):
+        """After ops confirms, next sweep cycle proceeds to submit."""
+        mock_fetch.return_value = {
+            "order_status": "Shipped",
+            "manifest_date": "2026-08-17 10:00:00",
+        }
+        mock_handle.return_value = "submitted"
+        row = _row(
+            invoice_currency_code="CAD",
+            conversion_rate_confirmed=1,
+        )
+        outcome = mod._process_one_pending(row, dry_run=False)
+        self.assertEqual(outcome, "submitted")
+        mock_handle.assert_called_once()
+
+    @patch.object(mod, "_handle_cancelled")
+    @patch.object(mod, "_fetch_ee_order")
+    def test_cancel_path_proceeds_regardless_of_fx_confirmation(
+        self, mock_fetch, mock_handle
+    ):
+        """Cancelling an SI is safe regardless of FX drift — no GL
+        impact from the wrong rate on a cancelled doc. Don't gate
+        the cancel path on FX confirmation."""
+        mock_fetch.return_value = {
+            "order_status": "Cancelled",
+            "manifest_date": "",
+        }
+        mock_handle.return_value = "cancelled"
+        row = _row(
+            invoice_currency_code="CAD",
+            conversion_rate_confirmed=0,  # Not confirmed
+        )
+        outcome = mod._process_one_pending(row, dry_run=False)
+        self.assertEqual(outcome, "cancelled")
+        mock_handle.assert_called_once()
 
 
 if __name__ == "__main__":
