@@ -28,6 +28,8 @@
   "currency_section",
   "invoice_currency_code",
   "conversion_rate",
+  "conversion_rate_confirmed",
+  "conversion_rate_source",
   "currency_col_break",
   "total_amount_native",
   "total_tax_native",
@@ -183,6 +185,22 @@
    "precision": "9",
    "default": "1",
    "description": "Native currency → INR conversion rate. 1.0 when invoice_currency_code = INR. For foreign currency invoices, sourced from EE's tax export (when EE adds the field to getAllOrders response) or from ERPNext Currency Exchange DocType keyed by (from_currency, to_currency=INR, exchange_date=invoice_date). total_amount_native × conversion_rate = SI.base_grand_total."
+  },
+  {
+   "fieldname": "conversion_rate_confirmed",
+   "fieldtype": "Check",
+   "label": "Conversion Rate Confirmed by Ops",
+   "default": "0",
+   "in_list_view": 1,
+   "description": "For non-INR invoices, ops must verify the conversion_rate against EE's tax export / their portal before the pending-manifest sweeper submits the SI. Auto-set to 1 for INR invoices (no verification needed). Prevents FX-rate drift between our Currency Exchange DocType and EE's locked-in rate — the pattern until EE adds conversion_rate to the getAllOrders API response."
+  },
+  {
+   "fieldname": "conversion_rate_source",
+   "fieldtype": "Select",
+   "label": "Conversion Rate Source",
+   "options": "\nERPNext Currency Exchange\nEE Tax Export (manual)\nEE API (native)\nManual override",
+   "default": "",
+   "description": "Provenance of the conversion_rate field. Set at SI creation time by the builder. 'ERPNext Currency Exchange' is the default source until EE adds conversion_rate to getAllOrders — then flips to 'EE API (native)' and confirmation becomes automatic."
   },
   {
    "fieldname": "currency_col_break",

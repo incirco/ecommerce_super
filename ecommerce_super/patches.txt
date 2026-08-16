@@ -193,3 +193,11 @@ ecommerce_super.patches.v0_1.move_ecs_ee_address_fields_to_child_table
 # EasyEcom Order Map Shipment host order-grain recon data with
 # ZERO new columns on SI.
 ecommerce_super.patches.v0_1.install_easyecom_marketplace_order_map
+
+# 2026-08-17: PR D follow-up — add FX-tracking fields to the
+# Order Map Shipment child (conversion_rate_confirmed,
+# conversion_rate_source). Enables the pending-manifest sweeper's
+# FX gate: foreign-currency SIs wait for ops confirmation of the
+# conversion_rate before submit, preventing silent FX drift between
+# our Currency Exchange DocType and EE's locked-in rate. Idempotent.
+ecommerce_super.patches.v0_1.add_fx_confirmation_fields_to_shipment
