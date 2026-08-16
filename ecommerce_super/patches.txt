@@ -201,3 +201,12 @@ ecommerce_super.patches.v0_1.install_easyecom_marketplace_order_map
 # conversion_rate before submit, preventing silent FX drift between
 # our Currency Exchange DocType and EE's locked-in rate. Idempotent.
 ecommerce_super.patches.v0_1.add_fx_confirmation_fields_to_shipment
+
+# 2026-08-17: PR F — retroactively create Marketplace Order Map +
+# Shipment child rows for existing B2C SIs that predate PR #273.
+# Without this, recon (RECON_SPEC §6.2) can't order-grain join on
+# pre-PR-#273 SIs — settlement entries fall out as "unmatched" and
+# split-shipment orders can't be grouped. Idempotent per-SI
+# (checks Shipment-exists before writing); safe to re-run manually
+# via bench execute if new SIs are backfilled later.
+ecommerce_super.patches.v0_1.backfill_marketplace_order_map_from_existing_sis
