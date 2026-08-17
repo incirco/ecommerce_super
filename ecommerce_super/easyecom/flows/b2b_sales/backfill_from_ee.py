@@ -156,6 +156,8 @@ def backfill_b2b_from_ee_api(
 
     # Step 3: process each invoice
     for ee_row in invoices:
+        if not dry_run:
+            frappe.db.savepoint("b2b_backfill_invoice")
         try:
             outcome = _process_one_invoice(
                 ee_row=ee_row,
@@ -163,6 +165,12 @@ def backfill_b2b_from_ee_api(
                 dry_run=dry_run,
             )
             _bump_counter(result, outcome)
+            if not dry_run:
+                # Commit each successful invoice so a later failure
+                # doesn't roll back earlier good work — and so a
+                # gateway/worker timeout leaves everything up to now
+                # already persisted (idempotency dedupes on re-run).
+                frappe.db.commit()
         except Exception as exc:
             result["errors"] += 1
             result["error_details"].append({
@@ -174,12 +182,16 @@ def backfill_b2b_from_ee_api(
                 f"[b2b_backfill] invoice_id={ee_row.get('invoice_id')} "
                 f"failed: {type(exc).__name__}: {exc}"
             )
-            # Rollback THIS invoice; keep going with the rest
             if not dry_run:
-                frappe.db.rollback(save_point="b2b_backfill_invoice")
-
-    if not dry_run:
-        frappe.db.commit()
+                try:
+                    frappe.db.rollback(save_point="b2b_backfill_invoice")
+                except Exception:
+                    # Defensive — a savepoint may have been consumed
+                    # by an intermediate commit inside the failing
+                    # invoice's code path (e.g. SO submit auto-commits
+                    # in some ERPNext paths). Fall through so the
+                    # batch continues.
+                    pass
 
     return result
 
