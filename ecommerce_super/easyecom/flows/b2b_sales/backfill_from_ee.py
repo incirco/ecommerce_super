@@ -202,7 +202,7 @@ def _refresh_customer_master(ma_doc: Any, *, dry_run: bool) -> dict:
 
     from ecommerce_super.easyecom.flows.customer_pull import pull_customers
     try:
-        client = EasyEcomClient(location_key=_location_key(ma_doc))
+        client = EasyEcomClient(company=ma_doc.company)
     except Exception as exc:
         return {"error": f"client init: {type(exc).__name__}: {exc}"}
     outcome = pull_customers(client=client)
@@ -224,7 +224,7 @@ def _fetch_b2b_invoices(
 ) -> list[dict]:
     """Poll getAllOrders with invoice_start_date/invoice_end_date +
     filter to B2B (order_type_key == 'businessorder')."""
-    client = EasyEcomClient(location_key=_location_key(ma_doc))
+    client = EasyEcomClient(company=ma_doc.company)
 
     invoices: list[dict] = []
     seen_ids: set[str] = set()
@@ -473,11 +473,11 @@ def _si_exists_for_ee_invoice_id(invoice_id: str) -> bool:
     ))
 
 
-def _location_key(ma_doc: Any) -> str:
-    ee_account = frappe.get_cached_doc(
-        "EasyEcom Account", ma_doc.easyecom_account,
-    )
-    return ee_account.default_location_key
+# NOTE — no _location_key() helper. EasyEcomClient(company=...)
+# resolves the location + credentials internally (see client.py:245-254).
+# Matches the pattern used by customer_pull / item_pull / other flows.
+# Adding another indirection here would just duplicate what the client
+# already does correctly.
 
 
 def _as_bool(v: Any) -> bool:
