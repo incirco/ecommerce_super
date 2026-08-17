@@ -410,9 +410,14 @@ def _process_one_invoice(
 
     # Delegate to the live-flow mirror to produce the SI
     from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
-        _mirror_invoice,
+        mirror_si_from_ee_response,
     )
-    _mirror_invoice(map_doc=map_doc, ee_row=ee_row)
+    result = mirror_si_from_ee_response(map_doc=map_doc, ee_row=ee_row)
+    # Wire the Map → SI back-reference (mirror returns si.name but
+    # doesn't touch the Map; downstream recon relies on this link).
+    si_name = (result or {}).get("sales_invoice")
+    if si_name:
+        map_doc.db_set("sales_invoice", si_name, update_modified=False)
 
     return "created_sis"
 
@@ -516,20 +521,19 @@ def _create_and_submit_so(
     # Warehouse resolution — walk the fallback chain:
     #   1. MA.warehouse (explicit override on the MA)
     #   2. EE Location.mapped_warehouse (account-default routing)
-    #   3. Company.default_warehouse (last-ditch)
     # SO validation makes set_warehouse mandatory when items are stock
     # items, so an unresolved warehouse fails the whole invoice. Raise
     # with actionable message rather than letting ERPNext throw a
-    # generic MandatoryError.
+    # generic MandatoryError. Company.default_warehouse is NOT a valid
+    # column on ERPNext v16 Company doctype — don't try it.
     warehouse = (
         getattr(ma_doc, "warehouse", None)
         or _default_warehouse(ma_doc)
-        or frappe.db.get_value("Company", ma_doc.company, "default_warehouse")
     )
     if not warehouse:
         raise ValueError(
-            f"No warehouse for MA {ma_doc.name}: set MA.warehouse, or "
-            f"EE Location.mapped_warehouse, or Company.default_warehouse"
+            f"No warehouse for MA {ma_doc.name}: set MA.warehouse or "
+            f"EE Location.mapped_warehouse (via the MA's EE Account)"
         )
     so_doc["set_warehouse"] = warehouse
 
