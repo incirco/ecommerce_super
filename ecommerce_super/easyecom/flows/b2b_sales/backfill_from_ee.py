@@ -236,6 +236,26 @@ def _location_key(ma_doc: Any) -> str:
     return key
 
 
+def _default_warehouse(ma_doc: Any) -> str | None:
+    """Resolve the ERPNext Warehouse mapped to the MA's default EE
+    Location. Returns None if the mapping doesn't exist — caller
+    decides whether to fall back or raise.
+
+    Chain: MA.easyecom_account → EE Account.default_location_key
+    → EE Location.mapped_warehouse.
+    """
+    if not ma_doc.easyecom_account:
+        return None
+    loc_docname = frappe.db.get_value(
+        "EasyEcom Account", ma_doc.easyecom_account, "default_location_key"
+    )
+    if not loc_docname:
+        return None
+    return frappe.db.get_value(
+        "EasyEcom Location", loc_docname, "mapped_warehouse"
+    )
+
+
 def _refresh_customer_master(ma_doc: Any, *, dry_run: bool) -> dict:
     """Pull latest B2B customers from EE via the standard discovery flow.
 
@@ -493,8 +513,25 @@ def _create_and_submit_so(
             for it in items
         ],
     }
-    if getattr(ma_doc, "warehouse", None):
-        so_doc["set_warehouse"] = ma_doc.warehouse
+    # Warehouse resolution — walk the fallback chain:
+    #   1. MA.warehouse (explicit override on the MA)
+    #   2. EE Location.mapped_warehouse (account-default routing)
+    #   3. Company.default_warehouse (last-ditch)
+    # SO validation makes set_warehouse mandatory when items are stock
+    # items, so an unresolved warehouse fails the whole invoice. Raise
+    # with actionable message rather than letting ERPNext throw a
+    # generic MandatoryError.
+    warehouse = (
+        getattr(ma_doc, "warehouse", None)
+        or _default_warehouse(ma_doc)
+        or frappe.db.get_value("Company", ma_doc.company, "default_warehouse")
+    )
+    if not warehouse:
+        raise ValueError(
+            f"No warehouse for MA {ma_doc.name}: set MA.warehouse, or "
+            f"EE Location.mapped_warehouse, or Company.default_warehouse"
+        )
+    so_doc["set_warehouse"] = warehouse
 
     so = frappe.get_doc(so_doc)
     so.flags.ignore_permissions = True
