@@ -217,3 +217,10 @@ ecommerce_super.patches.v0_1.add_backfill_option_to_shipment_conversion_rate_sou
 # (checks Shipment-exists before writing); safe to re-run manually
 # via bench execute if new SIs are backfilled later.
 ecommerce_super.patches.v0_1.backfill_marketplace_order_map_from_existing_sis
+
+# 2026-08-17: raise `rate` precision on SO Item + SI Item from
+# Currency default (2 for INR) to 4. Needed by B2B backfill (PR #292)
+# to eliminate rounding drift when backing tax out of EE's tax-
+# inclusive selling_price. Idempotent Property Setter — no schema
+# migration, no print-format changes (amount still at 2 decimals).
+ecommerce_super.patches.v0_1.raise_rate_precision_for_backfill_accuracy
