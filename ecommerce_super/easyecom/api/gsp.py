@@ -688,15 +688,14 @@ def _log_inbound_gsp_failure(
         if not entity_name:
             # Fall back gracefully — no SR row, Error Log has it.
             return
-        company = None
-        if ee_account:
-            company = frappe.db.get_value(
-                "EasyEcom Account", ee_account, "company"
-            )
-        if not company:
-            company = frappe.db.get_value(
-                "Sales Order", entity_name, "company"
-            )
+        # gh#267 — EasyEcom Account has NO `company` field, so the previous
+        # get_value("EasyEcom Account", ee_account, "company") raised
+        # OperationalError (Unknown column 'company'). That exception
+        # aborted the whole Sync Record write below, so inbound GSP
+        # failures were recorded in the Error Log but NEVER surfaced as a
+        # Failed Sync Record in the FDE worklist. Derive company from the
+        # Sales Order (the SR entity), which always carries it.
+        company = frappe.db.get_value("Sales Order", entity_name, "company")
         if not company:
             company = frappe.db.get_value("Company", {}, "name")
         # Idempotency key: identify THIS particular inbound attempt so
