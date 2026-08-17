@@ -69,6 +69,15 @@ def validate_pre_push(doc: Any, method: str | None = None) -> None:
     """
     if doc.doctype != "Sales Order":
         return
+    # Backfill escape hatch — mirrors on_submit_push. Preconditions
+    # (customer synced, items synced, HSN, GSTIN) are irrelevant when
+    # replaying a historical EE-side invoice: the customer/items/HSN
+    # already exist on EE (that's how the invoice got created there).
+    # Skipping the whole gate keeps the backfill unblocked without
+    # weakening the check for live pushes.
+    if getattr(frappe.local, "flags", None) and \
+       frappe.local.flags.get("easyecom_b2b_backfill_in_flight"):
+        return
     if not is_section_11_gated(doc):
         return
     ee_account = get_ee_account_for_warehouse(doc.set_warehouse)
