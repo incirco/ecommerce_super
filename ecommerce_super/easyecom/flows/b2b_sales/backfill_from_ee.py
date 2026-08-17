@@ -223,38 +223,49 @@ def _fetch_b2b_invoices(
     ma_doc: Any, *, invoice_date_start: str, invoice_date_end: str,
 ) -> list[dict]:
     """Poll getAllOrders with invoice_start_date/invoice_end_date +
-    filter to B2B (order_type_key == 'businessorder')."""
+    filter to B2B (order_type_key == 'businessorder').
+
+    EE caps getAllOrders windows at 7 days (same cap b2c polling
+    enforces at polling.py:289). Chunk the requested invoice-date
+    range into 7-day sub-windows and dedup across them.
+    """
+    from datetime import date, timedelta
+
     client = EasyEcomClient(company=ma_doc.company)
 
     invoices: list[dict] = []
     seen_ids: set[str] = set()
 
-    for page in client.paginated(
-        ORDERS_GET_ALL,
-        params={
-            "invoice_start_date": f"{invoice_date_start}T00:00:00",
-            "invoice_end_date": f"{invoice_date_end}T23:59:59",
-            "get_batch_codes": 0,
-        },
-        max_pages=500,
-    ):
-        rows = _extract_rows(page)
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            invoice_id = str(row.get("invoice_id") or "")
-            if not invoice_id or invoice_id in seen_ids:
-                continue
-            # B2B filter — only businessorder rows
-            if (row.get("order_type_key") or "").lower() != "businessorder":
-                continue
-            # Only rows with a real invoice_number (matches EE tax
-            # export scope — see docs/playbooks/b2c_marketplace_
-            # order_map_and_draft_first_flow.md §6)
-            if not (row.get("invoice_number") or "").strip():
-                continue
-            seen_ids.add(invoice_id)
-            invoices.append(row)
+    start = date.fromisoformat(invoice_date_start)
+    end = date.fromisoformat(invoice_date_end)
+    window_days = 7
+
+    cursor = start
+    while cursor <= end:
+        w_end = min(cursor + timedelta(days=window_days - 1), end)
+        for page in client.paginated(
+            ORDERS_GET_ALL,
+            params={
+                "invoice_start_date": f"{cursor.isoformat()}T00:00:00",
+                "invoice_end_date": f"{w_end.isoformat()}T23:59:59",
+                "get_batch_codes": 0,
+            },
+            max_pages=500,
+        ):
+            rows = _extract_rows(page)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                invoice_id = str(row.get("invoice_id") or "")
+                if not invoice_id or invoice_id in seen_ids:
+                    continue
+                if (row.get("order_type_key") or "").lower() != "businessorder":
+                    continue
+                if not (row.get("invoice_number") or "").strip():
+                    continue
+                seen_ids.add(invoice_id)
+                invoices.append(row)
+        cursor = w_end + timedelta(days=1)
 
     return invoices
 
