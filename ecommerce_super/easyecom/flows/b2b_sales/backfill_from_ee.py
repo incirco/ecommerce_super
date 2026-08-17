@@ -405,6 +405,11 @@ def _process_one_invoice(
 def _resolve_customer(ee_row: dict, ma_doc: Any) -> str | None:
     """Look up an ERPNext Customer whose GSTIN matches the EE row's
     buyer_gst. URP / blank / NA buyers → no match (B2B needs GSTIN).
+
+    Filters `disabled=0` — a disabled Customer would fail SO validation
+    with PartyDisabled anyway, and it's common for a GSTIN to be shared
+    by multiple Customer records (auto-suffixed duplicates, warehouse
+    variants) where only the enabled one is the intended target.
     """
     buyer_gst = (ee_row.get("buyer_gst") or "").strip()
     if not buyer_gst or buyer_gst.upper() in {"URP", "NA", "N/A"}:
@@ -412,7 +417,7 @@ def _resolve_customer(ee_row: dict, ma_doc: Any) -> str | None:
     # Look via the Customer.gstin field (India Compliance-standard)
     customer = frappe.db.get_value(
         "Customer",
-        {"gstin": buyer_gst},
+        {"gstin": buyer_gst, "disabled": 0},
         "name",
     )
     return customer
