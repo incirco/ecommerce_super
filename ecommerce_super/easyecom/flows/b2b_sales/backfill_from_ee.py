@@ -410,9 +410,9 @@ def _process_one_invoice(
 
     # Delegate to the live-flow mirror to produce the SI
     from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
-        _mirror_invoice,
+        mirror_si_from_ee_response,
     )
-    _mirror_invoice(map_doc=map_doc, ee_row=ee_row)
+    mirror_si_from_ee_response(map_doc=map_doc, ee_row=ee_row)
 
     return "created_sis"
 
