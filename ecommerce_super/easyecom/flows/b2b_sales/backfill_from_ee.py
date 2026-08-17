@@ -412,7 +412,12 @@ def _process_one_invoice(
     from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
         mirror_si_from_ee_response,
     )
-    mirror_si_from_ee_response(map_doc=map_doc, ee_row=ee_row)
+    result = mirror_si_from_ee_response(map_doc=map_doc, ee_row=ee_row)
+    # Wire the Map → SI back-reference (mirror returns si.name but
+    # doesn't touch the Map; downstream recon relies on this link).
+    si_name = (result or {}).get("sales_invoice")
+    if si_name:
+        map_doc.db_set("sales_invoice", si_name, update_modified=False)
 
     return "created_sis"
 
