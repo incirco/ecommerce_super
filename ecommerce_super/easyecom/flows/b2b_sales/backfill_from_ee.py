@@ -254,6 +254,46 @@ def _location_key(ma_doc: Any) -> str:
     return key
 
 
+def _pick_item_tax_template(company_abbr: str, tax_rate: float) -> str | None:
+    """Find Item Tax Template matching this GST rate for the company.
+    Convention: 'GST {int_or_float_rate}% - {abbr}' (e.g. 'GST 18% - HQL').
+    Returns None if no match — caller falls back to letting IC's auto-
+    populate handle it, which will produce +tax_rate% variance visible
+    in the mirror's variance check.
+    """
+    if not tax_rate:
+        return None
+    # Prefer integer-rate name (most templates ship this way)
+    for candidate in (
+        f"GST {int(tax_rate)}% - {company_abbr}",
+        f"GST {tax_rate:g}% - {company_abbr}",
+    ):
+        if frappe.db.exists("Item Tax Template", candidate):
+            return candidate
+    return None
+
+
+def _pick_sales_tax_template(
+    company: str, company_abbr: str, customer: str,
+) -> str | None:
+    """Pick In-state vs Out-state Sales Taxes and Charges Template
+    based on GSTIN state comparison (first 2 digits of GSTIN = state code).
+    Convention: 'Output GST In-state - {abbr}' / 'Output GST Out-state - {abbr}'.
+    """
+    company_gstin = frappe.db.get_value("Company", company, "gstin") or ""
+    customer_gstin = frappe.db.get_value("Customer", customer, "gstin") or ""
+    if not company_gstin or not customer_gstin:
+        return None
+    is_intra_state = company_gstin[:2] == customer_gstin[:2]
+    template = (
+        f"Output GST In-state - {company_abbr}" if is_intra_state
+        else f"Output GST Out-state - {company_abbr}"
+    )
+    if frappe.db.exists("Sales Taxes and Charges Template", template):
+        return template
+    return None
+
+
 def _default_warehouse(ma_doc: Any) -> str | None:
     """Resolve the ERPNext Warehouse mapped to the MA's default EE
     Location. Returns None if the mapping doesn't exist — caller
@@ -494,12 +534,28 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
         if qty <= 0:
             continue
         selling_price = float(r.get("selling_price") or 0)
-        rate = selling_price / qty if qty else 0
-        items.append({
+        # EE's `selling_price` is the tax-INCLUSIVE line total (India
+        # B2B convention — verified against total_amount = Σ selling_price
+        # and total_tax = Σ tax on real invoices). Back out per-line tax
+        # so the rate we hand ERPNext is pre-tax. When the Sales Taxes
+        # & Charges Template + item_tax_template add GST back at the
+        # same rate, SI grand_total lands ≈ EE.total_amount.
+        # (Small rounding drift possible due to 2-decimal rate storage
+        # — PR #291's variance-tolerant handler catches it.)
+        tax_rate = float(r.get("tax_rate") or 0)
+        line_pre_tax = (
+            selling_price / (1 + tax_rate / 100.0)
+            if tax_rate > 0 else selling_price
+        )
+        rate = line_pre_tax / qty if qty else 0
+        item_dict = {
             "item_code": item_code,
             "qty": qty,
             "rate": rate,
-        })
+        }
+        if tax_rate > 0:
+            item_dict["_ecs_tax_rate"] = tax_rate  # used by SO builder
+        items.append(item_dict)
     return items
 
 
@@ -518,6 +574,25 @@ def _create_and_submit_so(
     )[:10]
     invoice_date = (ee_row.get("invoice_date") or "")[:10]
 
+    # Resolve GST templates per CLAUDE.md #206: set taxes_and_charges
+    # + per-line item_tax_template, let ERPNext compute rows natively.
+    company_abbr = frappe.get_cached_value("Company", ma_doc.company, "abbr")
+    tax_template = _pick_sales_tax_template(ma_doc.company, company_abbr, customer)
+
+    def _build_item_dict(it: dict) -> dict:
+        d = {
+            "item_code": it["item_code"],
+            "qty": it["qty"],
+            "rate": it["rate"],
+            "delivery_date": invoice_date,
+        }
+        tax_rate = it.get("_ecs_tax_rate")
+        if tax_rate:
+            itt = _pick_item_tax_template(company_abbr, tax_rate)
+            if itt:
+                d["item_tax_template"] = itt
+        return d
+
     so_doc = {
         "doctype": "Sales Order",
         "customer": customer,
@@ -526,16 +601,10 @@ def _create_and_submit_so(
         "delivery_date": invoice_date,  # invoice date works as a proxy
         "currency": (ee_row.get("invoice_currency_code") or "INR").upper(),
         "conversion_rate": 1,  # foreign currency handled by later PR
-        "items": [
-            {
-                "item_code": it["item_code"],
-                "qty": it["qty"],
-                "rate": it["rate"],
-                "delivery_date": invoice_date,
-            }
-            for it in items
-        ],
+        "items": [_build_item_dict(it) for it in items],
     }
+    if tax_template:
+        so_doc["taxes_and_charges"] = tax_template
     # Warehouse resolution — walk the fallback chain:
     #   1. MA.warehouse (explicit override on the MA)
     #   2. EE Location.mapped_warehouse (account-default routing)
