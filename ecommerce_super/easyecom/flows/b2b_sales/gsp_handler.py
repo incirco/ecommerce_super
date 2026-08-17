@@ -318,10 +318,30 @@ def mint_irn_for_si(si_name: str, *, ee_account: str | None = None) -> dict[str,
     # already have set_posting_time=1 baked in, so the ERPNext-native
     # date freeze works without our intervention.
     if si.docstatus == 0:
+        # gh#267 — roll back a FAILED submit so we never leave a corrupt
+        # half-submitted SI (docstatus flipped to 1 with only some Stock
+        # Ledger entries posted before the failing line, e.g. on a
+        # NegativeStockError). ERPNext's submit is atomic on its own, but
+        # our caller (_einvoice_handler_impl) CATCHES the exception and
+        # RETURNS a 422 to EE — which makes Frappe COMMIT the partial
+        # submit at request teardown instead of discarding it. A named
+        # savepoint scopes the undo to just this submit: the Draft SI +
+        # Map link that find_or_create_si_for_gsp already committed
+        # survive, and the SI is left in Draft for FDE review — exactly
+        # the state a manual desk submit failure would leave.
+        frappe.db.savepoint("ecs_gsp_si_submit")
         try:
             si.flags.ignore_permissions = True
             si.submit()
         except Exception as exc:
+            try:
+                frappe.db.rollback(save_point="ecs_gsp_si_submit")
+            except Exception:
+                # Savepoint already gone (e.g. an inner commit released
+                # it) — fall back to a full rollback. The Draft SI + Map
+                # link were committed earlier, so this only discards the
+                # failed submit, never the SI itself.
+                frappe.db.rollback()
             raise GSPHandlerError(
                 f"SI {si_name} could not be submitted: "
                 f"{type(exc).__name__}: {exc}"
