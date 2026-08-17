@@ -189,6 +189,41 @@ def backfill_b2b_from_ee_api(
 # --------------------------------------------------------------
 
 
+def _location_key(ma_doc: Any) -> str:
+    """Resolve the bare location_key string for the MA's EE Account.
+
+    ORDERS_GET_ALL is a non-foundational endpoint — client.py:240-241
+    only adds the Bearer header when self.location_key is set. Without
+    it, EE returns 401. Foundational endpoints (customer pull, item
+    pull) fall through to a different path that auto-resolves from the
+    account, which is why they work with EasyEcomClient(company=X).
+
+    Two-step deref matches polling.py:151-169:
+      1. EasyEcom Account.default_location_key → EE Location docname
+      2. EasyEcom Location.location_key → bare location_key string
+    """
+    if not ma_doc.easyecom_account:
+        raise ValueError(
+            f"Marketplace Account {ma_doc.name} has no easyecom_account"
+        )
+    loc_docname = frappe.db.get_value(
+        "EasyEcom Account", ma_doc.easyecom_account, "default_location_key"
+    )
+    if not loc_docname:
+        raise ValueError(
+            f"EasyEcom Account {ma_doc.easyecom_account!r} has no "
+            f"default_location_key configured"
+        )
+    key = frappe.db.get_value(
+        "EasyEcom Location", loc_docname, "location_key"
+    )
+    if not key:
+        raise ValueError(
+            f"EasyEcom Location {loc_docname!r} has no location_key field"
+        )
+    return key
+
+
 def _refresh_customer_master(ma_doc: Any, *, dry_run: bool) -> dict:
     """Pull latest B2B customers from EE via the standard discovery flow.
 
@@ -202,7 +237,7 @@ def _refresh_customer_master(ma_doc: Any, *, dry_run: bool) -> dict:
 
     from ecommerce_super.easyecom.flows.customer_pull import pull_customers
     try:
-        client = EasyEcomClient(company=ma_doc.company)
+        client = EasyEcomClient(location_key=_location_key(ma_doc))
     except Exception as exc:
         return {"error": f"client init: {type(exc).__name__}: {exc}"}
     outcome = pull_customers(client=client)
@@ -231,7 +266,7 @@ def _fetch_b2b_invoices(
     """
     from datetime import date, timedelta
 
-    client = EasyEcomClient(company=ma_doc.company)
+    client = EasyEcomClient(location_key=_location_key(ma_doc))
 
     invoices: list[dict] = []
     seen_ids: set[str] = set()
