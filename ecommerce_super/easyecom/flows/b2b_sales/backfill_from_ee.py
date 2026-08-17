@@ -154,6 +154,11 @@ def backfill_b2b_from_ee_api(
         invoices = _apply_resume_filter(invoices, resume_from_invoice_id)
         result["invoices_after_resume_filter"] = len(invoices)
 
+    # Import for the variance-tolerant branch below
+    from ecommerce_super.easyecom.flows.b2b_sales.invoice_mirror import (
+        InvoiceMirrorVariance,
+    )
+
     # Step 3: process each invoice
     for ee_row in invoices:
         if not dry_run:
@@ -171,6 +176,19 @@ def backfill_b2b_from_ee_api(
                 # gateway/worker timeout leaves everything up to now
                 # already persisted (idempotency dedupes on re-run).
                 frappe.db.commit()
+        except InvoiceMirrorVariance as exc:
+            # Variance is a warning, not a failure — per mirror's own
+            # design ("Sales Invoice was created (in Draft) but flagged
+            # for FDE review"). Keep the SI, count it, log the variance.
+            _bump_counter(result, "created_with_variance")
+            result.setdefault("variance_details", []).append({
+                "invoice_id": ee_row.get("invoice_id"),
+                "invoice_number": ee_row.get("invoice_number"),
+                "variance": str(exc)[:400],
+            })
+            if not dry_run:
+                frappe.db.commit()
+            continue
         except Exception as exc:
             result["errors"] += 1
             result["error_details"].append({
