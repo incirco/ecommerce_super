@@ -95,6 +95,7 @@ def backfill_b2b_from_ee_api(
     dry_run: str | bool = True,
     skip_customer_discovery: str | bool = False,
     resume_from_invoice_id: str | None = None,
+    order_type_keys: str | list[str] | None = None,
 ) -> dict:
     """Backfill B2B SOs + SIs from EE's getAllOrders for a date window.
 
@@ -108,12 +109,21 @@ def backfill_b2b_from_ee_api(
         resume_from_invoice_id: EE invoice_id to start from (skip
             all rows up to and including this one). Enables resume
             after partial-batch failure.
+        order_type_keys: EE order_type_key values to include. Defaults
+            to ["businessorder"]. Pass ["businessorder",
+            "stocktransferorder"] to include STNs (internal warehouse
+            transfers) which land as SIs with is_internal_customer=1
+            + Non-GST template.
 
     Returns:
         Summary dict with counts + per-outcome details.
     """
     dry_run = _as_bool(dry_run)
     skip_customer_discovery = _as_bool(skip_customer_discovery)
+    # HTTP form values arrive as JSON strings for list params
+    if isinstance(order_type_keys, str):
+        order_type_keys = frappe.parse_json(order_type_keys)
+    order_type_keys = order_type_keys or ["businessorder"]
 
     ma_doc = frappe.get_cached_doc(
         "EasyEcom Marketplace Account", marketplace_account
@@ -146,6 +156,7 @@ def backfill_b2b_from_ee_api(
         ma_doc,
         invoice_date_start=invoice_date_start,
         invoice_date_end=invoice_date_end,
+        order_type_keys=order_type_keys,
     )
     result["invoices_pulled"] = len(invoices)
 
@@ -275,16 +286,32 @@ def _pick_item_tax_template(company_abbr: str, tax_rate: float) -> str | None:
 
 def _pick_sales_tax_template(
     company: str, company_abbr: str, customer: str,
+    ee_row: dict | None = None,
 ) -> str | None:
-    """Pick In-state vs Out-state Sales Taxes and Charges Template
-    based on GSTIN state comparison (first 2 digits of GSTIN = state code).
+    """Pick In-state vs Out-state Sales Taxes and Charges Template.
+    First tries GSTIN state comparison; falls back to billing_state
+    name comparison from ee_row (for URP customers without GSTIN).
     Convention: 'Output GST In-state - {abbr}' / 'Output GST Out-state - {abbr}'.
     """
     company_gstin = frappe.db.get_value("Company", company, "gstin") or ""
-    customer_gstin = frappe.db.get_value("Customer", customer, "gstin") or ""
-    if not company_gstin or not customer_gstin:
+    if not company_gstin:
         return None
-    is_intra_state = company_gstin[:2] == customer_gstin[:2]
+
+    customer_gstin = frappe.db.get_value("Customer", customer, "gstin") or ""
+    if customer_gstin:
+        is_intra_state = company_gstin[:2] == customer_gstin[:2]
+    elif ee_row:
+        # URP fallback: compare billing_state name to pickup_state (which
+        # is the company's state per the EE payload for the shipping-
+        # origin warehouse). Match = in-state (CGST+SGST), else Out-state (IGST).
+        billing_state = (ee_row.get("billing_state") or "").strip().lower()
+        pickup_state = (ee_row.get("pickup_state") or "").strip().lower()
+        if not billing_state or not pickup_state:
+            return None
+        is_intra_state = billing_state == pickup_state
+    else:
+        return None
+
     template = (
         f"Output GST In-state - {company_abbr}" if is_intra_state
         else f"Output GST Out-state - {company_abbr}"
@@ -346,15 +373,18 @@ def _refresh_customer_master(ma_doc: Any, *, dry_run: bool) -> dict:
 
 def _fetch_b2b_invoices(
     ma_doc: Any, *, invoice_date_start: str, invoice_date_end: str,
+    order_type_keys: list[str] | None = None,
 ) -> list[dict]:
     """Poll getAllOrders with invoice_start_date/invoice_end_date +
-    filter to B2B (order_type_key == 'businessorder').
+    filter to order_type_keys (default: 'businessorder').
 
     EE caps getAllOrders windows at 7 days (same cap b2c polling
     enforces at polling.py:289). Chunk the requested invoice-date
     range into 7-day sub-windows and dedup across them.
     """
     from datetime import date, timedelta
+
+    allowed = {k.lower() for k in (order_type_keys or ["businessorder"])}
 
     client = EasyEcomClient(location_key=_location_key(ma_doc))
 
@@ -384,7 +414,7 @@ def _fetch_b2b_invoices(
                 invoice_id = str(row.get("invoice_id") or "")
                 if not invoice_id or invoice_id in seen_ids:
                     continue
-                if (row.get("order_type_key") or "").lower() != "businessorder":
+                if (row.get("order_type_key") or "").lower() not in allowed:
                     continue
                 if not (row.get("invoice_number") or "").strip():
                     continue
@@ -486,24 +516,216 @@ def _process_one_invoice(
 
 
 def _resolve_customer(ee_row: dict, ma_doc: Any) -> str | None:
-    """Look up an ERPNext Customer whose GSTIN matches the EE row's
-    buyer_gst. URP / blank / NA buyers → no match (B2B needs GSTIN).
+    """Return a Customer name for the EE row's buyer.
 
-    Filters `disabled=0` — a disabled Customer would fail SO validation
-    with PartyDisabled anyway, and it's common for a GSTIN to be shared
-    by multiple Customer records (auto-suffixed duplicates, warehouse
-    variants) where only the enabled one is the intended target.
+    Resolution chain (first match wins):
+      1. GSTIN lookup (India Compliance standard) — for buyers with a
+         valid Indian GSTIN that matches an existing Customer.
+      2. ecs_ee_customer_code lookup — for buyers we auto-created on a
+         previous backfill run (idempotency).
+      3. Auto-create a Customer using the EE row (URP domestic,
+         Overseas, self-invoicing / STN internal). Placeholder name;
+         ops renames later if desired.
+
+    Only returns None if the EE row lacks a customer_code AND doesn't
+    match anything on GSTIN (shouldn't happen for real EE data).
+    Filters `disabled=0` on GSTIN lookup — disabled Customer would
+    fail SO validation with PartyDisabled anyway.
     """
     buyer_gst = (ee_row.get("buyer_gst") or "").strip()
-    if not buyer_gst or buyer_gst.upper() in {"URP", "NA", "N/A"}:
-        return None
-    # Look via the Customer.gstin field (India Compliance-standard)
-    customer = frappe.db.get_value(
-        "Customer",
-        {"gstin": buyer_gst, "disabled": 0},
+    company_gstin = (
+        frappe.db.get_value("Company", ma_doc.company, "gstin") or ""
+    ).strip()
+
+    # 1. GSTIN lookup — skip when GSTIN is URP-like OR matches company
+    # (self-invoicing needs the internal-customer path below).
+    is_urp_like = (
+        not buyer_gst or buyer_gst.upper() in {"URP", "NA", "N/A"}
+    )
+    is_self = bool(buyer_gst) and buyer_gst == company_gstin
+    if not is_urp_like and not is_self:
+        by_gst = frappe.db.get_value(
+            "Customer",
+            {"gstin": buyer_gst, "disabled": 0},
+            "name",
+        )
+        if by_gst:
+            return by_gst
+
+    # 2. ecs_ee_customer_code lookup — idempotency for auto-created
+    code = ee_row.get("customer_code")
+    if code:
+        by_code = frappe.db.get_value(
+            "Customer",
+            {"ecs_ee_customer_code": code, "disabled": 0},
+            "name",
+        )
+        if by_code:
+            return by_code
+
+    # 3. Auto-create
+    return _create_customer_from_ee(ee_row, ma_doc, company_gstin=company_gstin)
+
+
+def _create_customer_from_ee(
+    ee_row: dict, ma_doc: Any, *, company_gstin: str,
+) -> str | None:
+    """Auto-create a Customer from EE row data.
+
+    Discriminates by billing_country + buyer_gst:
+      - buyer_gst == company_gstin → internal (is_internal_customer=1),
+        Non-GST style, represented_company=<same>
+      - billing_country != India → Overseas
+      - Indian + URP/blank buyer_gst → Unregistered
+      - Indian + valid buyer_gst → Registered Regular (rare here —
+        would normally match by GSTIN in resolver step 1)
+
+    buyer_name is redacted by EE's getAllOrders for PII, so name
+    is derived from customer_code + billing_city + billing_country.
+    Ops can rename via the desk after backfill.
+    """
+    code = ee_row.get("customer_code")
+    if not code:
+        return None  # No stable dedup key — refuse to create
+
+    billing_country = (
+        ee_row.get("billing_country") or ee_row.get("country") or ""
+    ).strip()
+    billing_city = (
+        ee_row.get("billing_city") or ee_row.get("city") or ""
+    ).strip()
+    buyer_gst = (ee_row.get("buyer_gst") or "").strip()
+
+    is_self = bool(buyer_gst) and buyer_gst == company_gstin
+    is_overseas = billing_country and billing_country.lower() != "india"
+
+    if is_self:
+        gst_category = "Registered Regular"  # will use Non-GST template downstream
+        name_prefix = "EE Internal Transfer Customer"
+        is_internal = 1
+    elif is_overseas:
+        gst_category = "Overseas"
+        name_prefix = "EE Overseas B2B Customer"
+        is_internal = 0
+    elif not buyer_gst or buyer_gst.upper() in {"URP", "NA", "N/A"}:
+        gst_category = "Unregistered"
+        name_prefix = "EE URP B2B Customer"
+        is_internal = 0
+    else:
+        # Valid Indian GSTIN but no existing Customer — create fresh
+        gst_category = "Registered Regular"
+        name_prefix = "EE B2B Customer"
+        is_internal = 0
+
+    parts = [name_prefix, str(code)]
+    if billing_city:
+        parts.append(f"({billing_city}")
+        if billing_country:
+            parts[-1] += f", {billing_country})"
+        else:
+            parts[-1] += ")"
+    customer_name = " ".join(parts)
+
+    cust = {
+        "doctype": "Customer",
+        "customer_name": customer_name,
+        "customer_type": "Company",
+        "customer_group": "Commercial",
+        "territory": "India" if not is_overseas else "All Territories",
+        "gst_category": gst_category,
+        "disabled": 0,
+        "ecs_ee_customer_code": code,
+    }
+    if is_internal:
+        cust["is_internal_customer"] = 1
+        cust["represented_company"] = ma_doc.company
+        # ERPNext requires the "Allowed To Transact With" child table
+        # populated when is_internal_customer=1, else SO validate throws
+        # ValidationError. Add the current MA's company.
+        cust["companies"] = [{"company": ma_doc.company}]
+    # Only stamp gstin on Indian Registered Regular — Overseas can hold
+    # a foreign non-GSTIN identifier without IC checksum failure
+    if gst_category == "Registered Regular" and buyer_gst and not is_self:
+        cust["gstin"] = buyer_gst
+
+    # Overseas customers transacting in a foreign currency need a
+    # Party Account (child: Customer.accounts) matching the invoice
+    # currency, else ERPNext throws "Party Account ... currency (INR)
+    # and document currency (XXX) should be same".
+    if is_overseas:
+        currency = (ee_row.get("invoice_currency_code") or "INR").upper()
+        if currency != "INR":
+            debtor = _ensure_foreign_debtor(ma_doc.company, currency)
+            if debtor:
+                cust["accounts"] = [
+                    {"company": ma_doc.company, "account": debtor}
+                ]
+            # ERPNext's Party Account currency check: Debtor's currency
+            # must match either customer.default_currency ("billing
+            # currency") or Company.default_currency. Pin customer's
+            # default to the invoice currency so the check passes.
+            cust["default_currency"] = currency
+
+    doc = frappe.get_doc(cust)
+    doc.flags.ignore_permissions = True
+    doc.flags.ignore_mandatory = True
+    doc.insert()
+    return doc.name
+
+
+def _ensure_foreign_debtor(company: str, currency: str) -> str | None:
+    """Return an existing Receivable account for (company, currency),
+    else create one alongside the company's default INR Debtor.
+
+    Naming convention: '<parent_name> {CUR} - <abbr>' e.g.
+    'Debtors CAD - HQL'. Auto-created under the same parent group as
+    the default Debtor. Idempotent.
+    """
+    # Find any existing receivable account with matching currency
+    existing = frappe.db.get_value(
+        "Account",
+        {
+            "company": company,
+            "account_type": "Receivable",
+            "account_currency": currency,
+            "is_group": 0,
+        },
         "name",
     )
-    return customer
+    if existing:
+        return existing
+
+    # Auto-create — anchor to the company's default receivable account's parent
+    default_debtor = frappe.db.get_value(
+        "Company", company, "default_receivable_account"
+    )
+    if not default_debtor:
+        default_debtor = frappe.db.get_value(
+            "Account",
+            {"company": company, "account_type": "Receivable", "is_group": 0},
+            "name",
+        )
+    if not default_debtor:
+        return None
+    parent_account, root_name = frappe.db.get_value(
+        "Account", default_debtor, ["parent_account", "account_name"]
+    )
+    abbr = frappe.get_cached_value("Company", company, "abbr")
+    new_name = f"{root_name} {currency} - {abbr}"
+    if frappe.db.exists("Account", new_name):
+        return new_name
+    acc = frappe.get_doc({
+        "doctype": "Account",
+        "account_name": f"{root_name} {currency}",
+        "parent_account": parent_account,
+        "company": company,
+        "account_type": "Receivable",
+        "account_currency": currency,
+        "is_group": 0,
+    })
+    acc.flags.ignore_permissions = True
+    acc.insert()
+    return acc.name
 
 
 def _resolve_line_items(ee_row: dict) -> list[dict]:
@@ -535,24 +757,17 @@ def _resolve_line_items(ee_row: dict) -> list[dict]:
             continue
         selling_price = float(r.get("selling_price") or 0)
         # EE's `selling_price` is the tax-INCLUSIVE line total (India
-        # B2B convention — verified against total_amount = Σ selling_price
-        # and total_tax = Σ tax on real invoices). Back out per-line tax
-        # so the rate we hand ERPNext is pre-tax. When the Sales Taxes
-        # & Charges Template + item_tax_template add GST back at the
-        # same rate, SI grand_total lands ≈ EE.total_amount.
-        # (Small rounding drift possible due to 2-decimal rate storage
-        # — PR #291's variance-tolerant handler catches it.)
-        tax_rate = float(r.get("tax_rate") or 0)
-        line_pre_tax = (
-            selling_price / (1 + tax_rate / 100.0)
-            if tax_rate > 0 else selling_price
-        )
-        rate = line_pre_tax / qty if qty else 0
+        # B2B convention). Store the tax-inclusive per-unit rate + the
+        # per-line tax_rate; the SO builder decides whether to back out
+        # tax (regular GST invoice — template re-adds it) or use raw
+        # (STN / self-invoicing / Overseas exports — no GST added).
+        rate = selling_price / qty if qty else 0
         item_dict = {
             "item_code": item_code,
             "qty": qty,
-            "rate": rate,
+            "rate": rate,  # tax-inclusive per-unit
         }
+        tax_rate = float(r.get("tax_rate") or 0)
         if tax_rate > 0:
             item_dict["_ecs_tax_rate"] = tax_rate  # used by SO builder
         items.append(item_dict)
@@ -574,20 +789,53 @@ def _create_and_submit_so(
     )[:10]
     invoice_date = (ee_row.get("invoice_date") or "")[:10]
 
+    # Detect the internal / non-GST branches:
+    #  - STN (stocktransferorder): warehouse-to-warehouse internal move
+    #  - Self-invoicing: buyer_gst == company_gstin
+    # Both must skip GST templates entirely and use is_internal_customer
+    # on the Customer side. India Compliance refuses to charge GST when
+    # party = company, so a Non-GST setup is the only correct path.
+    company_gstin = (
+        frappe.db.get_value("Company", ma_doc.company, "gstin") or ""
+    ).strip()
+    buyer_gst = (ee_row.get("buyer_gst") or "").strip()
+    is_stn = (ee_row.get("order_type_key") or "").lower() == "stocktransferorder"
+    is_self = bool(buyer_gst) and buyer_gst == company_gstin
+    is_non_gst = is_stn or is_self
+
+    # For overseas customers (export), skip GST too — exports go under
+    # LUT/Bond or IGST-refund; either way our SI's grand_total should
+    # equal EE's foreign-currency native total (FX handled by ERPNext).
+    cust_gst_cat = frappe.db.get_value("Customer", customer, "gst_category")
+    is_overseas = cust_gst_cat == "Overseas"
+
     # Resolve GST templates per CLAUDE.md #206: set taxes_and_charges
     # + per-line item_tax_template, let ERPNext compute rows natively.
+    # Skip for internal / overseas — see above.
     company_abbr = frappe.get_cached_value("Company", ma_doc.company, "abbr")
-    tax_template = _pick_sales_tax_template(ma_doc.company, company_abbr, customer)
+    tax_template = None
+    if not is_non_gst and not is_overseas:
+        tax_template = _pick_sales_tax_template(
+            ma_doc.company, company_abbr, customer, ee_row=ee_row,
+        )
 
     def _build_item_dict(it: dict) -> dict:
+        # Rate arriving from _resolve_line_items is tax-INCLUSIVE.
+        # For internal / overseas: keep as-is (no tax added downstream,
+        #   so grand_total = rate × qty = EE.total exactly).
+        # For regular GST: back out per-line tax so template can re-add.
+        tax_rate = it.get("_ecs_tax_rate")
+        if tax_rate and not is_non_gst and not is_overseas:
+            rate = it["rate"] / (1 + tax_rate / 100.0)
+        else:
+            rate = it["rate"]
         d = {
             "item_code": it["item_code"],
             "qty": it["qty"],
-            "rate": it["rate"],
+            "rate": rate,
             "delivery_date": invoice_date,
         }
-        tax_rate = it.get("_ecs_tax_rate")
-        if tax_rate:
+        if tax_rate and not is_non_gst and not is_overseas:
             itt = _pick_item_tax_template(company_abbr, tax_rate)
             if itt:
                 d["item_tax_template"] = itt
@@ -600,9 +848,16 @@ def _create_and_submit_so(
         "transaction_date": order_date,
         "delivery_date": invoice_date,  # invoice date works as a proxy
         "currency": (ee_row.get("invoice_currency_code") or "INR").upper(),
-        "conversion_rate": 1,  # foreign currency handled by later PR
         "items": [_build_item_dict(it) for it in items],
     }
+    # conversion_rate: for INR (or company default), pin to 1; for
+    # foreign, let ERPNext auto-fetch from Currency Exchange for the
+    # transaction_date (we pre-loaded FX rows for July foreign dates).
+    company_currency = frappe.db.get_value(
+        "Company", ma_doc.company, "default_currency"
+    ) or "INR"
+    if so_doc["currency"] == company_currency:
+        so_doc["conversion_rate"] = 1
     if tax_template:
         so_doc["taxes_and_charges"] = tax_template
     # Warehouse resolution — walk the fallback chain:
