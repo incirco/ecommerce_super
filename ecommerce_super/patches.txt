@@ -224,3 +224,9 @@ ecommerce_super.patches.v0_1.backfill_marketplace_order_map_from_existing_sis
 # inclusive selling_price. Idempotent Property Setter — no schema
 # migration, no print-format changes (amount still at 2 decimals).
 ecommerce_super.patches.v0_1.raise_rate_precision_for_backfill_accuracy
+
+# 2026-08-20: add ecs_ee_customer_code Int field on Customer. Used
+# by B2B backfill (PR #292 follow-up) to auto-create Customers per
+# EE customer_code for URP/Overseas/self-invoicing buyers, keeping
+# re-runs idempotent (no duplicate Customer records on re-import).
+ecommerce_super.patches.v0_1.add_customer_ee_customer_code_field
