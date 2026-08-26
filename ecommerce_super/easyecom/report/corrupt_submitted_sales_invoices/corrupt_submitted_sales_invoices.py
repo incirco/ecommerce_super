@@ -131,18 +131,18 @@ def _get_data(filters: dict) -> list[dict]:
         elif gl == 0 and actual > 0:
             r["bucket"] = BUCKET_ZERO_GL
             r["suggested_action"] = _(
-                f"gh#267 half-submit: {actual} of {expected} stock lines "
-                "posted, but no GL entries. Stock reduced without revenue "
-                "booked. Cancel SI (reverses posted SLEs) + investigate."
-            )
+                "gh#267 half-submit: {0} of {1} stock lines posted, but "
+                "no GL entries. Stock reduced without revenue booked. "
+                "Cancel SI (reverses posted SLEs) + investigate."
+            ).format(actual, expected)
         elif actual < expected:
             r["bucket"] = BUCKET_PARTIAL
             r["suggested_action"] = _(
-                f"gh#267 half-submit: {actual} of {expected} stock lines "
-                "posted (GL present). Either: (a) Stock Reconciliation to "
-                "match SI billing, keep SI as-is; (b) Cancel SI (reverses "
-                "GL + posted SLEs), restock warehouse, re-submit."
-            )
+                "gh#267 half-submit: {0} of {1} stock lines posted (GL "
+                "present). Either: (a) Stock Reconciliation to match SI "
+                "billing, keep SI as-is; (b) Cancel SI (reverses GL + "
+                "posted SLEs), restock warehouse, re-submit."
+            ).format(actual, expected)
         else:
             # actual >= expected and gl > 0 → normal (batches/serials
             # can inflate SLE count; safe)
