@@ -14,15 +14,25 @@
  "module": "EasyEcom",
  "name": "Corrupt Submitted Sales Invoices",
  "owner": "Administrator",
- "prepared_report": 0,
+ "prepared_report": 1,
  "ref_doctype": "Sales Invoice",
  "report_name": "Corrupt Submitted Sales Invoices",
  "report_type": "Script Report",
  "roles": [
-  {"role": "EasyEcom Operator"},
-  {"role": "EasyEcom FDE"},
-  {"role": "EasyEcom System Manager"},
-  {"role": "Accounts User"},
-  {"role": "System Manager"}
+  {
+   "role": "EasyEcom Operator"
+  },
+  {
+   "role": "EasyEcom FDE"
+  },
+  {
+   "role": "EasyEcom System Manager"
+  },
+  {
+   "role": "Accounts User"
+  },
+  {
+   "role": "System Manager"
+  }
  ]
 }
