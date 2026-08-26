@@ -230,3 +230,10 @@ ecommerce_super.patches.v0_1.raise_rate_precision_for_backfill_accuracy
 # EE customer_code for URP/Overseas/self-invoicing buyers, keeping
 # re-runs idempotent (no duplicate Customer records on re-import).
 ecommerce_super.patches.v0_1.add_customer_ee_customer_code_field
+
+# 2026-08-26: flip Corrupt Submitted Sales Invoices report to
+# prepared_report=1 on already-installed sites (Frappe's Report JSON
+# reload doesn't overwrite this flag; it's one-shot at install).
+# Ensures the historical scan runs as a background job instead of
+# blocking the desk for minutes on large sites.
+ecommerce_super.patches.v0_1.flip_gh267_report_to_prepared
