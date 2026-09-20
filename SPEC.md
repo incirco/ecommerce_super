@@ -2540,167 +2540,191 @@ The model: read the Transfer Map for the structural story, read its Comments for
 
 # 11. B2B Sales Flow
 
-B2B orders are born in ERPNext (the seller's CRM and sales process produces a Sales Order) and pushed to EasyEcom for fulfilment. This is the inverse of the B2C flow (Section 12) where orders are born in EasyEcom and ERPNext sees them only at the invoice stage. The two flows have entirely different choreography and must not be confused.
+B2B orders are born in ERPNext as Sales Orders and pushed to EasyEcom for fulfilment. EasyEcom owns invoice generation; ERPNext mirrors. Stock reservation is local to ERPNext only — EE does not expose reservation state via any API channel (webhook or pull). The integration dispatches the createOrder push based on the EE Account's `ecs_b2b_module` (Old B2B vs New B2B) and `ecs_eway_origination` (EasyEcom vs ERPNext) configuration.
 
-## 11.1 The flow
+This section was rewritten 2026-06-13 (Phase 1 grounding) after EE-platform clarification revealed the pre-build SPEC contained multiple invalid assumptions. The pre-build §11 is **superseded**: it described an `inventory.reserved` webhook (doesn't exist), a Branch A "ERPNext generates invoice on EE webhook request" flow (EE doesn't expose `invoice.requested`; EE owns invoice generation), and multi-warehouse-spanning B2B orders (EE refuses these — separate orders per warehouse required). The full grounded design lives in `spec_sections/section_11_b2b_sales_packet.md`; this canonical section summarises decisions and points to the packet for build-level detail.
 
-```
-  ERPNext Sales Order
-       │ on_submit, target_warehouse mapped to EE location
-       ▼
-  Validate preconditions:
-       ─ Customer synced to EE                (else FAIL)
-       ─ Items synced for this Company        (else FAIL)
-       ─ Warehouse linked to EE               (per Source-of-Truth Map)
-       ─ Tax Category mapped                  (else FAIL)
-       │
-       ▼
-  Push as B2B Order to EasyEcom
-       │ POST /webhook/v2/createOrder (B2B order type)
-       │ Mode: Async (default) or Sync (configurable per Marketplace Account)
-       ▼
-  EE acknowledges with EE order ID
-       │
-       ▼
-  EE processes order — picking, packing
-       │ on inventory reserve event in EE
-       ▼
-  ERPNext mirrors as Stock Reservation Entry
-       │ (ERPNext v16 Stock Reservation, scope expanded across Sales Order / Pick List)
-       │
-       │ ... operator configuration determines next branch ...
-       ▼
-  Branch A: EE asks ERPNext for Invoice + e-waybill BEFORE dispatch
-       │ EE webhook: invoice_request received
-       │ ERPNext generates Sales Invoice (against the SO)
-       │ ERPNext generates e-waybill via india_compliance
-       │ ERPNext returns invoice + e-waybill to EE
-       │ EE prints, attaches, dispatches
-       │ EE dispatch event → ERPNext SI status updated to Delivered
-       ▼
-  Branch B: EE generates its own invoice (operator's choice)
-       │ EE dispatches order with EE-generated invoice
-       │ EE dispatch event → ERPNext creates Sales Invoice mirroring EE invoice
-       │ Stock Reservation released, Delivery Note created, stock moves
-```
+The §11 build is staged as Phase 1 (push side, local reservation, ERPNext-initiated cancellation, polling fallback — fully grounded against EE's documented createOrder + cancelOrder APIs) and Phase 2 (Generate Invoice receiver, Branch X/Y invoice flow, EE-initiated cancellation webhook, returns — deferred pending further EE clarification of webhook payloads, Custom GSP contract, and Mark Return mechanism). Phase 1 is buildable from the packet without Phase 2 dependencies.
 
-## 11.2 Preconditions
+## 11.0 The §11 principle
 
-Same strict-blocking semantics as the buying flow. SO submission fails fast if any precondition is unmet:
+**The integration does not modify any GL postings.** Same discipline as §9 and §10. ERPNext + India Compliance own all financial documents; the integration orchestrates *which* documents to create *when* with *which* references. The push side (Phase 1) creates no financial documents at all — it dispatches the SO to EE and tracks the ID mapping. The invoice mirror (Phase 2) creates SI in Draft from EE's Generate Invoice webhook payload; ERP user submits. The integration never auto-submits anything financial in §11.
 
-| Precondition | Error to user |
+## 11.1 The model (grounded 2026-06-13)
+
+**Gate 0 (lifecycle-wide):** integration acts iff `SO.set_warehouse` maps to an EE-mapped Location. set_warehouse empty or non-EE-mapped → silently inert. Same Gate-0 pattern as §9 and §10.
+
+**All ERPNext SOs are B2B by definition** in the integration's design — §12 (B2C / D2C / Marketplace) orders originate in EE and pull as Sales Invoices directly, never becoming ERPNext SOs.
+
+**No marketplace layer in §11.** Unlike §12, there is no per-channel concept. Each SO is customer-keyed.
+
+**Two B2B module variants on EE side**, configured per EE Account via `ecs_b2b_module`:
+
+- **Old B2B** — synchronous response. `createOrder` returns `SuborderID + OrderID + InvoiceID` immediately. Identifier capture is direct.
+- **New B2B** — asynchronous queue. `createOrder` returns `"Successfully Queued"` with empty data. Identifiers are assigned later. The integration captures them via polling fallback (Get All Orders) until EE confirms the documented correlation mechanism — currently `[OPEN]`.
+
+The discriminator is on EE's account configuration, not in the request. ERPNext sends the right payload shape based on `ecs_b2b_module`; EE's account routing dispatches.
+
+**EE owns invoice generation.** ERPNext receives the invoice via the Generate Invoice webhook (Phase 2) and mirrors as Sales Invoice. There is no "ERPNext-originated invoice" mode (the pre-build SPEC's Branch A is not a real EE capability).
+
+**Two e-way origination modes**, configured per EE Account via `ecs_eway_origination`:
+
+- **Branch X — EasyEcom (default).** EE uses its own default GSP for IRN + e-way generation. ERPNext receives final invoice values via Generate Invoice webhook. No upload from ERPNext.
+- **Branch Y — ERPNext.** EE calls ERPNext's exposed Custom GSP endpoint *synchronously* to obtain IRN + e-way. ERPNext generates these via India Compliance and responds. The Generate Invoice webhook fires after with the complete invoice state.
+
+**Stock reservation is local-only.** ERPNext-side Stock Reservation Entry (v16) fires on SO submission per Stock Settings configuration. No coupling to EE-side reservation state because EE does not expose reservation visibility (no `inventory.reserved` webhook, no pull endpoint returning reservation state; EE confirms this is "in discussion, may come in future"). Reconciliation channel is Get All Orders polling.
+
+**Lifecycle visible to ERPNext is two events plus polling fallback:**
+- `Generate Invoice` webhook — EE fires when invoice is generated (= dispatch imminent)
+- `Cancel Order` webhook — EE fires on EE-initiated cancellation
+- `Get All Orders` pull — polling fallback for missed events + New B2B identifier correlation
+
+EE does not emit webhooks for: picking, packing, partial dispatch, delivery confirmation, customer-initiated cancellation, or returns ("Mark Return" channel is `[OPEN]`).
+
+**Multi-warehouse SOs are refused at on_submit.** EE does not accept B2B orders spanning multiple warehouses (confirmed by EE platform team — "B2B order routing not allowed"). The integration's gate at `on_submit` requires all line items' `warehouse == set_warehouse`. ERPNext's standard `set_warehouse` field copies to all line items by default; manual line-level overrides that diverge from `set_warehouse` are the refusal trigger.
+
+## 11.2 Gate 0 and preconditions
+
+When Gate 0 (set_warehouse maps to EE Location) is True, every precondition below must hold. Each refusal fires at `on_submit` with a specific user-facing error:
+
+| Precondition | Refusal trigger |
 | --- | --- |
-| Customer synced to EE | Customer {customer} is not synced to EasyEcom for company {company}. Sync the customer before submitting this order. |
-| All items synced for this Company | Item {item_code} is not synced to EasyEcom. Sync the item before submitting. |
-| target_warehouse is mapped to an EE location | Warehouse {warehouse} is not mapped. Either map it or change target_warehouse on this SO. |
-| GSTIN populated on Customer (for B2B-large) | Customer {customer} has no GSTIN. B2B GST invoice cannot be generated. |
-| HSN code populated on every item | Item {item_code} missing HSN code. |
-| Pricing complete (no zero rates unless explicitly free-of-charge marked) | Item {item_code} has rate 0; mark explicitly as Free of Charge or set price. |
+| All line items' `warehouse == set_warehouse` | Mixed warehouses not supported |
+| EE Account has `ecs_b2b_module` configured | Module unset |
+| Customer has `ecs_easyecom_customer_id` for this Company (§8e synced) | Customer not synced |
+| Every line item has `ecs_easyecom_product_sku_code` (§8d synced) | Item not synced |
+| Customer has GSTIN (`tax_id` populated) — **Old B2B only; New B2B falls back to "URP"** | GSTIN missing (Old B2B only) |
+| Every item has HSN code | HSN missing |
+| Every line has non-zero rate (or explicit free-of-charge flag) | Zero rate without FOC marker |
+| Customer has Billing Address with Dynamic Link | Billing address missing |
+| SO has Shipping Address (or customer has Shipping Address) | Shipping address missing |
 
-## 11.3 SO push: payload and modes
+See packet §"Gate 0 and preconditions" for the exact refusal messages used at each gate.
 
-### 11.3.1 Async mode (default)
+## 11.3 Push side (Phase 1)
 
-- Sales Order on_submit fires the push as an EasyEcom Queue Job
-- ERPNext SO submission completes immediately regardless of EE availability
-- EE acknowledgement updates ecs_easyecom_so_id custom field on the SO
-- Failed pushes retry with back-off; persistent failures alert FDE; SO remains valid in ERPNext
-- Trade-off accepted: ERPNext may have a confirmed SO that EE has rejected (e.g., for stock unavailability) for a short window — handled by FDE-monitored failure dashboard
+Both modules use the same endpoint: `POST https://api.easyecom.io/webhook/v2/createOrder` with `orderType: "businessorder"`.
 
-### 11.3.2 Sync mode (configurable per Marketplace Account)
+**Hardcoded invariants** (encoded as constants, not exposed as configuration fields):
+- `is_market_shipped = 0` — B2B in the client's business model is always self-shipped.
+- `is_pricing_master = false` — ERPNext is always the source of pricing truth.
 
-- on_submit blocks until EE confirms acceptance
-- If EE rejects (e.g., stock unavailable, customer credit limit, item not found), the ERPNext on_submit fails and the SO is not submitted
-- Latency: typically 200ms-2s; user sees a brief save delay
-- Trade-off accepted: ERPNext UI hangs during the call; if EE is down, SO submissions are blocked entirely
-- Configuration: per Marketplace Account, push_so_mode = Sync, push_so_block_on_error = True
-- Recommended for high-value B2B clients where stock-promise consistency matters; not recommended for high-volume D2C
+**Payment derivation** (shared by both module payload builders) handles three scenarios:
 
-## 11.4 Stock Reservation on EE inventory-reserve event
+| Scenario | ERPNext state | EE payload |
+| --- | --- | --- |
+| **(I) Full prepaid** | SO has Payment Entry totalling ≥ SO grand_total | `paymentMode=5` (Prepaid), `paymentTransactionNumber=PE ref`, `collectableAmount=0`, `shippingMethod=3` |
+| **(II) Partial prepaid** | SO has Payment Entry totalling < SO grand_total | `paymentMode=2` (COD bucket), `paymentTransactionNumber=PE ref`, `collectableAmount=remainder`, `shippingMethod=1` |
+| **(III) Pure credit terms** | SO has no Payment Entry | `paymentMode=2`, `paymentTransactionNumber=""`, `collectableAmount=SO grand_total`, `shippingMethod=1` |
 
-ERPNext v16 expanded Stock Reservation Entry beyond Sales Order to also cover Pick Lists, Work Orders, and Subcontracting flows. We use the Sales-Order-scoped form to mirror EasyEcom's reservation event. The v16 implementation is more performant than v15's under high reserve/unreserve frequency, which matters for high-volume B2B clients.
+EE's data model only has Prepaid (5) and COD (2). Scenarios II and III both bucket as COD on EE's side with `collectableAmount` carrying the deferred amount. In the client's operational reality there is no actual cash collection on delivery — `collectableAmount` represents the deferred-invoice amount via credit terms.
 
-### 11.4.1 The flow
+**Date formatting** is split: `orderDate` in UTC, `expDeliveryDate` in IST (Asia/Kolkata) — per EE's documented field-level conventions.
 
-1. EE reserves stock for the order — fires a webhook event of type inventory.reserved with EE order ID, location_key, line items, qty
-1. Polling cron picks it up if webhook missed
-1. Resolve the EE order ID to the ERPNext Sales Order via ecs_easyecom_so_id
-1. Create Stock Reservation Entry against the SO for each line item, with reservation_based_on_voucher = Sales Order, against_warehouse = the SO's target_warehouse
-1. Stock Ledger Entry shows the reserved qty as committed; available qty for other orders drops accordingly
-1. On EE dispatch, the SRE is automatically released as the Delivery Note (or Sales Invoice with stock movement) consumes the reservation
+**Old B2B payload** includes header-level: `orderType`, `orderNumber`, `orderDate`, `expDeliveryDate`, `is_market_shipped=0`, `remarks1`, `shippingCost`, `discount`, three other discount fields (`walletDiscount`, `promoCodeDiscount`, `prepaidDiscount`) hardcoded to 0, `paymentMode`, `paymentGateway`, `shippingMethod`, `paymentTransactionNumber`, `collectableAmount`, package dimensions (all 0), `taxIdentificationNumber=customer.tax_id` (strict — no URP fallback), items array with `OrderItemId + Sku + productName + Quantity (string) + Price + itemDiscount`, customer array with billing + shipping blocks.
 
-### 11.4.2 Configuration gate
+**New B2B payload** is leaner: omits `expDeliveryDate`, `remarks2`, `paymentGateway`, `shippingMethod` is in payload but derived from payment scenario, the three other discount fields, package dimensions, paymentTransactionNumber only when present. Adds: `is_pricing_master=false`, `queue=1` (always queues), `taxIdentificationNumber=customer.tax_id or "URP"` (URP fallback for unregistered customers — New B2B only). Items array uses `Quantity` as integer (not string).
 
-- Stock Reservation must be enabled in ERPNext Stock Settings (on by default in v16 fresh installs)
-- Per Source-of-Truth Map row: mirror_stock_reservations = True (default)
-- If unchecked, the inventory-reserved event is logged but no SRE is created — used for clients who don't care about real-time reservation visibility
+**Response handling differs by module:**
+- **Old B2B**: response carries `SuborderID + OrderID + InvoiceID`; map row created with `status="Pushed"`.
+- **New B2B**: response is `"Successfully Queued"` with empty data; map row created with `status="Queued"` and identifier fields NULL. Polling fallback (or eventually a confirmed EE webhook) populates identifiers later.
 
-### 11.4.3 Edge cases
+Full payload builders, refusal messages, error handling, and Old/New differences are in the packet.
 
-- EE reserves more stock than ERPNext shows available: SRE creation fails. Integration Discrepancy of severity Error raised. FDE investigates — usually indicates inventory drift between systems
-- EE un-reserves (cancellation, change): inventory.unreserved event releases the SRE
-- Partial reservation (EE reserves only some lines): partial SREs created accordingly
-- Reservation expires in EE without dispatch: timeout handling — typically EE auto-cancels the reservation; we follow with SRE release
+## 11.4 Local stock reservation
 
-## 11.5 Invoice and e-waybill flow
+ERPNext v16's Stock Reservation Entry (SRE) mechanism is used as-is. SO submission triggers ERPNext-native SRE creation per Stock Settings configuration. The integration does not interfere with reservation logic.
 
-### 11.5.1 Branch A: EE asks ERPNext for invoice
+**Operational gap acknowledged:** ERPNext-side reservation can lag EE-side reality. If EE rejects an order asynchronously (out of stock, customer credit issue), ERPNext's reservation remains until polling reconciles. This is the trade-off given EE doesn't expose reservation state.
 
-EE is configured (per Marketplace Account or globally) to require ERPNext-generated invoices before dispatch. Trigger: EE webhook of type invoice.requested with EE order ID.
+**Architectural note for Phase 2 evolution:** when EE introduces reservation visibility API (currently "in discussion" per EE platform team), the reservation mirror layer should plug in cleanly without restructuring §11. Reservation logic stays isolated; assumptions about reservation being purely local do not bake into deep parts of the architecture.
 
-1. Resolve to ERPNext SO
-1. Create Sales Invoice from SO using standard ERPNext mechanism (sales_invoice from sales_order)
-1. Post tax lines via India Compliance app
-1. Submit the SI
-1. Generate e-invoice IRN via India Compliance
-1. Generate e-waybill via India Compliance with vehicle_no and transporter_id from EE payload
-1. Push back to EE: POST /b2b/uploadInvoice with PDF, IRN, e-waybill number
-1. EE acknowledges, prints, dispatches
+> **Note:** the pre-build §11.4 described mirroring EE's `inventory.reserved` webhook event as a Stock Reservation Entry against the ERPNext SO. **This webhook does not exist in EE's platform.** EE has confirmed reservation state is internal to its WMS and not exposed externally. The new §11.4 above replaces the pre-build version entirely.
 
-### 11.5.2 Branch B: EE generates its own invoice
+## 11.5 Invoice and e-waybill flow (Phase 2 — deferred)
 
-- Operator's choice if they prefer EE-generated invoices for B2B (rare but exists)
-- EE generates and dispatches
-- Dispatch webhook fires with invoice payload
-- Integration creates Sales Invoice in ERPNext mirroring EE invoice values exactly (rate, taxes, totals)
-- Variance check: if mirrored SI total differs from SO total by more than 1%, Integration Discrepancy raised
+`[OPEN: Phase 2 build is gated on EE platform clarifications. The following are deferred until EE confirms: Generate Invoice webhook payload sample + signature for both modules, Custom GSP endpoint contract (URL we expose, payload, response, timeout, idempotency mechanism), variance check tolerance.]`
 
-### 11.5.3 Choosing between branches
+Phase 2 design intent (from the packet):
 
-Configuration on Marketplace Account: invoice_origination = ERPNext / EasyEcom. Default: ERPNext (Branch A) because:
+**Branch X (EE generates e-way) — default.**
+1. EE generates invoice + IRN + e-way internally via its default GSP.
+2. EE fires Generate Invoice webhook to ERPNext with all values.
+3. ERPNext mirrors as Sales Invoice in Draft.
+4. Variance check: SI total vs SO total, tolerance `[OPEN: design-decision pending, lean toward 1%]`.
+5. ERP user submits SI; stock movement releases SRE.
 
-- ERPNext-generated invoice has full tax-template control, complete back-references, and fits cleanly into the GL
-- e-invoice and e-waybill compliance via India Compliance is more reliable than relying on EE's GST handling
-- ERPNext Sales Invoice is the auditor-readable artefact; mirroring an EE invoice introduces lossy translation
-Branch B exists for edge cases: clients with EE-managed B2B catalogues where EE controls all invoice generation.
+**Branch Y (ERPNext generates e-way).**
+1. EE generates invoice values internally (no IRN, no e-way).
+2. EE calls ERPNext's exposed Custom GSP endpoint *synchronously* with invoice payload.
+3. ERPNext generates IRN + e-way via India Compliance.
+4. ERPNext responds with IRN + e-way; EE proceeds.
+5. Generate Invoice webhook fires afterward with full invoice state; SI mirror per Branch X.
 
-## 11.6 SI to delivery completion
+**Critical Branch Y design risk:** EE's Custom GSP call is synchronous. India Compliance → GSTN can take 2–5 seconds with occasional spikes. If EE's timeout is tight and EE retries before ERPNext responds, duplicate GSTN calls produce duplicate IRNs and duplicate fees. **Mitigation: idempotency cache by EE-provided request ID (or by invoice ID if no request ID).** Cache returns the same IRN without re-calling GSTN.
 
-- EE dispatch event (post-invoice for Branch A, with-invoice for Branch B) fires confirmation webhook
-- ERPNext SI moves to Delivered status (custom workflow status; standard SI doesn't have Delivered)
-- Stock movement: standard SI mechanism with update_stock = True moves stock from warehouse to outgoing
-- Stock Reservation Entry is consumed automatically
-- Outstanding amount on the SI sits in Customer's debtors account until payment
+> **Note:** the pre-build §11.5 described two branches: Branch A (EE webhook `invoice.requested` triggers ERPNext-generated invoice, pushed back to EE via `POST /b2b/uploadInvoice`) and Branch B (EE generates own invoice, ERPNext mirrors via dispatch webhook). EE has confirmed: there is no `invoice.requested` webhook; EE generates the invoice internally; the choice is purely about *who generates IRN/e-way*, not who generates the invoice itself. The new Branch X / Branch Y framing above replaces the pre-build Branch A / Branch B entirely. The pre-build `POST /b2b/uploadInvoice` endpoint does not exist in this form — the equivalent (for Branch Y) is EE calling *ERPNext's* Custom GSP endpoint, not ERPNext calling EE.
 
-## 11.7 Multi-warehouse order
+## 11.6 Cancellation
 
-A B2B SO with line items across multiple linked warehouses:
+**ERPNext-initiated (Phase 1, grounded):**
 
-- Pushed as separate EE orders, one per location_key (similar to PO multi-warehouse handling)
-- Stock reservations and dispatches happen per EE order
-- Single ERPNext SO; multiple ecs_easyecom_so_mappings tracking each EE order
-- Single ERPNext SI consolidates the deliveries (or multiple SIs if delivery dates differ)
+Allowed only before invoice generation. After Generate Invoice fires, the order is committed on EE side and must be cancelled via EE's own flow.
 
-## 11.8 Failure modes
+Endpoint: `POST {{BaseURL}}/orders/cancelOrder` with `x-api-key` + `Authorization: Bearer <Jwt_Token>` headers. Payload: `{ "reference_code": "<SO name>" }`. Response: `{ "code": 200, "message": "Successfully Cancelled the Order with reference_code <SO name>", "data": [] }`.
 
-| Failure | FDE recovery |
+The integration uses `reference_code` (= SO name = `orderNumber` sent at createOrder) rather than `invoice_id` or `suborder_num` because:
+1. Works for both Old and New B2B uniformly — no conditional logic.
+2. Available immediately at SO submission — no dependency on EE's response identifiers.
+3. Avoids the New B2B identifier-correlation gap — cancellation works even before identifiers are correlated.
+
+Side effects: B2B Order Map row `status` → `Cancelled`, `cancelled_at` populated, ERPNext-side reservation released via standard SRE release. SO cancellation in ERPNext is left to the user's discretion (broader accounting implications; the integration only releases the §11 push side).
+
+**EE-initiated (Phase 2 — deferred):** EE fires a Cancel Order webhook on EE-side cancellation. ERPNext handler releases reservation, updates map status, notifies user. `[OPEN: Cancel Order webhook payload structure — pending EE]`.
+
+## 11.7 Polling fallback (Phase 1)
+
+Get All Orders endpoint provides periodic reconciliation between ERPNext's view of pushed B2B orders and EE's actual state. Catches:
+
+- Orders rejected/cancelled by EE that missed Cancel Order webhook delivery (Phase 2 concern but covers Phase 1 detection)
+- Orders progressed to invoice generation that missed Generate Invoice webhook (Phase 2 concern)
+- New B2B identifier correlation (the structural Phase 1 gap)
+
+Polling cadence default: 5 minutes per EE Account, configurable. `[OPEN: rate limits + exact endpoint path + filter format — confirm-in-build via Harmony/Puresta testing]`.
+
+## 11.8 Failure modes (Phase 1)
+
+| Failure | Recovery |
 | --- | --- |
-| EE rejects SO push (Async mode) | Inspect Queue Job error; fix root cause (often missing master sync); Retry |
-| EE rejects SO push (Sync mode) | ERPNext SO submission fails; user sees error; fix and resubmit |
-| Inventory reserve event arrives but SO doesn't exist in ERPNext yet (race) | Queue Job loops up to 6 times; if persistent, manual investigation |
-| EE dispatches without invoice request (Branch A configured but skipped) | Integration Discrepancy raised; FDE generates SI manually using EE dispatch data |
-| e-waybill generation fails | ERPNext blocks; FDE generates manually via India Compliance and pushes to EE |
-| Mirror SI variance > 1% (Branch B) | Integration Discrepancy; FDE reconciles; if EE invoice is wrong, FDE escalates to vendor; ERPNext SI uses EE values pending resolution |
+| Gate 0 not met | Silent inert |
+| Module not configured | REFUSED at on_submit |
+| Mixed-warehouse SO | REFUSED at on_submit |
+| Customer/item not synced | REFUSED at on_submit |
+| GSTIN missing (Old B2B) | REFUSED at on_submit |
+| createOrder HTTP error | Queue Job retries with back-off; persistent failure raises Integration Discrepancy |
+| createOrder non-200 code | Stops; Discrepancy raised; FDE triages |
+| Order rejected async after acceptance | Detected via polling; reservation released |
+| ERPNext reservation diverges from EE | Polling reconciles |
+| Cancellation attempted after invoice generation | REFUSED with clear error |
+| cancelOrder HTTP error | Retry with back-off; persistent failure alerts FDE |
+
+Phase 2 failure modes (Generate Invoice mismatch, Custom GSP latency, variance > threshold, returns) are in the packet's Phase 2 design sketch.
+
+## 11.9 Multi-warehouse orders
+
+Pre-build SPEC described splitting a single ERPNext SO across multiple EE orders via location_key. **EE platform team has confirmed this is not supported on the EE side: B2B order routing not allowed.** ERPNext must enforce single-warehouse SOs.
+
+This is implemented via the precondition: all line items' `warehouse == set_warehouse`. ERPNext's standard `set_warehouse` field copies to all lines by default, so the common case (user sets `set_warehouse` once) Just Works. Manual line-level overrides that diverge from `set_warehouse` trigger the refusal at `on_submit`.
+
+If a real business need arises to ship from multiple warehouses, the workaround is operational: create separate SOs per warehouse. No splitting logic in the integration.
+
+## 11.10 Carry-forwards
+
+**Phase 1 buildable now** from the packet. Single structural `[OPEN]` for Phase 1: New B2B identifier correlation mechanism (recoverable via polling until EE confirms a documented path). Three "confirm-during-build" items: Old B2B `paymentGateway` empty-string handling, Old B2B latitude/longitude on shipping block, Get All Orders endpoint path + filter format.
+
+**Phase 2 deferred** pending EE clarifications: Generate Invoice webhook payload + signature, Custom GSP endpoint contract, Cancel Order webhook payload, Mark Return mechanism + credit notes, webhook idempotency, rate limits.
+
+**Once Phase 1 ships and Phase 2 EE clarifications arrive**, this section will be amended with a closeout note (mirroring §10's amendment-after-smoke pattern).
 
 # 12. B2C / D2C / Marketplace Sales Flow
 
@@ -6312,8 +6336,22 @@ has_permission = {
     "EasyEcom Configuration Audit": "ecommerce_super.easyecom.permissions.audit_no_modify",
     "EasyEcom API Call": "ecommerce_super.easyecom.permissions.append_only",
     "EasyEcom Webhook Event": "ecommerce_super.easyecom.permissions.append_only",
+    "EasyEcom Company Settings": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom Sync Record": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom Queue Job": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom Sync Cursor": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom Replay Plan": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom SLA Budget": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom SLA Breach": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "EasyEcom Morning Brief Snapshot": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "Integration Discrepancy": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "Marketplace Account": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "Marketplace Order Map": "ecommerce_super.easyecom.permissions.company_scope_doc",
+    "Source-of-Truth Map": "ecommerce_super.easyecom.permissions.company_scope_doc",
 }
 ```
+
+**Amendment 2026-06-11 (gh#14 follow-up, PR #47, commit 2341850):** the `has_permission` dict was extended to add per-doc Company scoping via the `company_scope_doc` checker. The original `permission_query_conditions` dict (above) handles list-view filtering — but list-view filtering alone is bypassed when a user accesses a document directly by URL (`/app/easyecom-company-settings/SOME-NAME`). The `has_permission` hook closes that gap by re-checking the Company scope at document-access time. The `company_scope_doc` checker enforces the same scoping rule as `company_scope` but on a single in-hand doctype + name, not a list-view query. Note: `EasyEcom Configuration Audit`, `EasyEcom API Call`, and `EasyEcom Webhook Event` retain their pre-existing custom checkers (`audit_no_modify`, `append_only`) which already include Company scoping in their logic.
 
 ### 31.8.4 fixtures
 
