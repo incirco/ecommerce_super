@@ -61,6 +61,42 @@ The conclusion: we accept these costs because the integration is too central to 
 - All times are IST unless otherwise stated
 - All amounts are in INR unless otherwise stated
 
+## 1.6 App Topology
+
+The codebase ships as **two Frappe apps**, not one:
+
+- **`ecommerce_super`** — integration app. Owns the EasyEcom integration (§3–§13), the shared master data (Marketplace, Marketplace Account, Field Mapping library, Source-of-Truth Map, EasyEcom Company Settings, Sync Record, API Call, Webhook Event), and the Custom GSP endpoints. This is where 95% of the code lives.
+- **`ecommerce_super_recon`** — reconciliation app. Owns settlement ingest, settlement templates, rate-card subscriptions, expected-vs-actual computation, variance write-back, and claim reports (§17 forward). Declares `required_apps = ["ecommerce_super"]` and installs on top.
+
+Per-client extension apps (`ecommerce_super_<client>`, per CLAUDE.md §4) sit on top of both and carry only Field Mapping overrides, settlement template overrides, and methodology variances. Never generic logic.
+
+### 1.6.1 Interface contract
+
+Recon consumes `ecommerce_super` DocTypes and functions; it does not fork, shadow, or reimplement them. The stable interface:
+
+| Consumed by recon | Owned by | Notes |
+| --- | --- | --- |
+| `Marketplace Account` | §8.6.2 | Identity/routing only (seller_id, GSTIN, default_warehouse). Composite key `(company, marketplace, marketplace_seller_id)` is the recon join axis. |
+| `Marketplace` | §8.6.1 | Flat channel list keyed by EE `marketplace_id` |
+| `EasyEcom Company Settings` | §3.5 | Per-Company toggles the recon engine consults |
+| `Sales Invoice` + `ecs_*` fields | §4.2 | Recon writes only to `ecs_actual_net`, `ecs_variance_amount`, `ecs_variance_pct`, `ecs_settlement_status` |
+| `EasyEcomClient` | §3.6 | Recon reuses the shared client for settlement/tax-report EE calls; no separate HTTP session |
+| `Field Mapping` engine | §5 | Recon translates settlement payloads through this engine; settlement-specific rulesets are shipped by the recon app itself as fixtures |
+
+The recon app never creates DocTypes that shadow the above (no `Recon Marketplace Account`, no `Recon Marketplace`). If recon needs a new field on any consumed DocType, the field is added in `ecommerce_super` via a normal SPEC amendment, not from the recon side.
+
+Conversely, everything the recon engine *itself* owns — settlement templates, rate-card subscriptions, settlement runs, expected-actual variance rows, claim reports — is defined in the recon app and is invisible to `ecommerce_super`. `ecommerce_super` does not import from `ecommerce_super_recon`, does not `frappe.get_doc` any recon DocType, and does not branch on whether recon is installed. **Dependency is one-way.**
+
+### 1.6.2 Entitlement rule
+
+There are no runtime license gates or feature flags in `ecommerce_super`. **Installation of `ecommerce_super_recon` on a site is the entitlement.**
+
+- A site with only `ecommerce_super` sees no recon workspace, no recon reports, no recon jobs — the recon app owns that surface.
+- The Recon workspace tile in `ecommerce_super` (introduced in #249) redirects to `/app/ecommerce-super-recon` when the recon app is installed and is hidden otherwise (handled by the workspace dispatcher).
+- Revoking entitlement = `bench uninstall-app ecommerce_super_recon`. No half-installed intermediate state.
+
+This mirrors the standard Frappe app-boundary pattern (e.g. India Compliance on top of ERPNext): the parent works standalone; the extension installs on top and adds surface without requiring the parent to know about it.
+
 # 2. Architectural Principles
 
 The non-negotiables that govern every flow in this specification. When a design decision is unclear in a specific flow, refer to these principles for adjudication.
@@ -1853,11 +1889,15 @@ The `reporting_parent` is the deliberate, optional answer to "the flat list has 
 
 A Frappe Workflow is attached to this DocType (shipped as a fixture, reusing the 8a Location pattern), adding the standard `workflow_state` field with states **Unclassified → Classified → Active**, branch **Ignored**. Discovery creates new rows in **Unclassified**; the Classify transition is gated on `channel_type` being set; `is_active` (EE's pulled integration status) is a separate axis from the workflow state (see §8.6.3).
 
-### 8.6.2 Marketplace Account DocType (deferred to reconciliation)
+### 8.6.2 Marketplace Account DocType (shared master)
 
-Per (Company, Marketplace channel) — holds seller_id, GSTIN, default_warehouse, settlement_template, rate_card_subscriptions. Composite unique key (company, marketplace, marketplace_seller_id).
+Per (Company, Marketplace channel) — holds a seller's identity and routing on a marketplace: `seller_id`, `gstin`, `default_warehouse`. Composite unique key `(company, marketplace, marketplace_seller_id)`.
 
-> **Build timing: NOT part of the Channel packet (8b).** Every field here — seller_id, GSTIN, settlement_template, rate_card_subscriptions — is a *settlement/reconciliation* concern, not a channel-discovery concern. The Marketplace Account is therefore built when reconciliation/settlement is built (it is consumed by the settlement and B2B-invoicing flows, §11/§13, and the reco engine), not when the channel list is first pulled. 8b builds only the flat Marketplace channel list + the FDE classification workflow + the optional reporting_parent rollup. See the reconciliation/settlement sections (§11, §13) where this DocType is configured and consumed.
+**Ownership.** Marketplace Account is authored in `ecommerce_super` (parent app) as a shared master. When `ecommerce_super_recon` ships, it consumes this DocType via the standard `frappe.get_doc("Marketplace Account", name)` — it does not fork, shadow, or subclass it. If recon needs a new identity/routing field, that field is added here in `ecommerce_super` via a normal SPEC amendment. See §1.6.1 (Interface contract).
+
+**What lives here vs. in the recon app.** Marketplace Account carries only identity/routing (who the seller is on which marketplace, from which warehouse, under which GSTIN). **Settlement templates, rate-card subscriptions, and every other rate-computation artefact live in `ecommerce_super_recon`** as recon-owned DocTypes — they are not fields on Marketplace Account. Recon joins its own settlement-template rows to Marketplace Account via the composite key.
+
+> **Build timing.** The DocType lands with the Channel packet (8b) because §11 B2B (order push and invoice mirror) needs `seller_id`/`gstin`/`default_warehouse` at build time — not deferred to recon. 8b builds: the flat Marketplace channel list, the FDE classification workflow, the optional `reporting_parent` rollup, and the Marketplace Account shared master. The recon-side settlement/rate-card DocTypes are built later in `ecommerce_super_recon`.
 
 ### 8.6.3 Sync
 
