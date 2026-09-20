@@ -55,14 +55,38 @@ import frappe
 from frappe.utils import flt
 
 
-# Variance threshold. Per user decision (post-refactor): ANY non-trivial
-# divergence between SI grand_total (from SO) and EE's total_amount must
-# raise for human review — even a 1% delta is unacceptable, because at
-# B2B invoice scale 1% is real money (₹4,800 SO × 1% = ₹48 gone). The
-# tolerance below is set at 0.01% (1 basis point) — enough headroom for
-# float / paise rounding, but any real divergence (any change to the
-# rupee value) surfaces loudly.
+# Variance tolerance. Per user decision: any non-trivial divergence
+# between SI grand_total (from SO) and EE's total_amount must raise for
+# human review — even a 1% delta is unacceptable, because at B2B invoice
+# scale 1% is real money (₹4,800 SO × 1% = ₹48 gone).
+#
+# Two thresholds combine (fail only when abs diff exceeds BOTH):
+#   - Percentage floor:  0.01% (1 basis point) of EE total
+#   - Absolute floor:    ₹10
+#
+# The absolute floor exists because 0.01% of a ₹15-22k B2B invoice is
+# only ~₹1.5-2.3 — smaller than the paise-level rounding that ERPNext
+# and EE unavoidably accumulate over multi-line discounted GST invoices.
+# Without it, correctly-billed split-shipment invoices were misflagged
+# as variances and stuck in Draft (#269, MMPL live 2026-08).
 VARIANCE_THRESHOLD_PCT = 0.01
+VARIANCE_ABSOLUTE_FLOOR_RUPEES = 10.0
+
+
+def _variance_exceeds_tolerance(si_total: float, ee_total: float) -> tuple[bool, float, float]:
+    """Return (exceeds, abs_diff, effective_threshold_rupees).
+
+    A variance is a failure only when the absolute rupee difference
+    exceeds BOTH tolerances: the percentage-of-EE-total floor AND the
+    absolute-rupee floor. The effective threshold is `max()` of the two,
+    so the tighter one governs at scale (pct wins on ₹1M+ invoices)
+    and the looser one wins on small invoices (floor absorbs paise
+    rounding on ₹15-22k B2B invoices).
+    """
+    abs_diff = abs(si_total - ee_total)
+    pct_threshold_rupees = (VARIANCE_THRESHOLD_PCT / 100.0) * abs(ee_total)
+    effective_threshold = max(VARIANCE_ABSOLUTE_FLOOR_RUPEES, pct_threshold_rupees)
+    return abs_diff > effective_threshold, abs_diff, effective_threshold
 
 
 class InvoiceMirrorError(Exception):
@@ -70,7 +94,9 @@ class InvoiceMirrorError(Exception):
 
 
 class InvoiceMirrorVariance(Exception):
-    """Raised when SI total vs EE total differs > VARIANCE_THRESHOLD_PCT.
+    """Raised when SI total vs EE total exceeds both the percentage
+    (VARIANCE_THRESHOLD_PCT) and absolute-rupee (VARIANCE_ABSOLUTE_FLOOR_RUPEES)
+    tolerances.
 
     Post-gh#218 the gsp_handler catches this and:
       - Comments on the (Draft) SI explaining the variance
@@ -162,6 +188,44 @@ def mirror_si_from_ee_response(
             "ee_total": ee_total,
             "si_total": si_total,
         }
+
+    # Regeneration guard (#271). When EE regenerates an invoice for the
+    # same order, it reuses the same human `invoice_number` but mints a
+    # NEW internal `invoice_id`. The lookup above misses on the new id;
+    # fall back to matching by invoice_number so the regenerated invoice
+    # reuses (and restamps) the existing SI instead of creating a
+    # duplicate. Blank-guarded because early sync paths may not have
+    # invoice_number populated on the SI.
+    ee_invoice_number = str(ee_row.get("invoice_number") or "").strip()
+    if ee_invoice_number:
+        existing_by_number = frappe.db.get_value(
+            "Sales Invoice",
+            {
+                "ecs_easyecom_invoice_number": ee_invoice_number,
+                "docstatus": ["!=", 2],
+            },
+            "name",
+        )
+        if existing_by_number:
+            # Restamp with the new invoice_id so the fast path hits
+            # next time (and the SI carries the current EE id).
+            frappe.db.set_value(
+                "Sales Invoice", existing_by_number,
+                "ecs_easyecom_invoice_id", ee_invoice_id,
+                update_modified=False,
+            )
+            frappe.db.commit()
+            ee_total = float(ee_row.get("total_amount") or 0)
+            si_total = float(frappe.db.get_value(
+                "Sales Invoice", existing_by_number, "grand_total"
+            ) or 0)
+            return {
+                "sales_invoice": existing_by_number,
+                "operation": "already_exists",
+                "variance_pct": _variance_pct(si_total, ee_total),
+                "ee_total": ee_total,
+                "si_total": si_total,
+            }
 
     # Legacy adoption — the Map may point at an SI that was created
     # before we started stamping `ecs_easyecom_invoice_id` (or by a
@@ -394,11 +458,16 @@ def mirror_si_from_ee_response(
         "si_total": si_total,
     }
 
-    if abs(variance) > VARIANCE_THRESHOLD_PCT:
+    exceeds, abs_diff, effective_threshold = _variance_exceeds_tolerance(
+        si_total, ee_total
+    )
+    if exceeds:
         raise InvoiceMirrorVariance(
             f"SI {si.name} total ₹{si_total:.2f} vs EE total "
-            f"₹{ee_total:.2f} — {variance:+.2f}% variance exceeds "
-            f"{VARIANCE_THRESHOLD_PCT}% threshold. Sales Invoice was "
+            f"₹{ee_total:.2f} — abs diff ₹{abs_diff:.2f} ({variance:+.2f}%) "
+            f"exceeds threshold ₹{effective_threshold:.2f} "
+            f"(max of ₹{VARIANCE_ABSOLUTE_FLOOR_RUPEES:.2f} floor and "
+            f"{VARIANCE_THRESHOLD_PCT}% × EE total). Sales Invoice was "
             "created (in Draft) but flagged for FDE review. SO built "
             "the SI; EE-side numbers disagree — human decides which "
             "is correct."
