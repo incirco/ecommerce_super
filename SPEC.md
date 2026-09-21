@@ -1654,7 +1654,7 @@ Built as a single packet, in dependency order: (1) the `EasyEcom Item Map` + the
 Customer data must be modelled in two distinct populations because they have entirely different identity and privacy semantics:
 
 - **B2B and direct-D2C customers** — real Customer records in ERPNext with name, GSTIN, billing/shipping addresses. These sync bidirectionally with EE's Wholesale Customer model. Privacy-sensitive but needed for invoicing.
-- **Marketplace-anonymous customers** — orders from Amazon, Flipkart, Myntra etc. arrive with anonymised buyer identifiers (e.g., Amazon's encoded buyer email). These do NOT become real Customer records. They are mapped to a Marketplace Anonymous Customer record per (marketplace, marketplace_customer_id), and the actual Sales Invoice is raised against a single per-marketplace pseudo-customer (e.g., Amazon FBA Buyer Pool).
+- **Marketplace-anonymous customers** — orders from Amazon, Flipkart, Myntra etc. arrive with anonymised buyer identifiers (e.g., Amazon's encoded buyer email). These do NOT become real Customer records. The actual Sales Invoice is raised against a per-marketplace pseudo-customer **pair** (in-state and out-of-state, one for each `tax_category`, held on the Marketplace Account — see §8.2.4 and §12.2 for the GST-split rationale). Per-order buyer data lives on the SI itself (in an `EasyEcom Address` child row + a handful of existing SI custom fields), not on the Customer master.
 The reasoning: GST invoice rules require a customer for the bill, but marketplace privacy rules forbid us from holding the real buyer's identity. Indian GST has a B2C-large vs B2C-small distinction; marketplace orders are typically B2C-small and do not require buyer GSTIN. The pseudo-customer pattern preserves auditability without holding regulated data.
 
 ### 8.2.2 Direction of truth (B2B / D2C)
@@ -1682,13 +1682,22 @@ The reasoning: GST invoice rules require a customer for the bill, but marketplac
 | disabled | ERPNext |  |
 | ecs_easyecom_customer_id | EasyEcom | EE-issued; mirrored to ERPNext custom field |
 
-### 8.2.4 Marketplace anonymous handling
+### 8.2.4 Marketplace anonymous handling (dual-pool model + child-table buyer data)
 
-- Per-marketplace pseudo-customer: Amazon FBA Buyer Pool, Flipkart Buyer Pool, Myntra Buyer Pool, etc.
-- Created during onboarding by the FDE, one per Marketplace per Company
-- Sales Invoices for marketplace B2C orders are raised against this pseudo-customer
-- Marketplace Anonymous Customer DocType (separate from Customer) holds the (marketplace, marketplace_customer_id, opaque_buyer_hash) mapping for traceability
-- If the same anonymous identifier reappears on multiple orders (returning buyer), it can be linked, but not promoted to a real Customer
+Every Marketplace Account carries two pseudo-customer Customer Links (`pseudo_customer_in_state`, `pseudo_customer_out_of_state`) — the pair drives India Compliance's tax split (CGST+SGST vs IGST) via `tax_category` on the linked Customer. The pool Customers hold **no PII**; they are generic per-tax-category shells.
+
+- **Naming (auto-created in `after_insert` on Marketplace Account):**
+  - `<Marketplace> B2C In-State - <Company>` with `tax_category = "In-State"`
+  - `<Marketplace> B2C Out-of-State - <Company>` with `tax_category = "Out-of-State"`
+- **Idempotent bootstrap** — re-linking existing Customer rows on Marketplace Account re-save; missing India Compliance Tax Category falls back to None.
+- SIs are booked against one of the two — chosen at build time by comparing Company state to shipping state in the EE payload.
+
+**Where the actual buyer data lives** (not on the Customer master, not on Frappe Address doctype):
+
+- **`EasyEcom Address` child table on the SI** (`istable=1`, appended as `ecs_ee_address` row). One row per SI; carries billing (`billing_name`, `billing_address_1/2`, `billing_city`, `billing_state`, `billing_pincode`, `billing_country`) and shipping (same shape, `shipping_*`). Built as a child table specifically so per-order buyer columns do NOT inflate `tabSales Invoice` past MariaDB's 65535-byte in-row limit, and per-order addresses do NOT explode `tabAddress`. The child row is only appended when EE actually returns non-empty content.
+- **Existing SI fields already used by the builder** (no new fields added): `market_place_customer_name`, `market_place_customer_billing_address_display`, `market_place_customer_shipping_address_display`, `billing_address_gstin` (India Compliance native — this is where a marketplace-supplied buyer GSTIN lands, and what §12.6's IRN toggle would read), `contact_email`, `po_no`, `po_date`, `ecs_easyecom_invoice_pdf_url`, `ecs_easyecom_order_id`, `ecs_marketplace`, `ecs_marketplace_order_id`, `ecs_payment_mode`, `ecs_awb_number`, `ecs_courier`.
+
+**Per-buyer traceability is not modelled.** If needed later, query SIs by `billing_name` + `billing_pincode` on the child table (or add a single hashed anonymous-buyer field on the child table). No separate DocType.
 
 ### 8.2.5 Availability of buyer PII from EasyEcom
 
@@ -1697,7 +1706,7 @@ Whether any buyer PII (name, mobile, address) arrives with an order at all depen
 - **API user PII access:** EasyEcom only returns PII fields if the API user whose JWT we use has PII Access enabled in EasyEcom account settings. If our integration receives orders with PII fields blank, the first thing the FDE checks is whether the API user has PII Access turned on.
 - **Channel-level PII suppression:** some marketplace channels never provide buyer PII regardless of API-user access — Amazon Easyship and Flipkart are known cases. For these channels, blank PII is expected and permanent, not a misconfiguration.
 
-Because PII may be absent for either reason, the integration never depends on buyer PII to post a Sales Invoice. The per-marketplace pseudo-customer is always sufficient; any PII that does arrive is recorded on the Marketplace Anonymous Customer record for traceability but is never required for the financial flow. CreateCustomerMaster-style operations that require buyer identity are out of scope for marketplace B2C.
+Because PII may be absent for either reason, the integration never depends on buyer PII to post a Sales Invoice. The per-marketplace pseudo-customer pair is always sufficient; any PII that does arrive is captured on the SI's `EasyEcom Address` child row (see §8.2.4) but is never required for the financial flow. CreateCustomerMaster-style operations that require buyer identity are out of scope for marketplace B2C.
 
 ## 8.3 Supplier / Vendor master
 
@@ -1889,15 +1898,23 @@ The `reporting_parent` is the deliberate, optional answer to "the flat list has 
 
 A Frappe Workflow is attached to this DocType (shipped as a fixture, reusing the 8a Location pattern), adding the standard `workflow_state` field with states **Unclassified → Classified → Active**, branch **Ignored**. Discovery creates new rows in **Unclassified**; the Classify transition is gated on `channel_type` being set; `is_active` (EE's pulled integration status) is a separate axis from the workflow state (see §8.6.3).
 
-### 8.6.2 Marketplace Account DocType (shared master)
+### 8.6.2 Marketplace Account DocType (shared master, §12 substrate)
 
-Per (Company, Marketplace channel) — holds a seller's identity and routing on a marketplace: `seller_id`, `gstin`, `default_warehouse`. Composite unique key `(company, marketplace, marketplace_seller_id)`.
+Per (Company, Marketplace). Composite unique key `(company, marketplace)`; autoname `ECS-MA-{company}-{marketplace}`.
 
-**Ownership.** Marketplace Account is authored in `ecommerce_super` (parent app) as a shared master. When `ecommerce_super_recon` ships, it consumes this DocType via the standard `frappe.get_doc("Marketplace Account", name)` — it does not fork, shadow, or subclass it. If recon needs a new identity/routing field, that field is added here in `ecommerce_super` via a normal SPEC amendment. See §1.6.1 (Interface contract).
+**v1 shipped fields** — built as §12 substrate in `ecommerce_super`:
 
-**What lives here vs. in the recon app.** Marketplace Account carries only identity/routing (who the seller is on which marketplace, from which warehouse, under which GSTIN). **Settlement templates, rate-card subscriptions, and every other rate-computation artefact live in `ecommerce_super_recon`** as recon-owned DocTypes — they are not fields on Marketplace Account. Recon joins its own settlement-template rows to Marketplace Account via the composite key.
+| Group | Fields |
+| --- | --- |
+| Identity | `marketplace`, `company`, `seller_id`, `easyecom_account`, `enabled` |
+| Pool customers | `pseudo_customer_in_state`, `pseudo_customer_out_of_state` (see §12.2) |
+| Polling | `last_pull_orders` (cursor), `polling_cadence_minutes` (default 5), `polling_status_filter` (default "Manifested"), `last_pull_error`, `last_pull_at` |
 
-> **Build timing.** The DocType lands with the Channel packet (8b) because §11 B2B (order push and invoice mirror) needs `seller_id`/`gstin`/`default_warehouse` at build time — not deferred to recon. 8b builds: the flat Marketplace channel list, the FDE classification workflow, the optional `reporting_parent` rollup, and the Marketplace Account shared master. The recon-side settlement/rate-card DocTypes are built later in `ecommerce_super_recon`.
+**Ownership.** Marketplace Account is authored in `ecommerce_super` (parent app) as a shared master. When `ecommerce_super_recon` ships, it consumes this DocType via the standard `frappe.get_doc("Marketplace Account", name)` — it does not fork, shadow, or subclass it. See §1.6.1 (Interface contract).
+
+**v2 extensions (recon).** Settlement templates, rate-card subscriptions, and every other rate-computation artefact live in `ecommerce_super_recon` as separate recon-owned DocTypes — they are not fields on Marketplace Account. Recon joins its own settlement rows to Marketplace Account via the composite key.
+
+> **Build timing.** The DocType lands with the Channel packet (8b) as §12 substrate. §12 polling needs `last_pull_orders`, `polling_cadence_minutes`, `pseudo_customer_*`, and `easyecom_account` at build time. §11 B2B also consumes `seller_id` via the same DocType. Recon-side settlement rows are built later in `ecommerce_super_recon`.
 
 ### 8.6.3 Sync
 
@@ -2804,7 +2821,7 @@ The integration keys its own traceability custom fields on the EasyEcom internal
 Three architectural distinctions:
 
 - **Order is born in EE.** There is no Sales Order in ERPNext, ever, for marketplace B2C orders. Trying to retrofit one creates accounting churn (SO submitted then immediately SI'd in same minute) for no business value. The marketplace is the order origin; EE is the OMS; ERPNext is the books.
-- **Customer is anonymised.** Per Section 8.2.1, marketplace orders use a per-marketplace pseudo-customer (Amazon FBA Buyer Pool etc.). The actual buyer's identity is never in ERPNext.
+- **Customer is anonymised, two pools per Account for GST split.** Every §12 SI books against one of two Customer records held on the Marketplace Account: `pseudo_customer_in_state` (tax_category "In-State") or `pseudo_customer_out_of_state` (tax_category "Out-of-State"). The builder resolves which pool by comparing the Company state (from `Company.state` or first 2 chars of GSTIN) against the shipping state in the EE payload; when the state can't be resolved, defaults to the in-state pool (safer to over-charge CGST+SGST than under-charge IGST silently). The dual-pool design is what lets India Compliance's tax split land in the correct GL account heads (CGST+SGST vs IGST) for GSTR-1 / GSTR-3B, even though Path 2 uses EE-supplied tax amounts. The actual buyer's identity is never in ERPNext; the per-order billing + shipping data goes into an `EasyEcom Address` child table row (`istable=1`) on the SI itself — not into a Frappe Address doctype record, and not onto the Customer master. See §8.2.4.
 - **Channel and marketplace fields drive recon.** Every B2C SI carries ecs_marketplace (the flat EE channel) and ecs_marketplace_order_id. These feed the recon engine — the Order-to-Settlement reconciliation joins on ecs_marketplace_order_id.
 
 ## 12.3 Manifest-creation as the trigger event
@@ -2815,13 +2832,19 @@ Manifest is the operationally meaningful moment: the order is committed for disp
 
 Once an order is confirmed it does not silently revert to an on-hold state: EasyEcom only moves a confirmed order back to hold if the seller or the marketplace explicitly marks it so. The integration can therefore treat a confirmed/manifested order as stable for SI creation, while still handling an explicit later cancellation through the cancellation flow (Section 13).
 
-### 12.3.2 Detection
+### 12.3.2 Detection (polling-only in v1)
 
-- Polling cron every 5 minutes per operational location (company derived from the location) on /orders/V2/getAllOrders with status filter Manifested or higher
-- Cursor field last_pull_orders advances on each successful poll
-- Webhook of type ready_to_dispatch knocks the polling cycle into immediate execution
-- Webhook of type manifested is the canonical trigger
-- Idempotency: the unit of a Sales Invoice is the shipment, identified by its EE Invoice ID. Before creating an SI we check for an existing SI with matching ecs_easyecom_invoice_id. An order with multiple Invoice IDs (a split order) produces one SI per Invoice ID, so the dedup key is the Invoice ID, not the Order_id
+Polling is the sole trigger in v1. Webhook receivers (`ready_to_dispatch`, `manifested`) are deferred to Phase 2+ across §11 and §12; the same deferral applies uniformly to keep the integration surface consistent.
+
+- **Cron:** `*/5 * * * *` — `flows.b2c_sales.polling.reconcile_all_marketplace_accounts`
+- **Scope:** iterates over `EasyEcom Marketplace Account` rows where `enabled=1` and `easyecom_account` is set, gated by per-Account `polling_cadence_minutes` (default 5)
+- **Call:** `/orders/V2/getAllOrders` with status filter from Marketplace Account's `polling_status_filter` (default "Manifested"), scoped to the linked EE Account's location JWT
+- **Cursor:** `last_pull_orders` (Datetime) on Marketplace Account. Advances on each successful poll; on failure, cursor is untouched and `last_pull_error` is stamped
+- **Idempotency:** the unit of a Sales Invoice is the shipment, identified by EE `invoice_id`. Before creating an SI we check for an existing SI with matching `ecs_easyecom_invoice_id`. An order with multiple Invoice IDs (a split order) produces one SI per Invoice ID; dedup key is Invoice ID, not Order_id
+
+**EE `status` filter is not strict.** EE's `status=Manifested` filter constrains only manifest state — it does NOT filter by marketplace or order type. On benches where the same EE Account hosts §11 B2B and §10 STN flows, the poll returns those orders too (a 90-day Harmony sweep returned 58 orders, 55 of them B2B with `marketplace_id=64`). Per-record guards in the builder (see §12.9) reject non-B2C rows before they reach SI creation.
+
+Webhook trigger will land in Phase 2 without changing the SI-creation path — the handler receives an EE payload and calls the same `build_si_from_ee_order` used by polling.
 
 ## 12.4 SI creation: field-level mapping
 
@@ -2834,17 +2857,22 @@ Once an order is confirmed it does not silently revert to an on-hold state: Easy
 | marketplace | ecs_marketplace (Link) | Mapped via Marketplace master |
 | seller_id | (validated against Marketplace Account) | Sanity check |
 | order_date | posting_date |  |
-| customer (anonymised) | customer (resolved to per-marketplace pseudo-customer) |  |
-| billing_address | (stored in Marketplace Anonymous Customer record) |  |
-| shipping_address | shipping_address (or generic marketplace address) |  |
+| customer (anonymised) | customer (resolved to pool pair — in-state / out-of-state per shipping state; see §8.2.4) |  |
+| billing_address | Row in `ecs_ee_address` child table: `billing_name`, `billing_address_1/2`, `billing_city`, `billing_state`, `billing_pincode`, `billing_country` — see §8.2.4 |  |
+| shipping_address | Row in `ecs_ee_address` child table: `shipping_address_1/2`, `shipping_city`, `shipping_state`, `shipping_pincode`, `shipping_country` — see §8.2.4 |  |
 | line.item_code (EE) | items[].item_code (resolved via Item.ecs_easyecom_mappings) |  |
 | line.qty | items[].qty |  |
 | line.unit_price | items[].rate | EE-quoted price |
 | line.discount | items[].discount_amount |  |
-| line.tax | (applied via ERPNext Item Tax Template, sanity-checked against EE) | ERPNext-derived tax wins; EE variance > 1% raises Discrepancy |
+| line.tax | items[].tax_amount (EE-supplied) | EE-supplied wins; ERPNext HSN-derived tax stored in `ecs_erpnext_tax_check_total` as variance signal; >1% delta raises Discrepancy |
 | line.warehouse | items[].warehouse (resolved via Source-of-Truth Map) |  |
 | payment_mode | ecs_payment_mode | Prepaid / COD / etc. |
 | awb_number, courier | ecs_awb_number, ecs_courier | For tracking |
+| total_amount | (feeds the §12.9 1-paisa order-total variance check; SI.grand_total is derived by ERPNext from EE-supplied line rates + taxes) | EE `getAllOrders` uses `total_amount` (Decimal-as-string). `getOrderDetails` may use `invoice_amount` / `grand_total` / `total` in older payloads; builder's candidate list scans all four for portability |
+
+> **Note on EE per-line-array key inconsistency.** EE's per-line array uses different parent keys across endpoints — `suborders` on `/orders/V2/getAllOrders` and `order_items` on `/orders/V2/getOrderDetails` (a rename applied during §11 Phase 1; see `spec_sections/SPEC_11_patch_notes.md` #1). The two shapes are otherwise identical (`sku`, `item_quantity`, `breakup_types`, `cancelled_quantity`, …). `invoice_builder._resolve_line_items` scans `suborders` first and falls back to `order_items` / `orderItems` — the parser must remain portable across both endpoints.
+
+> **Note on EE address-shape variance.** EE's `/orders/V2/getAllOrders` flattens shipping address into the order-row root with bare field names (`state`, `state_code`, `city`, `pin_code`, `address_line_1/2`, `email`, `contact_num`, plus `billing_state`, `billing_pin_code`, `billing_address_1/2`, etc.) rather than nesting under a `shipping_address` object. `/orders/V2/getOrderDetails` uses a different (nested) shape. `_resolve_shipping_state` and the address-child builder scan both conventions for portability across endpoints.
 
 ## 12.5 Pricing — EE invoice as the source of truth for sale price
 
@@ -2853,15 +2881,20 @@ The actual price the buyer paid (after marketplace discounts, coupons, mid-fligh
 - SI rate field comes from EE order line.unit_price
 - ERPNext catalogue price (Item Price for the relevant Price List) is NOT used for SI generation
 - Variance between catalogue and actual is captured for the recon engine's pricing diagnostics (Section 4.6 of the PRD: marketplace algorithmic repricing detection)
-- Tax computation uses ERPNext Item Tax Template — never EE-supplied tax — to ensure tax correctness
+- **Tax computation uses EE-supplied tax** (Path 2, locked 2026-06-29). SI.taxes carries the EE tax as a single 'Actual' row — this is the GL truth, the IRN basis if IRN ever fires, and the settlement target. The marketplace generated the invoice, the buyer was charged what the marketplace computed, and settlement reconciles against the marketplace's number; treating ERPNext as the tax authority would make every B2C SI's GL structurally off by the tax delta, drowning real recon signal in noise.
+- The ERPNext HSN-derived tax is still computed alongside and stored in `ecs_erpnext_tax_check_total` (Custom Field) as a **variance signal**. When both totals are non-zero and the delta exceeds 1%, an Integration Discrepancy fires as an **upstream-issue alert** — the SI is not amended (SI data is immutable); FDE investigates upstream cause (HSN misconfig, tax-category drift, marketplace-adapter bug).
 
-## 12.6 e-invoice handling
+## 12.6 e-invoice handling (marketplace owns; §12 does not mint by default)
 
-- B2C invoices ≥ ₹50,000 require e-invoice IRN per Indian GST rules
-- India Compliance app handles IRN generation
-- Integration triggers IRN generation immediately after SI submit, before EE acknowledgement
-- If IRN generation fails: SI is in Submitted status with no IRN; FDE alerted; standard India Compliance retry mechanism applies
-- Below threshold: no IRN required; SI submitted normally
+**IRN is a B2B requirement.** Under Rule 48(4) CGST, IRN applies to B2B, exports, SEZ, and deemed exports (once seller turnover crosses ₹5 Cr aggregate in any FY from 2017-18). B2C is outside IRN scope regardless of invoice amount. §12 SIs normally book against the per-marketplace pseudo-Customer (Unregistered / URP), so no IRN legally applies.
+
+**The exception:** if a specific marketplace order carries a valid buyer GSTIN (the buyer opted for a "GST invoice" on the marketplace), that transaction is legally B2B and IRN is required. In the pool-customer model the SI is still booked against the pool pseudo-Customer, so this case must be handled by an explicit gate rather than by relying on ERPNext's default IRN threshold logic.
+
+- **Default: no mint.** The §12 SI builder does **not** call `generate_e_invoice`. SI is created in Draft and submitted by the hourly sweeper (see §12.3.1). No IRN call anywhere in the flow.
+- **IRN mirror.** If EE's order payload carries an IRN (marketplace minted it on their side — Amazon TaxInvoice etc.), the integration mirrors `irn`, `ack_no`, and `ack_dt` onto the SI via India Compliance's native fields — same pattern §11.5.2 Mode 2 uses for B2B EE-generated invoices. No call to NIC.
+- **Per-Marketplace-Account mint toggle** (design intent, on demand): a boolean field on Marketplace Account gates whether the integration mints IRN when a specific order carries a buyer GSTIN. When toggle=on AND the EE order carries a valid buyer GSTIN, the builder calls `generate_e_invoice` post-submit (via India Compliance). Toggle defaults off; enabled per-marketplace where the buyer-GSTIN flow is expected. Mirrors §11.5.1's `gsp_mint_einvoice` pattern.
+- **Duplicate-mint hazard:** minting from ERPNext when the marketplace has already minted produces duplicate IRNs on NIC IRP — which cannot be deleted, only cancelled via NIC support. This is the primary reason mint is off by default even when a buyer GSTIN is present; the toggle should only be enabled for marketplaces that do not mint on their side.
+- **Note:** ERPNext's IRN threshold config (via India Compliance) may flag §12 SIs; those flags are safe to ignore when the pseudo-Customer is Unregistered. The toggle is the sole path to a legitimate §12 IRN.
 
 ## 12.7 Inventory accounting
 
@@ -2871,21 +2904,46 @@ The actual price the buyer paid (after marketplace discounts, coupons, mid-fligh
 - If the SO had an SRE (rare for B2C — usually no SO at all), the SRE is auto-released
 - For multi-warehouse orders (rare in B2C but possible): one SI with multiple lines each from its own warehouse
 
-## 12.8 Marketplace Order Map
+## 12.8 Marketplace Order Map (order-grain bridge for reconciliation)
 
-This DocType is the bridge between the SI and the future settlement reconciliation. Its sole purpose is to be the join target for Settlement Lines arriving days or weeks later:
+The **`EasyEcom Marketplace Order Map`** DocType is the join target between marketplace order ids and the SIs generated per shipment. Every §12 SI-creating path (`invoice_builder.build_si_from_ee_order`, the sweeper's submit branches) upserts a Map row + a Shipment child row on SI Draft insert. The Map is what Settlement Lines join to when they arrive days or weeks after invoicing.
 
-- Created at SI creation time
-- Fields: marketplace, marketplace_order_id, channel, marketplace_account, sales_invoice (Link), settlement_status (Forecast / Partial / Settled / Disputed)
-- Settlement Forecast (per Section 4 of the PRD) is created in parallel against this Map record
-- When Settlement Lines arrive, recon engine joins on (marketplace, marketplace_order_id) → Marketplace Order Map → Sales Invoice → Settlement Forecast
+**Parent — `EasyEcom Marketplace Order Map`:**
+
+- **Identity:** `marketplace_order_id`, `marketplace`, `marketplace_account`, `company`, `easyecom_order_id`, `total_shipments`
+- **Settlement:** `settlement_status` (Forecast / Partial / Settled / Disputed), `expected_settlement_date`, `settlement_completed_at`
+- **Recon** (filled by `ecommerce_super_recon` at settlement time): `actual_net`, `variance_amount`, `variance_pct`
+- **`shipments`** (Table → `EasyEcom Order Map Shipment`) — one row per split-shipment (per invoice_id)
+
+**Child — `EasyEcom Order Map Shipment`:**
+
+- **SI link:** `sales_invoice`, `original_sales_invoice`, `ecs_easyecom_event_type`
+- **EE invoice identity:** `invoice_id`, `invoice_number`, `easyecom_invoice_pdf_url`, `batch_id`, `batch_created_at`, `sales_channel`
+- **Lifecycle triggers:** `manifest_date` (null = pending; sweeper picks up when populated), `manifest_no`, `awb_number`, `courier`
+- **Currency:** `invoice_currency_code`, `conversion_rate`, `conversion_rate_confirmed`, `conversion_rate_source`, `total_amount_native`, `total_tax_native`
+- **Payment reference:** `payment_gateway_name`, `payment_gateway_transaction_number`
+- **Compliance placeholders** (marketplace-minted values mirrored here): `irn`, `ack_no`, `ack_date`, `eway_bill_number`, `eway_bill_date`
+
+**Recon join:**
+
+```
+Settlement Line.marketplace_order_id
+  → Marketplace Order Map (join on marketplace_order_id + marketplace_account)
+  → shipments[].sales_invoice → Sales Invoice
+```
+
+The Map is authored in `ecommerce_super` and consumed by `ecommerce_super_recon` (see §1.6.1 — recon does not fork or shadow it).
+
+**History note.** The Map was documented as dropped in the June 2026 closeout (`spec_sections/SPEC_12_patch_notes.md` #5, in favor of SI Custom Fields), then restored in the August 2026 rework (PR #272) after the Puresta reconciliation exercise established that per-order recon needed a separate join target from per-invoice SI data. The current model is the Aug 2026 rework state — patch note #5's "dropped" framing is a historical artifact.
 
 ## 12.9 Variance and discrepancy handling
 
 - EE order amount vs SI total: must match within 1 paisa; mismatch raises Integration Discrepancy
-- EE-quoted tax vs ERPNext-computed tax: variance > 1% raises Integration Discrepancy of severity Warning (informational; ERPNext tax stands)
+- EE-quoted tax vs ERPNext HSN-derived tax: variance > 1% raises Integration Discrepancy of severity Warning (informational; **EE-supplied tax stands** per Path 2 — see §12.5)
 - EE order with no item match in ERPNext: that order's SI creation fails as a per-record failure (Failed Sync Record with a translated reason); other orders in the same pull are unaffected and the job lands Partial (Section 7). FDE fixes the Item sync and retries the failed record
 - EE order whose channel (marketplace_id) is not yet in the flat Marketplace list or is unclassified: same per-record treatment — Failed Sync Record for that order; FDE classifies the channel and retries
+- **EE row's `marketplace_id` doesn't match the Marketplace Account's `marketplace`:** the builder raises `B2CBuilderError` and the row lands as a Failed Sync Record. Ensures orders from other marketplace / B2B / STN channels on the same EE Account (see §12.3.2 non-strict filter note) never build a §12 SI
+- **EE row's `order_type_key` is `businessorder` or `stocktransferorder`:** rejected outright (§10 / §11 territory). Defensive guard against FDE misconfiguring a Marketplace Account with a non-marketplace `marketplace_id`. Same per-record Failed Sync Record handling
 
 ## 12.10 Multi-channel handling
 
